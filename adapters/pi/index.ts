@@ -44,6 +44,7 @@ import {
 import {
   measureContext,
   messageText,
+  providerReportedCost,
   sessionEndHook,
   sessionStartHook,
   sumSessionCost,
@@ -52,6 +53,7 @@ import {
   turnStartPayload,
   uiPromptHook,
   userPromptHook,
+  withProviderCost,
 } from "./lifecycle.ts";
 import { SerialQueue } from "./queue.ts";
 import type {
@@ -104,11 +106,11 @@ function contextUsage(ctx: PiExtensionContextLike | undefined) {
   }
 }
 
-function sessionCost(ctx: PiExtensionContextLike | undefined): number {
+function sessionCost(ctx: PiExtensionContextLike | undefined): { usd: number; unpriced: number } {
   try {
     return sumSessionCost(ctx?.sessionManager?.getEntries?.() ?? []);
   } catch {
-    return 0;
+    return { usd: 0, unpriced: 0 };
   }
 }
 
@@ -146,6 +148,9 @@ export default function tillerPiExtension(
   let runActive = false;
   /** Open UI prompts seen during the run. Only the mapped (outermost) start gets a mapped end. */
   let uiOpenCount = 0;
+  /** Unpriced usage entries at the last session.measure; set from the session at startup, so a
+   *  resumed session's earlier unpriced usage is not reported as new. */
+  let unpricedMeasured = 0;
   const lifecycle = new SerialQueue();
 
   /** The daemon minted this Pi session; absent only on an unmanaged launch. */
@@ -201,13 +206,37 @@ export default function tillerPiExtension(
 
   const sendMeasure = (): Promise<void> => {
     const context = measureContext(contextUsage(currentCtx));
-    const costUsd = sessionCost(currentCtx);
+    const { usd, unpriced } = sessionCost(currentCtx);
+    // `incomplete` covers the whole session; `unpricedAdded` only usage new since the last measure,
+    // so the daemon marks just the day it happened on.
+    const unpricedAdded = unpriced > unpricedMeasured;
+    unpricedMeasured = unpriced;
     return forwardModEvent("session.measure", {
       ...(currentModel ? { model: currentModel } : {}),
       ...(context ? { context } : {}),
-      ...(costUsd > 0 ? { cost: { usd: costUsd } } : {}),
+      ...(usd > 0 || unpriced > 0
+        ? { cost: { usd, ...(unpriced > 0 ? { incomplete: true } : {}), ...(unpricedAdded ? { unpricedAdded } : {}) } }
+        : {}),
     });
   };
+
+  // OpenRouter reports what it charged on the final stream chunk; Pi prices from its catalog and
+  // records $0 for unpriced models such as openrouter/auto. Hold the reported cost by response id
+  // and write it into the assistant message at message_end, before Pi persists it, so the session
+  // entries (and Pi's own totals) carry the real figure.
+  const providerCosts = new Map<string, number>();
+  pi.on("provider_stream_event", (event) => {
+    if (!config) return;
+    const reported = providerReportedCost(event?.data);
+    if (reported) providerCosts.set(reported.responseId, reported.usd);
+  });
+
+  pi.on("message_end", (event) => {
+    if (!config || providerCosts.size === 0 || event?.message?.role !== "assistant") return;
+    const message = withProviderCost(event.message, providerCosts);
+    providerCosts.clear(); // one stream per assistant message; drop anything it did not claim
+    return message ? { message } : undefined;
+  });
 
   pi.on("session_start", async (event, ctx) => {
     currentCtx = ctx;
@@ -339,6 +368,7 @@ export default function tillerPiExtension(
     bridge.startPolling();
 
     // Start from a known baseline: record cost/context once the MCP and hooks are in place.
+    unpricedMeasured = sessionCost(ctx).unpriced;
     await sendMeasure();
   });
 

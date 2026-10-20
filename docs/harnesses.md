@@ -44,8 +44,15 @@ APIs it needs. Any other version, including older, newer and prerelease builds, 
 shut down instead of running half-connected, with the reason in its row's activity. Unverified Pi minor releases stop Pi nodes
 at startup until the adapter is updated for them.
 
-Pi uses its own provider credentials and subscriptions; Tiller supplies neither. Cost shows as 0
-for providers that report none, such as `claude-bridge` on a subscription.
+Pi uses its own provider credentials and subscriptions; Tiller supplies neither. A Pi node's cost
+comes from Pi's session entries, priced from Pi's model catalog, except that an OpenRouter
+response's own reported cost replaces the catalog figure. When some usage has tokens but no price
+(a model without catalog pricing and no reported cost), the spend shows as a lower bound with a
+trailing `+`, such as `$0.12+`, in the UI, `tl ps` and `list_nodes`, and in every tree total that
+includes it. Today's total gets the `+` only on a day that added such usage. Pi cannot tell a
+genuine $0 catalog price from a missing one, so a provider that reports tokens at no cost, such as a
+local model or `claude-bridge` on a subscription, shows `$0.00+` rather than `$0.00` from its first
+turn on. See the [Pi adapter's limitations](../adapters/pi/README.md#limitations).
 
 The spawn dialog also offers Pi. From another agent, use the existing `spawn` MCP tool:
 
