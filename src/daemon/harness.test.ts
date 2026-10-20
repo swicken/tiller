@@ -56,11 +56,16 @@ describe('harness boundary', () => {
     const arg = (args: string[], flag: string) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
     const reviewer = piAdapter.launch({ ...input(), preset: parsePreset(DEFAULT_PRESETS.reviewer, 'reviewer.md') }).args;
     expect(arg(reviewer, '--exclude-tools')).toBe('edit,write');
+    expect(reviewer).toContain('--no-extensions'); // with pi.extensions unset ("all")
+    // A listed package is not loaded either: this path has no pi, so consulting pi list would throw.
+    expect(piAdapter.launch({ ...input(), piExtensions: ['npm:web'], preset: { name: 'p', body: '', source: 'p.md', disallowedTools: ['Write'] } }).args).toContain('--no-extensions');
     expect(arg(reviewer, '--tools')).toBeUndefined();
     const allow = piAdapter.launch({ ...input(), preset: { name: 'p', body: '', source: 'p.md', tools: ['Read', 'Grep', 'mcp__tiller__send'] } }).args;
     expect(arg(allow, '--tools')).toBe('read,grep,mcp__tl_*__send,mcp__tl_*');
     expect(arg(allow, '--exclude-tools')).toBeUndefined();
-    expect(piAdapter.launch(input()).args.some((a) => a === '--tools' || a === '--exclude-tools')).toBe(false);
+    expect(allow).toContain('--no-extensions');
+    expect(piAdapter.launch(input()).args.some((a) => a === '--tools' || a === '--exclude-tools' || a === '--no-extensions')).toBe(false);
+    expect(piAdapter.launch({ ...input(), preset: { name: 'p', body: 'prompt only', source: 'p.md' } }).args).not.toContain('--no-extensions');
   });
   it('loads the user\'s Pi extensions for "all", only tiller\'s and the needed built-ins for "none", and listed packages by install path', () => {
     const bin = join(home, 'bin'); mkdirSync(bin);

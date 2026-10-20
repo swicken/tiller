@@ -122,7 +122,9 @@ export const piAdapter: HarnessAdapter = {
     // Lives with the tree archive, not nodes/<id>, which close deletes.
     const path = i.transcriptPath ?? piTranscript(i.sessionDir, i.nodeId, i.sessionId);
     mkdirSync(join(i.sessionDir, 'agents', i.nodeId), { recursive: true, mode: 0o700 });
-    const args = ['--session', path, '--name', i.title, ...piExtensionArgs(i.piExtensions, i.cwd, i.path), '--extension', piExtension,
+    // A restricted preset loads no user extensions: their tools (subagents, background tasks) would undo its limits.
+    const restricted = i.preset?.tools !== undefined || i.preset?.disallowedTools !== undefined;
+    const args = ['--session', path, '--name', i.title, ...piExtensionArgs(restricted ? 'none' : i.piExtensions, i.cwd, i.path), '--extension', piExtension,
       ...(i.preset ? piToolArgs(i.preset) : []), '--append-system-prompt', systemPrompt(i)];
     if (i.model) args.push('--model', i.model);
     if (i.effort) args.push('--thinking', i.effort);

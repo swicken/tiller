@@ -170,7 +170,12 @@ tiller's server as `tl_<node>_<random>`), so the node can still report; because 
 named. Pi has no equivalent of `maxTurns`, so a preset with it is still refused, as are Claude
 `permissionMode` and session forking.
 
-The built-in `reviewer` preset runs on Pi as `--exclude-tools edit,write`. The `researcher`
+A preset with `tools` or `disallowedTools` also launches as if `pi.extensions` were `"none"`,
+whatever the setting says: only tiller's adapter and the built-ins it needs load, because an
+extension's tools, such as subagents or background tasks, could do what the preset denies.
+Prompt-only presets follow `pi.extensions`.
+
+The built-in `reviewer` preset runs on Pi as `--exclude-tools edit,write`, without the user's extensions. The `researcher`
 preset names `WebSearch` and `WebFetch`, which have no Pi built-in, so it is still refused; use
 `--profile explorer` for portable read-only research on Pi.
 
@@ -178,7 +183,8 @@ preset names `WebSearch` and `WebFetch`, which have no Pi built-in, so it is sti
 
 `pi.extensions` in the [config](config.md) chooses which of the user's Pi extensions and packages
 a Pi node loads besides tiller's adapter. `"all"` (the default) loads what Pi's settings
-configure, as a plain `pi` run would. `"none"` launches with `--no-extensions` and loads back only
+configure, as a plain `pi` run would. A preset with tool restrictions overrides the setting with
+`"none"` (see above). `"none"` launches with `--no-extensions` and loads back only
 the built-ins tiller needs: `builtin:mcp` for tiller's server, and `builtin:codemode` and
 `builtin:tool-search` for MCP exposures that use them. A list of package sources, written as in
 Pi's settings (for example `["npm:pi-web-access"]`), does the same and adds each listed package
