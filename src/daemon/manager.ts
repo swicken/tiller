@@ -844,7 +844,7 @@ export class NodeManager extends EventEmitter {
         this.usage = { rateLimits, nodeId, at: now };
         this.emit('usage', this.usage);
       }
-      if (cost) this.addSpend(nodeId, cost.usd, cost.incomplete === true, now);
+      if (cost) this.addSpend(nodeId, cost.usd, cost.incomplete === true, cost.unpricedAdded === true, now);
       if (cost && now - (rt.lastCostEvent ?? 0) >= COST_EVENT_MS) {
         rt.lastCostEvent = now;
         this.logEvent(nodeId, 'cost', { usd: cost.usd, ...(context ? { contextPct: context.percent } : {}) });
@@ -1148,22 +1148,22 @@ export class NodeManager extends EventEmitter {
   /**
    * Add to the record's spend what the session spent since its last measure. A session's cost counts from zero, so a
    * different session id or a figure below the last one means a new session (restart) and counts whole. The last figure
-   * is kept on the record so a session resumed after a daemon restart is not counted again. `incomplete` (usage the harness
-   * could not price) marks the node's total and today's figure as lower bounds.
+   * is kept on the record so a session resumed after a daemon restart is not counted again. `incomplete` (the session has usage
+   * the harness could not price) marks the node's total as a lower bound; `unpricedAdded` (this measure added some) marks today's.
    */
-  private addSpend(id: string, usd: number, incomplete: boolean, now: number): void {
+  private addSpend(id: string, usd: number, incomplete: boolean, unpricedAdded: boolean, now: number): void {
     const rec = this.registry.get(id);
     if (!rec) return;
     const last = rec.lastCost?.sessionId === rec.sessionId ? rec.lastCost?.usd : undefined;
     const delta = last !== undefined && usd >= last ? usd - last : usd;
     const day = dayKey(now);
     const today = rec.spentToday?.day === day ? rec.spentToday : undefined;
-    const newlyIncomplete = incomplete && !(rec.spentIncomplete && today?.incomplete);
+    const newlyIncomplete = (incomplete && !rec.spentIncomplete) || (unpricedAdded && !today?.incomplete);
     if (!(delta > 0) && !newlyIncomplete) return; // nothing new: lastCost already holds this figure, or a fresh session has spent nothing yet
     const add = delta > 0 ? delta : 0;
     this.registry.update(id, {
       spentUsd: (rec.spentUsd ?? 0) + add,
-      spentToday: { day, usd: (today?.usd ?? 0) + add, ...(incomplete || today?.incomplete ? { incomplete: true } : {}) },
+      spentToday: { day, usd: (today?.usd ?? 0) + add, ...(unpricedAdded || today?.incomplete ? { incomplete: true } : {}) },
       lastCost: { sessionId: rec.sessionId, usd },
       ...(incomplete ? { spentIncomplete: true } : {}),
     });

@@ -106,11 +106,11 @@ function contextUsage(ctx: PiExtensionContextLike | undefined) {
   }
 }
 
-function sessionCost(ctx: PiExtensionContextLike | undefined): { usd: number; incomplete: boolean } {
+function sessionCost(ctx: PiExtensionContextLike | undefined): { usd: number; unpriced: number } {
   try {
     return sumSessionCost(ctx?.sessionManager?.getEntries?.() ?? []);
   } catch {
-    return { usd: 0, incomplete: false };
+    return { usd: 0, unpriced: 0 };
   }
 }
 
@@ -148,6 +148,9 @@ export default function tillerPiExtension(
   let runActive = false;
   /** Open UI prompts seen during the run. Only the mapped (outermost) start gets a mapped end. */
   let uiOpenCount = 0;
+  /** Unpriced usage entries at the last session.measure; set from the session at startup, so a
+   *  resumed session's earlier unpriced usage is not reported as new. */
+  let unpricedMeasured = 0;
   const lifecycle = new SerialQueue();
 
   /** The daemon minted this Pi session; absent only on an unmanaged launch. */
@@ -203,11 +206,17 @@ export default function tillerPiExtension(
 
   const sendMeasure = (): Promise<void> => {
     const context = measureContext(contextUsage(currentCtx));
-    const { usd, incomplete } = sessionCost(currentCtx);
+    const { usd, unpriced } = sessionCost(currentCtx);
+    // `incomplete` covers the whole session; `unpricedAdded` only usage new since the last measure,
+    // so the daemon marks just the day it happened on.
+    const unpricedAdded = unpriced > unpricedMeasured;
+    unpricedMeasured = unpriced;
     return forwardModEvent("session.measure", {
       ...(currentModel ? { model: currentModel } : {}),
       ...(context ? { context } : {}),
-      ...(usd > 0 || incomplete ? { cost: { usd, ...(incomplete ? { incomplete } : {}) } } : {}),
+      ...(usd > 0 || unpriced > 0
+        ? { cost: { usd, ...(unpriced > 0 ? { incomplete: true } : {}), ...(unpricedAdded ? { unpricedAdded } : {}) } }
+        : {}),
     });
   };
 
@@ -359,6 +368,7 @@ export default function tillerPiExtension(
     bridge.startPolling();
 
     // Start from a known baseline: record cost/context once the MCP and hooks are in place.
+    unpricedMeasured = sessionCost(ctx).unpriced;
     await sendMeasure();
   });
 

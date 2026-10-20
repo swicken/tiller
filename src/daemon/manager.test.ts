@@ -792,10 +792,17 @@ describe('NodeManager guardrails', () => {
     const unpriced = (await m.spawn({ kind: 'claude', title: 'unpriced', cwd: home, byHuman: true })).id;
     const priced = (await m.spawn({ kind: 'claude', title: 'priced', cwd: home, byHuman: true })).id;
     // Unpriced usage only: no known amount yet, but not a known $0.
-    m.applyModEvent(unpriced, { event: 'session.measure', payload: { cost: { usd: 0, incomplete: true } } });
+    m.applyModEvent(unpriced, { event: 'session.measure', payload: { cost: { usd: 0, incomplete: true, unpricedAdded: true } } });
     expect(m.view(unpriced)).toMatchObject({ spentUsd: 0, spentIncomplete: true, spentToday: { day, usd: 0, incomplete: true } });
     m.applyModEvent(unpriced, { event: 'session.measure', payload: { cost: { usd: 0.2, incomplete: true } } });
     expect(m.view(unpriced)).toMatchObject({ spentUsd: 0.2, spentIncomplete: true, spentToday: { day, usd: 0.2, incomplete: true } });
+    // The next day: the session is still incomplete, but nothing unpriced was added today.
+    m.registry.update(unpriced, { spentToday: { day: '2000-01-01', usd: 0.2, incomplete: true } });
+    m.applyModEvent(unpriced, { event: 'session.measure', payload: { cost: { usd: 0.3, incomplete: true } } });
+    expect(m.view(unpriced)).toMatchObject({ spentUsd: expect.closeTo(0.3), spentIncomplete: true, spentToday: { day, usd: expect.closeTo(0.1) } });
+    expect(m.view(unpriced)!.spentToday!.incomplete).toBeUndefined();
+    m.applyModEvent(unpriced, { event: 'session.measure', payload: { cost: { usd: 0.3, incomplete: true, unpricedAdded: true } } });
+    expect(m.view(unpriced)!.spentToday).toMatchObject({ day, incomplete: true });
     // A measure without the flag (Claude, Codex, or a fully priced Pi session) leaves spend complete.
     m.applyModEvent(priced, { event: 'session.measure', payload: { cost: { usd: 0.5 } } });
     expect(m.view(priced)).toMatchObject({ spentUsd: 0.5, spentToday: { day, usd: 0.5 } });

@@ -211,12 +211,12 @@ export function measureContext(
 /**
  * Sum the session cost the way Pi's own `getSessionStats()` does: `usage` entries, compaction /
  * branch-summary usage, and assistant/tool-result message usage. Used for `session.measure.cost`.
- * `incomplete` is set when some usage has tokens but no cost (an unpriced model with no
- * provider-reported cost), so `usd` is only a lower bound.
+ * `unpriced` counts usage with tokens but no cost (an unpriced model with no provider-reported
+ * cost); when it is above zero, `usd` is only a lower bound.
  */
-export function sumSessionCost(entries: readonly unknown[]): { usd: number; incomplete: boolean } {
+export function sumSessionCost(entries: readonly unknown[]): { usd: number; unpriced: number } {
   let usd = 0;
-  let incomplete = false;
+  let unpriced = 0;
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     const record = entry as Record<string, any>;
@@ -240,22 +240,31 @@ export function sumSessionCost(entries: readonly unknown[]): { usd: number; inco
       (sum: number, n: unknown) => sum + (typeof n === "number" ? n : 0),
       0,
     );
-    if (tokens > 0 && !(typeof cost === "number" && cost > 0) && u.cost?.source !== "provider") incomplete = true;
+    if (tokens > 0 && !(typeof cost === "number" && cost > 0) && u.cost?.source !== "provider") unpriced++;
   }
-  return { usd, incomplete };
+  return { usd, unpriced };
 }
+
+const isCost = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
 
 /**
  * The cost a provider reported for one generation in a raw stream chunk, keyed by the chunk's
  * response id (Pi stores the first chunk's id as the message's `responseId`). OpenRouter puts
- * `usage.cost` (USD charged to the account) on the final chunk of every streamed completion.
+ * `usage.cost` (USD charged to the account) on the final chunk of every streamed completion. For a
+ * bring-your-own-key request that is only OpenRouter's fee, so the upstream provider's charge
+ * (`cost_details.upstream_inference_cost`) is added; without it the chunk is ignored and Pi's
+ * catalog price stands.
  */
 export function providerReportedCost(data: unknown): { responseId: string; usd: number } | undefined {
   if (!data || typeof data !== "object") return undefined;
-  const { id, usage } = data as { id?: unknown; usage?: { cost?: unknown } };
-  const usd = usage?.cost;
-  if (typeof id !== "string" || !id || typeof usd !== "number" || !Number.isFinite(usd) || usd < 0) return undefined;
-  return { responseId: id, usd };
+  const { id, usage } = data as {
+    id?: unknown;
+    usage?: { cost?: unknown; is_byok?: unknown; cost_details?: { upstream_inference_cost?: unknown } };
+  };
+  if (typeof id !== "string" || !id || !isCost(usage?.cost)) return undefined;
+  if (usage.is_byok !== true) return { responseId: id, usd: usage.cost };
+  const upstream = usage.cost_details?.upstream_inference_cost;
+  return isCost(upstream) ? { responseId: id, usd: usage.cost + upstream } : undefined;
 }
 
 /**

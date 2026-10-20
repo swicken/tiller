@@ -198,12 +198,17 @@ The trust guard is advisory, not a sandbox; see [Worktrees and safety](../../doc
 - Pi prices usage from its model catalog, so a model without a price (such as `openrouter/auto`
   added through `models.json`) records $0. When the provider reports what it charged on the stream,
   as OpenRouter does on every completion's final chunk, the adapter writes that figure into the
-  assistant message instead, so OpenRouter costs are what OpenRouter billed (for a bring-your-own-key
-  request, that is OpenRouter's fee, not the upstream provider's charge). Other unpriced usage, with
-  tokens but no cost, sets `cost.incomplete`: Tiller then shows the node's spend as a lower bound
-  such as `$0.12+`. A model whose catalog price is $0 (a local model, for example) also shows `+`,
-  because Pi's entries cannot tell a zero price from a missing one. Tiller never reads the
-  provider key; the cost comes from the response Pi already receives.
+  assistant message instead, so an assistant message's OpenRouter cost is what OpenRouter billed. For
+  a bring-your-own-key request the adapter adds the upstream provider's charge
+  (`cost_details.upstream_inference_cost`) to OpenRouter's fee, and keeps Pi's catalog price when
+  that charge is missing. Pi's prompt-cache warm-up requests also stream through the extension, but
+  they end in `usage` entries rather than assistant messages, so their reported cost is discarded and
+  those entries keep Pi's catalog price (or count as unpriced). Other unpriced usage, with tokens but
+  no cost, sets `cost.incomplete` (and `cost.unpricedAdded` on the measure that first includes it):
+  Tiller then shows the node's spend as a lower bound such as `$0.12+`. A model whose catalog price
+  is $0 (a local model, for example) also shows `+`, because Pi's entries cannot tell a zero price
+  from a missing one. Tiller never reads the provider key; the cost comes from the response Pi
+  already receives.
 - `turn.complete.reason` is `answer`, `aborted` or `error`: the final assistant message's
   `stopReason` (`aborted`/`error`) is mapped at `agent_settled`. Pi does not expose a distinct
   `refusal` reason.

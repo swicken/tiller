@@ -166,12 +166,12 @@ describe("mod-event mappers", () => {
       { type: "custom" },
       null,
     ];
-    const { usd, incomplete } = sumSessionCost(entries);
+    const { usd, unpriced } = sumSessionCost(entries);
     expect(usd).toBeCloseTo(2.5, 10);
-    expect(incomplete).toBe(false);
+    expect(unpriced).toBe(0);
   });
 
-  it("sumSessionCost marks usage with tokens but no cost as incomplete", () => {
+  it("sumSessionCost counts usage with tokens but no cost as unpriced", () => {
     const priced = { type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cost: { total: 0.12 } } } };
     // The real openrouter/auto entry: tokens recorded, catalog has no price.
     const unpriced = {
@@ -179,12 +179,12 @@ describe("mod-event mappers", () => {
       message: { role: "assistant", usage: { input: 116, output: 24, cacheRead: 12800, cacheWrite: 0, cost: { total: 0 } } },
     };
     const failed = { type: "message", message: { role: "assistant", usage: { input: 0, output: 0, cost: { total: 0 } } } };
-    expect(sumSessionCost([priced, failed])).toEqual({ usd: 0.12, incomplete: false });
-    expect(sumSessionCost([priced, unpriced])).toEqual({ usd: 0.12, incomplete: true });
-    expect(sumSessionCost([unpriced])).toEqual({ usd: 0, incomplete: true });
+    expect(sumSessionCost([priced, failed])).toEqual({ usd: 0.12, unpriced: 0 });
+    expect(sumSessionCost([priced, unpriced])).toEqual({ usd: 0.12, unpriced: 1 });
+    expect(sumSessionCost([unpriced, unpriced])).toEqual({ usd: 0, unpriced: 2 });
     // A provider-reported $0 (a free model) is a known amount, not a missing price.
     const free = { type: "message", message: { role: "assistant", usage: { input: 9, output: 1, cost: { total: 0, source: "provider" } } } };
-    expect(sumSessionCost([free])).toEqual({ usd: 0, incomplete: false });
+    expect(sumSessionCost([free])).toEqual({ usd: 0, unpriced: 0 });
   });
 });
 
@@ -206,6 +206,16 @@ describe("provider-reported cost", () => {
     expect(providerReportedCost(null)).toBeUndefined();
   });
 
+  it("adds the upstream charge on a bring-your-own-key request, or ignores the chunk without it", () => {
+    const byok = { ...finalChunk.usage, cost: 0.00002, is_byok: true };
+    expect(
+      providerReportedCost({ ...finalChunk, usage: { ...byok, cost_details: { upstream_inference_cost: 0.0004 } } }),
+    ).toEqual({ responseId: "gen-1", usd: expect.closeTo(0.00042, 10) });
+    // Only OpenRouter's fee is known: keep Pi's catalog price rather than drop to near $0.
+    expect(providerReportedCost({ ...finalChunk, usage: byok })).toBeUndefined();
+    expect(providerReportedCost({ ...finalChunk, usage: { ...byok, cost_details: {} } })).toBeUndefined();
+  });
+
   it("replaces Pi's computed total with the reported one, preferring it over a catalog price", () => {
     const message = {
       role: "assistant",
@@ -218,7 +228,7 @@ describe("provider-reported cost", () => {
       responseId: "gen-1",
       usage: { input: 116, output: 24, cost: { input: 0.001, output: 0.002, total: 0.00042, source: "provider" } },
     });
-    expect(sumSessionCost([{ type: "message", message: replaced }])).toEqual({ usd: 0.00042, incomplete: false });
+    expect(sumSessionCost([{ type: "message", message: replaced }])).toEqual({ usd: 0.00042, unpriced: 0 });
     expect(withProviderCost(message, new Map([["gen-2", 1]]))).toBeUndefined();
     expect(withProviderCost({ ...message, role: "user" }, new Map([["gen-1", 1]]))).toBeUndefined();
   });

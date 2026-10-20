@@ -318,6 +318,10 @@ describe("tiller pi extension", () => {
     entries.push({ type: "message", message: { role: "assistant", usage: { input: 50, output: 5, cost: { total: 0 } } } });
     await pi.emit("turn_end", { type: "turn_end", turnIndex: 1, message: {} }, ctx);
     measure = calls.filter((c) => c.body?.event === "session.measure").at(-1);
+    expect(measure?.body.payload.cost).toEqual({ usd: 0.0004, incomplete: true, unpricedAdded: true });
+    // The next measure adds nothing unpriced: the session stays incomplete, but nothing new is flagged.
+    await pi.emit("turn_end", { type: "turn_end", turnIndex: 2, message: {} }, ctx);
+    measure = calls.filter((c) => c.body?.event === "session.measure").at(-1);
     expect(measure?.body.payload.cost).toEqual({ usd: 0.0004, incomplete: true });
 
     await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx);

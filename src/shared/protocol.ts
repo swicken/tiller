@@ -179,7 +179,7 @@ export interface NodeRecord {
   spentUsd?: number;
   /** Set once a session reported usage it could not price (cost.incomplete): spentUsd is then only a lower bound. Never cleared. */
   spentIncomplete?: boolean;
-  /** Spend on one local day (YYYY-MM-DD); a later day starts over. `incomplete` as spentIncomplete, for that day. */
+  /** Spend on one local day (YYYY-MM-DD); a later day starts over. `incomplete`: unpriced usage was added that day (cost.unpricedAdded). */
   spentToday?: { day: string; usd: number; incomplete?: boolean };
   /** The session's cumulative cost at its last measure, so the next measure (even after a daemon restart) adds only the difference. */
   lastCost?: { sessionId?: string; usd: number };
@@ -415,7 +415,7 @@ export interface InboxMessage { id: string; from: string; text: string; enqueued
 export type ModEvent =
   | { event: 'turn.start'; payload: { text: string; turnId: string } }
   | { event: 'turn.complete'; payload: { answer?: string; durationMs: number; isAborted: boolean; turnId: string; reason: 'answer' | 'aborted' | 'refusal' | 'error'; usage?: Record<string, unknown> } }
-  | { event: 'session.measure'; payload: { model?: string; context?: { tokens: number; window: number; percent: number }; cost?: { usd: number; incomplete?: boolean }; rateLimits?: RateLimit[]; usageReports?: UsageReport[]; usageUnavailable?: boolean } };
+  | { event: 'session.measure'; payload: { model?: string; context?: { tokens: number; window: number; percent: number }; cost?: { usd: number; incomplete?: boolean; unpricedAdded?: boolean }; rateLimits?: RateLimit[]; usageReports?: UsageReport[]; usageUnavailable?: boolean } };
 /** POST /focus { id } → 204; the daemon broadcasts `focus` to ws clients (PLAN §14). */
 /** GET /tree → ChildView[]: the calling node's whole tree from its root, depth-first. */
 export interface ChildView {
