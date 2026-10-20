@@ -1062,12 +1062,13 @@ export class NodeManager extends EventEmitter {
     if (adapter?.prepareTranscript) {
       rec = this.registry.update(id, { transcriptPath: adapter.prepareTranscript(rec, sessionDir, resume) })!;
     }
+    const config = loadConfig(this.projectDir(rec), this.home);
     const input: LaunchInput = {
       nodeId: id, nodeDir: this.launchDir(id), endpoint: this.endpoint, path: this.path, harness: adapter?.id,
       title: rec.title, parentId: rec.parentId, home: this.home, cwd: this.projectDir(rec), role: rec.role, profile: rec.profile, sessionId: rec.sessionId ?? '',
       resume, forkSession, transcriptPath: rec.transcriptPath, prompt, model: rec.model, effort: rec.effort, permissionMode: rec.permissionMode, worktree: rec.worktree, sharesWorktreeOf: owner?.id, sessionDir,
       preset: rec.preset ? loadPreset(rec.preset, this.projectDir(rec), this.home) : undefined,
-      inheritMcpServers: loadConfig(this.projectDir(rec), this.home).claude.inheritMcpServers,
+      inheritMcpServers: config.claude.inheritMcpServers, piExtensions: config.pi.extensions,
     };
     const spec = adapter ? adapter.launch(input) : terminalLaunch(input, this.shell);
     const cwd = adapter ? adapter.cwd(rec) : rec.cwd;

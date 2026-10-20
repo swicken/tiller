@@ -35,6 +35,11 @@ export const ConfigFile = z.object({
   /** inheritMcpServers: a Claude node also loads the user's and plugins' MCP servers; the project's .mcp.json servers stay off. False gives it only tiller's. */
   claude: z.object({ inheritMcpServers: z.boolean().optional() }).strict().optional(),
   /**
+   * extensions: which of the user's Pi extensions a Pi node loads besides tiller's adapter. "all" is what Pi's settings
+   * configure; "none" is no others; a list loads only those package sources, as written in Pi's settings.
+   */
+  pi: z.object({ extensions: z.union([z.enum(['all', 'none']), z.array(z.string().min(1))]).optional() }).strict().optional(),
+  /**
    * When an agent's action skips the human's approval. close: "always"; "done" when every node in the batch is done, has
    * exited or has reported an outcome; "never". merge: true means an agent's merge never asks.
    */
@@ -130,6 +135,7 @@ export const DEFAULTS = {
   'profiles.pi.reviewer.model': undefined, 'profiles.pi.reviewer.effort': undefined,
   'roles.orchestrator.model': undefined, 'roles.orchestrator.effort': undefined, 'roles.worker.model': undefined, 'roles.worker.effort': undefined,
   'claude.inheritMcpServers': true,
+  'pi.extensions': 'all',
   'approvals.close': 'never', 'approvals.merge': false,
   'worktrees.isolation': 'none', 'worktrees.branchPrefix': 'tl/', 'worktrees.include': undefined, 'worktrees.mergeStyle': 'merge', 'worktrees.setup': [], 'worktrees.teardown': [],
   'worktrees.protected': ['main', 'master'], 'worktrees.taskBranch': 'tl/{slug}',
@@ -172,7 +178,9 @@ function readLayer(path: string, isHome: boolean): ConfigFile | undefined {
   const r = ConfigFile.safeParse(data);
   if (!r.success) {
     for (const i of r.error.issues) {
-      for (const p of i.code === 'unrecognized_keys' ? i.keys.map((k) => [...i.path, k]) : [i.path]) {
+      // A bad list element drops the whole list: deleting the element alone would leave a hole that fails again.
+      const element = i.path.findIndex((k) => typeof k === 'number'), key = element < 0 ? i.path : i.path.slice(0, element);
+      for (const p of i.code === 'unrecognized_keys' ? i.keys.map((k) => [...i.path, k]) : [key]) {
         bad.push(`${p.map(String).join('.')}: ${i.code === 'unrecognized_keys' ? 'unknown key' : i.message}`);
         const parent = get(data, p.slice(0, -1));
         if (p.length && parent && typeof parent === 'object') delete parent[p.at(-1)!];

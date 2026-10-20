@@ -1,4 +1,5 @@
 // CLI-specific policy. Coordination remains the daemon's existing MCP + inbox HTTP protocol.
+import { execFileSync } from 'node:child_process';
 import { accessSync, constants, mkdirSync, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +33,71 @@ export interface HarnessAdapter {
 
 const piExtension = fileURLToPath(new URL('../../adapters/pi/index.ts', import.meta.url));
 
+/**
+ * Claude tool names a preset may use, as Pi's built-in tools. Pi's edit and write cover notebooks too, so NotebookEdit maps
+ * to edit. A name not listed here has no Pi equivalent and the preset is refused, so a restriction is never weaker than written.
+ */
+const PI_TOOLS: Record<string, string> = {
+  Read: 'read', Write: 'write', Edit: 'edit', MultiEdit: 'edit', NotebookEdit: 'edit',
+  Bash: 'bash', PowerShell: 'powershell', Grep: 'grep', Glob: 'find', LS: 'ls',
+};
+/** The adapter registers tiller's MCP server as tl_<node>_<random> (adapters/pi/config.ts), so its tools are mcp__tl_*. */
+const PI_TILLER_TOOLS = 'mcp__tl_*';
+
+export function piToolName(name: string): string {
+  if (name === 'mcp__tiller') return PI_TILLER_TOOLS;
+  if (name.startsWith('mcp__tiller__')) return `${PI_TILLER_TOOLS}__${name.slice('mcp__tiller__'.length)}`;
+  if (!Object.hasOwn(PI_TOOLS, name)) throw new Error(`Pi has no equivalent of preset tool ${name}; Pi presets can name ${Object.keys(PI_TOOLS).join(', ')} and mcp__tiller tools`);
+  return PI_TOOLS[name];
+}
+
+/** A preset's tools as Pi's --tools allowlist, which always keeps tiller's MCP tools, and disallowedTools as --exclude-tools. */
+export function piToolArgs(p: Partial<Preset>): string[] {
+  const args: string[] = [];
+  if (p.tools) args.push('--tools', [...new Set([...p.tools.map(piToolName), PI_TILLER_TOOLS])].join(','));
+  if (p.disallowedTools) args.push('--exclude-tools', [...new Set(p.disallowedTools.map(piToolName))].join(','));
+  return args;
+}
+
+/** Built-ins tiller needs once --no-extensions drops them: MCP for tiller's server, codemode and tool search for its exposures. */
+const PI_BUILTINS = ['builtin:mcp', 'builtin:codemode', 'builtin:tool-search'];
+
+/**
+ * The packages in the user's and the project's Pi settings, from `pi list`: each source line is followed by its install path
+ * when it is installed, and a source with filters is marked "(filtered)".
+ */
+export function piPackages(cwd: string, path: string): { source: string; filtered: boolean; path?: string }[] {
+  // prune: parses pi list's human-readable output, as Pi has no machine-readable listing; revisit if Pi adds one.
+  const out = execFileSync('pi', ['list'], { cwd, env: { ...process.env, PATH: path, NO_COLOR: '1' }, encoding: 'utf8', timeout: 10_000 });
+  const packages: { source: string; filtered: boolean; path?: string }[] = [];
+  for (const line of out.split('\n')) {
+    const installed = /^ {4}(\S.*)$/.exec(line), source = /^ {2}(\S.*?)( \(filtered\))?$/.exec(line);
+    if (installed && packages.length) packages[packages.length - 1].path = installed[1];
+    else if (source) packages.push({ source: source[1], filtered: !!source[2] });
+  }
+  return packages;
+}
+
+/**
+ * Arguments for the pi.extensions setting. "all" adds none, so Pi loads what its settings configure. Otherwise
+ * --no-extensions drops the user's extensions and packages, and only the listed packages load, by their install path:
+ * `-e npm:<pkg>` would install a separate temporary copy. A listed package that is missing, not installed or filtered
+ * refuses the launch rather than give the node fewer or more tools than the setting says.
+ */
+export function piExtensionArgs(setting: 'all' | 'none' | string[] | undefined, cwd: string, path: string): string[] {
+  if (setting === undefined || setting === 'all') return [];
+  const args = ['--no-extensions', ...PI_BUILTINS.flatMap((b) => ['--extension', b])];
+  if (setting === 'none' || !setting.length) return args;
+  const packages = piPackages(cwd, path);
+  for (const source of setting) {
+    const pkg = packages.findLast((p) => p.source === source);
+    if (!pkg?.path) throw new Error(`pi.extensions lists ${source}, which is not an installed Pi package (see pi list); install it with pi install ${source} or remove it from pi.extensions`);
+    if (pkg.filtered) throw new Error(`pi.extensions lists ${source}, whose Pi settings entry has filters tiller cannot apply; use a plain source in Pi's settings or remove it from pi.extensions`);
+    args.push('--extension', pkg.path);
+  }
+  return args;
+}
+
 export const claudeAdapter: HarnessAdapter = {
   id: 'claude',
   capabilities: { fork: true, inbox: false },
@@ -46,9 +112,8 @@ export const piAdapter: HarnessAdapter = {
   capabilities: { fork: false, inbox: true },
   validate({ permissionMode, preset }) {
     if (permissionMode !== undefined) throw new Error('Pi does not support Claude permissionMode; omit it (Pi keeps its own permission policy)');
-    if (preset?.tools !== undefined || preset?.disallowedTools !== undefined || preset?.maxTurns !== undefined) {
-      throw new Error('Pi does not support Claude preset tools, disallowedTools or maxTurns; use a prompt-only preset');
-    }
+    if (preset?.maxTurns !== undefined) throw new Error('Pi has no equivalent of preset maxTurns; remove it to run this preset on Pi');
+    if (preset) piToolArgs(preset);
   },
   launch(i) {
     this.validate(i);
@@ -57,8 +122,8 @@ export const piAdapter: HarnessAdapter = {
     // Lives with the tree archive, not nodes/<id>, which close deletes.
     const path = i.transcriptPath ?? piTranscript(i.sessionDir, i.nodeId, i.sessionId);
     mkdirSync(join(i.sessionDir, 'agents', i.nodeId), { recursive: true, mode: 0o700 });
-    const args = ['--session', path, '--name', i.title, '--extension', piExtension,
-      '--append-system-prompt', systemPrompt(i)];
+    const args = ['--session', path, '--name', i.title, ...piExtensionArgs(i.piExtensions, i.cwd, i.path), '--extension', piExtension,
+      ...(i.preset ? piToolArgs(i.preset) : []), '--append-system-prompt', systemPrompt(i)];
     if (i.model) args.push('--model', i.model);
     if (i.effort) args.push('--thinking', i.effort);
     if (i.prompt) args.push('--', i.prompt);

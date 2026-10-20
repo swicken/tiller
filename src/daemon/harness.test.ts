@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { adapterFor, claudeAdapter, codexAdapter, piAdapter } from './harness.js';
+import { adapterFor, claudeAdapter, codexAdapter, piAdapter, piToolName } from './harness.js';
+import { DEFAULT_PRESETS, parsePreset } from './presets.js';
 import { claudeLaunch, type LaunchInput } from './launch.js';
 import { NodeManager } from './manager.js';
 import { startServer, type DaemonServer } from './server.js';
@@ -39,10 +40,50 @@ describe('harness boundary', () => {
   });
   it('fails closed on unsupported restrictions and forking', () => {
     expect(() => piAdapter.launch({ ...input(), permissionMode: 'plan' })).toThrow(/permissionMode/);
-    for (const preset of [{ tools: [] }, { disallowedTools: ['Bash'] }, { maxTurns: 1 }]) {
-      expect(() => piAdapter.validate({ preset })).toThrow(/preset tools/);
+    expect(() => piAdapter.validate({ preset: { maxTurns: 1 } })).toThrow(/maxTurns/);
+    for (const preset of [{ tools: ['Read', 'WebSearch'] }, { disallowedTools: ['Bash(rm *)'] }, { tools: ['mcp__context7'] }, { disallowedTools: ['constructor'] }]) {
+      expect(() => piAdapter.validate({ preset })).toThrow(/Pi has no equivalent of preset tool/);
     }
     expect(() => piAdapter.launch({ ...input(), forkSession: 'old' })).toThrow(/forking/);
+  });
+  it('translates Claude tool names to Pi tools, mapping tiller\'s MCP tools to the adapter\'s server name', () => {
+    expect(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'Grep', 'Glob', 'LS'].map(piToolName))
+      .toEqual(['read', 'write', 'edit', 'edit', 'edit', 'bash', 'grep', 'find', 'ls']);
+    expect(piToolName('mcp__tiller')).toBe('mcp__tl_*');
+    expect(piToolName('mcp__tiller__spawn')).toBe('mcp__tl_*__spawn');
+  });
+  it('passes preset tools as --tools, always keeping tiller\'s MCP tools, and disallowedTools as --exclude-tools', () => {
+    const arg = (args: string[], flag: string) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
+    const reviewer = piAdapter.launch({ ...input(), preset: parsePreset(DEFAULT_PRESETS.reviewer, 'reviewer.md') }).args;
+    expect(arg(reviewer, '--exclude-tools')).toBe('edit,write');
+    expect(arg(reviewer, '--tools')).toBeUndefined();
+    const allow = piAdapter.launch({ ...input(), preset: { name: 'p', body: '', source: 'p.md', tools: ['Read', 'Grep', 'mcp__tiller__send'] } }).args;
+    expect(arg(allow, '--tools')).toBe('read,grep,mcp__tl_*__send,mcp__tl_*');
+    expect(arg(allow, '--exclude-tools')).toBeUndefined();
+    expect(piAdapter.launch(input()).args.some((a) => a === '--tools' || a === '--exclude-tools')).toBe(false);
+  });
+  it('loads the user\'s Pi extensions for "all", only tiller\'s and the needed built-ins for "none", and listed packages by install path', () => {
+    const bin = join(home, 'bin'); mkdirSync(bin);
+    writeFileSync(join(bin, 'pi'), `#!/bin/sh
+[ "$1" = list ] || exit 2
+printf 'User packages:\\n  npm:web\\n    /pkgs/web\\n  npm:gone\\n  npm:filt (filtered)\\n    /pkgs/filt\\n\\nProject packages:\\n  npm:web\\n    /project/web\\n'
+`);
+    chmodSync(join(bin, 'pi'), 0o755);
+    const launch = (piExtensions: LaunchInput['piExtensions']) => piAdapter.launch({ ...input(), path: `${bin}:/usr/bin:/bin`, piExtensions }).args;
+    const extensions = (args: string[]) => args.flatMap((a, n) => args[n - 1] === '--extension' ? [a] : []);
+    for (const all of [undefined, 'all'] as const) {
+      expect(launch(all)).not.toContain('--no-extensions');
+      expect(extensions(launch(all))).toHaveLength(1); // tiller's adapter only; Pi adds what its settings configure
+    }
+    const builtins = ['builtin:mcp', 'builtin:codemode', 'builtin:tool-search'];
+    for (const none of ['none', []] satisfies LaunchInput['piExtensions'][]) {
+      expect(launch(none)).toContain('--no-extensions');
+      expect(extensions(launch(none)).slice(0, -1)).toEqual(builtins);
+    }
+    expect(extensions(launch(['npm:web'])).slice(0, -1)).toEqual([...builtins, '/project/web']); // the project entry replaces the user's
+    expect(() => launch(['npm:gone'])).toThrow('pi.extensions lists npm:gone, which is not an installed Pi package');
+    expect(() => launch(['npm:missing'])).toThrow('pi.extensions lists npm:missing, which is not an installed Pi package');
+    expect(() => launch(['npm:filt'])).toThrow(/has filters/);
   });
   it('preserves independent launch effort validation for Codex and Pi', () => {
     for (const effort of ['low', 'medium', 'high', 'xhigh'] as const) {

@@ -145,10 +145,53 @@ the variable or write the trust file directly. Pi's project trust and node-scope
 authentication do not constrain same-user local code either. To enforce separation, use OS
 accounts, a sandbox or container, and narrowly scoped filesystem and credential access.
 
-Pi has `--tools` and `--exclude-tools`, but this adapter does not map Tiller's preset tool
-restrictions onto them yet. Claude `permissionMode`, preset `tools`, `disallowedTools` and
-`maxTurns`, and session forking are rejected for Pi rather than silently weakened. Prompt-only
-presets work; the restricted built-in presets (reviewer, researcher) cannot run on Pi.
+### Preset tool restrictions on Pi
+
+A preset's `tools` becomes Pi's `--tools` allowlist and its `disallowedTools` becomes
+`--exclude-tools`. Presets name Claude tools, which tiller translates with a fixed table:
+
+| Preset (Claude) name | Pi tool |
+| --- | --- |
+| `Read` | `read` |
+| `Write` | `write` |
+| `Edit`, `MultiEdit`, `NotebookEdit` | `edit` (Pi's edit and write also cover notebooks) |
+| `Bash` | `bash` |
+| `PowerShell` | `powershell` |
+| `Grep` | `grep` |
+| `Glob` | `find` |
+| `LS` | `ls` |
+| `mcp__tiller`, `mcp__tiller__<tool>` | `mcp__tl_*`, `mcp__tl_*__<tool>` |
+
+A preset naming any other tool, such as `WebSearch`, `WebFetch`, a Claude permission rule like
+`Bash(npm *)` or another MCP server's tools, is refused for Pi, so a restriction is never weaker
+than written. An allowlist always keeps tiller's MCP tools (`mcp__tl_*`: the adapter registers
+tiller's server as `tl_<node>_<random>`), so the node can still report; because the list has an
+`mcp__` entry, Pi then also leaves out every other MCP server's tools, and extension tools not
+named. Pi has no equivalent of `maxTurns`, so a preset with it is still refused, as are Claude
+`permissionMode` and session forking.
+
+The built-in `reviewer` preset runs on Pi as `--exclude-tools edit,write`. The `researcher`
+preset names `WebSearch` and `WebFetch`, which have no Pi built-in, so it is still refused; use
+`--profile explorer` for portable read-only research on Pi.
+
+### Which Pi extensions a node loads
+
+`pi.extensions` in the [config](config.md) chooses which of the user's Pi extensions and packages
+a Pi node loads besides tiller's adapter. `"all"` (the default) loads what Pi's settings
+configure, as a plain `pi` run would. `"none"` launches with `--no-extensions` and loads back only
+the built-ins tiller needs: `builtin:mcp` for tiller's server, and `builtin:codemode` and
+`builtin:tool-search` for MCP exposures that use them. A list of package sources, written as in
+Pi's settings (for example `["npm:pi-web-access"]`), does the same and adds each listed package
+by the install path `pi list` reports; tiller does not pass the source itself, because `-e
+npm:<pkg>` installs a separate temporary copy. A built-in disabled in Pi's settings stays
+disabled. Some packages work against tiller's tracking: subagent extensions run work outside
+tiller's tree, and background-task extensions can keep working after a turn ends, when tiller
+already counts the node as done.
+
+A listed package that is not in Pi's settings, not installed, or configured with filters makes
+the launch fail with a message naming it, so the spawn is refused rather than starting a node
+with fewer or more tools than the setting says. `--no-extensions` affects extensions only:
+skills, prompt templates and themes from packages still load.
 
 ## Adapter boundary
 
@@ -180,4 +223,4 @@ See [the Pi adapter](../adapters/pi/README.md) for protocol mapping, compatibili
 
 `profile` is independent of both `harness` and the coordination `role`. The effective coordination role selects the default profile: `orchestrator` maps to `orchestrator`, `worker`/`none` to `implementation` (normally root and child respectively). The spawn UI offers all five profiles, including **Mechanical worker** (`mechanical`). `tl new --harness codex --profile implementation` and MCP `spawn` with `profile: "reviewer"` use the same resolution. Model and effort defaults are configured separately per harness and profile in `profiles.<harness>.<profile>`; explicit spawn fields win over presets, which win over config. See [config.md](config.md) for precedence and recommended opt-in Codex defaults. Legacy `roles` defaults remain Claude-only.
 
-`reviewer` and `explorer` profiles provide read-only instructions supported by all harnesses. They do not translate or remove Claude tool restrictions: explicit restricted presets (including the named `reviewer` and `researcher`) are still rejected by Codex/Pi, and the existing cross-harness delegation guard remains in force. Use the portable profile when instruction-level read-only work is sufficient; use the restricted preset on Claude when its enforced tool policy is required.
+`reviewer` and `explorer` profiles provide read-only instructions supported by all harnesses. They do not translate or remove Claude tool restrictions. Pi enforces a preset's `tools` and `disallowedTools` through its own flags (see [Preset tool restrictions on Pi](#preset-tool-restrictions-on-pi)) and refuses names it cannot translate; Codex rejects restricted presets (including the named `reviewer` and `researcher`), and the existing cross-harness delegation guard remains in force. Use the portable profile when instruction-level read-only work is sufficient; use the restricted preset on Claude or Pi when its enforced tool policy is required.
