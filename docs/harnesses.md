@@ -52,7 +52,7 @@ trailing `+`, such as `$0.12+`, in the UI, `tl ps` and `list_nodes`, and in ever
 includes it. Today's total gets the `+` only on a day that added such usage. Pi cannot tell a
 genuine $0 catalog price from a missing one, so a provider that reports tokens at no cost, such as a
 local model or `claude-bridge` on a subscription, shows `$0.00+` rather than `$0.00` from its first
-turn on. See the [Pi adapter's limitations](../adapters/pi/README.md#limitations).
+turn on. An amount above zero but under a cent shows as `<$0.01` (`<$0.01+` when incomplete) instead of `$0.00`. See the [Pi adapter's limitations](../adapters/pi/README.md#limitations).
 
 The spawn dialog also offers Pi. From another agent, use the existing `spawn` MCP tool:
 

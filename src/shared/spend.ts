@@ -30,8 +30,9 @@ export function todaySpend(nodes: Iterable<Spender>, now: number): Spend {
   return sum;
 }
 
-/** `$0.42`, or `$0.42+` when the figure is a lower bound. */
-export const fmtUsd = (usd: number, incomplete?: boolean) => `$${usd.toFixed(2)}${incomplete ? '+' : ''}`;
+/** `$0.42`, or `$0.42+` when the figure is a lower bound. A positive amount under a cent shows as `<$0.01`, not a misleading `$0.00`. */
+export const fmtUsd = (usd: number, incomplete?: boolean) =>
+  `${usd > 0 && usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`}${incomplete ? '+' : ''}`;
 
 /** Tooltip suffix for a `+` figure. */
 export const INCOMPLETE_NOTE = 'at least: some usage had no price';
