@@ -104,6 +104,15 @@ describe('mcp api', () => {
     const spent = (await api('list_nodes', {})).body;
     expect(spent.data.find((n: any) => n.id === id)).toMatchObject({ spentUsd: 1, subtreeSpentUsd: 3 });
     expect(spent.text).toContain(`- ${id} "parent" [terminal] none now · $1.00 (tree $3.00)`);
+    expect(spent.data.find((n: any) => n.id === id)).not.toHaveProperty('subtreeSpentIncomplete');
+    // A child with unpriced usage makes its own figure and every ancestor's tree total a lower bound.
+    manager.registry.update(child, { spentIncomplete: true });
+    const partial = (await api('list_nodes', {})).body;
+    expect(partial.data.find((n: any) => n.id === id)).toMatchObject({ spentUsd: 1, subtreeSpentUsd: 3, subtreeSpentIncomplete: true });
+    expect(partial.data.find((n: any) => n.id === id)).not.toHaveProperty('spentIncomplete');
+    expect(partial.data.find((n: any) => n.id === child)).toMatchObject({ spentIncomplete: true, subtreeSpentIncomplete: true });
+    expect(partial.text).toContain(`- ${id} "parent" [terminal] none now · $1.00 (tree $3.00+)`);
+    expect(partial.text).toContain(`${child} "kid" [terminal] none now · $2.00+`);
   });
 
   it('refuses to close an orchestrator unless the human forces it; restart is human-only', async () => {

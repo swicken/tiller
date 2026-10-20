@@ -20,7 +20,7 @@ describe('loadConfig', () => {
 
   it('resolves each key from the project file, then the home file, then the default', () => {
     const { cwd, homeDir } = setup(
-      JSON.stringify({ roles: { worker: { model: 'haiku' } }, claude: { inheritMcpServers: false }, worktrees: { include: ['.env'], mergeStyle: 'squash', taskBranch: 'feat/{slug}' }, gate: { command: 'npm test' }, limits: { maxChildren: 2 }, notifications: { kinds: { done: 'silent' } } }),
+      JSON.stringify({ roles: { worker: { model: 'haiku' } }, claude: { inheritMcpServers: false }, pi: { extensions: ['npm:pi-web-access'] }, worktrees: { include: ['.env'], mergeStyle: 'squash', taskBranch: 'feat/{slug}' }, gate: { command: 'npm test' }, limits: { maxChildren: 2 }, notifications: { kinds: { done: 'silent' } } }),
       JSON.stringify({ roles: { worker: { model: 'sonnet', effort: 'high' }, orchestrator: { model: 'opus' } }, claude: { inheritMcpServers: true }, approvals: { close: 'done' }, worktrees: { isolation: 'worktree', include: ['x'], setup: ['npm ci'] }, gate: { command: 'make', retries: 5 }, daemon: { resumeMaxAgeDays: 7, digestAfterMinutes: 30, maxWorking: 4 }, limits: { maxChildren: 5, stallMinutes: 2 }, notifications: { kinds: { done: 'sound', exited: 'silent' }, quietHours: '22:00-07:00' } }),
     );
     const proj = join(cwd, '.tiller', 'config.json'), home = join(homeDir, 'config.json');
@@ -30,7 +30,7 @@ describe('loadConfig', () => {
         codex: { orchestrator: {}, implementation: {}, explorer: {}, mechanical: {}, reviewer: {} },
         pi: { orchestrator: {}, implementation: {}, explorer: {}, mechanical: {}, reviewer: {} },
       },
-      roles: { orchestrator: { model: 'opus' }, worker: { model: 'haiku', effort: 'high' } }, claude: { inheritMcpServers: false }, approvals: { close: 'done', merge: false },
+      roles: { orchestrator: { model: 'opus' }, worker: { model: 'haiku', effort: 'high' } }, claude: { inheritMcpServers: false }, pi: { extensions: ['npm:pi-web-access'] }, approvals: { close: 'done', merge: false },
       worktrees: { isolation: 'worktree', branchPrefix: 'tl/', include: ['.env'], mergeStyle: 'squash', setup: ['npm ci'], teardown: [], protected: ['main', 'master'], taskBranch: 'feat/{slug}' }, // include replaces the home list whole
       gate: { command: 'npm test', retries: 5, timeoutMinutes: 10 }, // each gate key resolves on its own
       daemon: { resumeOnStart: true, resumeMaxAgeDays: 7, sessionsKeepDays: 14, digestAfterMinutes: 30, maxLiveNodes: 20, maxWorking: 4 },
@@ -41,7 +41,7 @@ describe('loadConfig', () => {
     expect(sources).toEqual({
       ...Object.fromEntries(Object.keys(sources).filter((k) => k.startsWith('profiles.')).map((k) => [k, 'default'])),
       'roles.orchestrator.model': home, 'roles.orchestrator.effort': 'default', 'roles.worker.model': proj, 'roles.worker.effort': home,
-      'claude.inheritMcpServers': proj,
+      'claude.inheritMcpServers': proj, 'pi.extensions': proj,
       'approvals.close': home, 'approvals.merge': 'default',
       'worktrees.isolation': home, 'worktrees.branchPrefix': 'default', 'worktrees.include': proj, 'worktrees.mergeStyle': proj, 'worktrees.setup': home, 'worktrees.teardown': 'default', 'worktrees.protected': 'default', 'worktrees.taskBranch': proj,
       'gate.command': proj, 'gate.retries': home, 'gate.timeoutMinutes': 'default',
@@ -84,7 +84,7 @@ describe('loadConfig', () => {
   it('leaves configured profiles empty, with default guardrails and no gate when there are no files', () => {
     const { cwd, homeDir } = setup(undefined, undefined);
     const c = loadConfig(cwd, homeDir);
-    expect(c).toMatchObject({ roles: { orchestrator: {}, worker: {} }, approvals: { close: 'never', merge: false }, worktrees: { isolation: 'none', branchPrefix: 'tl/' }, daemon: { resumeOnStart: true, resumeMaxAgeDays: 3 }, claude: { inheritMcpServers: true } });
+    expect(c).toMatchObject({ roles: { orchestrator: {}, worker: {} }, approvals: { close: 'never', merge: false }, worktrees: { isolation: 'none', branchPrefix: 'tl/' }, daemon: { resumeOnStart: true, resumeMaxAgeDays: 3 }, claude: { inheritMcpServers: true }, pi: { extensions: 'all' } });
     expect(c.worktrees.include).toBeUndefined();
     expect(c.gate).toBeUndefined();
     expect(c.notifications).toEqual({ kinds: { needsYou: 'sound', errored: 'silent', done: 'banner', exited: 'silent' }, treeDoneSummary: true });
@@ -133,6 +133,9 @@ describe('loadConfig', () => {
       [JSON.stringify({ closeWithoutConfirm: 'done', limits: { maxChildren: 2 } }), 'closeWithoutConfirm: unknown key'], // an old name
       [JSON.stringify({ approvals: { close: 'sometimes' }, limits: { maxChildren: 2 } }), 'approvals.close'],
       [JSON.stringify({ claude: { inheritMcpServers: 'no' }, limits: { maxChildren: 2 } }), 'claude.inheritMcpServers'],
+      [JSON.stringify({ pi: { extensions: 'some' }, limits: { maxChildren: 2 } }), 'pi.extensions'],
+      [JSON.stringify({ pi: { extensions: ['npm:ok', ''] }, limits: { maxChildren: 2 } }), 'pi.extensions'],
+      [JSON.stringify({ pi: { extensions: ['none', 'npm:ok'] }, limits: { maxChildren: 2 } }), 'pi.extensions: use "all" or "none" alone'],
       [JSON.stringify({ roles: { worker: { effort: 'extreme' } }, limits: { maxChildren: 2 } }), 'roles.worker.effort'],
       [JSON.stringify({ profiles: { codex: { explorer: { effort: 'extreme' } } }, limits: { maxChildren: 2 } }), 'profiles.codex.explorer.effort'],
       [JSON.stringify({ profiles: { codex: { worker: { model: 'bad-profile' } } }, limits: { maxChildren: 2 } }), 'profiles.codex.worker: unknown key'],

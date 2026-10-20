@@ -177,8 +177,10 @@ export interface NodeRecord {
   credentialGeneration?: string;
   /** Total spend in USD across all of the node's sessions, summed from the mod's session.measure. */
   spentUsd?: number;
-  /** Spend on one local day (YYYY-MM-DD); a later day starts over. */
-  spentToday?: { day: string; usd: number };
+  /** Set once a session reported usage it could not price (cost.incomplete): spentUsd is then only a lower bound. Never cleared. */
+  spentIncomplete?: boolean;
+  /** Spend on one local day (YYYY-MM-DD); a later day starts over. `incomplete`: unpriced usage was added that day (cost.unpricedAdded). */
+  spentToday?: { day: string; usd: number; incomplete?: boolean };
   /** The session's cumulative cost at its last measure, so the next measure (even after a daemon restart) adds only the difference. */
   lastCost?: { sessionId?: string; usd: number };
   /** Set by the human (tl mute, the row's mute button): the node never sends an OS notification. */
@@ -255,6 +257,7 @@ export interface ArchivedNode {
   /** One plain line (at most 200 characters) saying what the node did and how it ended, for an agent deciding whether to resume or fork it: the reported outcome's summary or note when there is one, else the first line of its last message. */
   brief?: string;
   spentUsd?: number;
+  spentIncomplete?: boolean;
   /** The session's cumulative cost at its last measure (NodeRecord.lastCost), so a follow-up resuming that session does not count it again. */
   lastCost?: { sessionId?: string; usd: number };
   /** The worktree branch it worked on, when it had one. */
@@ -412,7 +415,7 @@ export interface InboxMessage { id: string; from: string; text: string; enqueued
 export type ModEvent =
   | { event: 'turn.start'; payload: { text: string; turnId: string } }
   | { event: 'turn.complete'; payload: { answer?: string; durationMs: number; isAborted: boolean; turnId: string; reason: 'answer' | 'aborted' | 'refusal' | 'error'; usage?: Record<string, unknown> } }
-  | { event: 'session.measure'; payload: { model?: string; context?: { tokens: number; window: number; percent: number }; cost?: { usd: number }; rateLimits?: RateLimit[]; usageReports?: UsageReport[]; usageUnavailable?: boolean } };
+  | { event: 'session.measure'; payload: { model?: string; context?: { tokens: number; window: number; percent: number }; cost?: { usd: number; incomplete?: boolean; unpricedAdded?: boolean }; rateLimits?: RateLimit[]; usageReports?: UsageReport[]; usageUnavailable?: boolean } };
 /** POST /focus { id } → 204; the daemon broadcasts `focus` to ws clients (PLAN §14). */
 /** GET /tree → ChildView[]: the calling node's whole tree from its root, depth-first. */
 export interface ChildView {

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { harnessFor, isAgentKind, needsYou } from '../src/shared/protocol';
 import { fmtAge } from '../src/shared/format';
-import { fmtUsd, todaySpend } from '../src/shared/spend';
+import { fmtUsd, INCOMPLETE_NOTE, todaySpend } from '../src/shared/spend';
 import { useNow } from './hooks';
 import { openDialog, useStore } from './store';
 import { selectedUsage, usageScope, usageStale, usageToolName } from '../src/shared/usage';
@@ -23,7 +23,8 @@ export function StatusBar() {
   const reports = selectedUsage(selected, sources, legacy);
   const unavailable = selected && sources?.some((s) => s.tool === harnessFor(selected) && s.nodeIds.includes(selected.id) && s.availability === 'unavailable');
   const now = useNow();
-  const today = useStore((s) => todaySpend(Object.values(s.nodes), now));
+  const nodes = useStore((s) => s.nodes);
+  const today = todaySpend(Object.values(nodes), now);
   const update = useStore((s) => s.update);
   const notes = update?.installedNotes;
   const drain = useStore((s) => s.drain);
@@ -49,7 +50,7 @@ export function StatusBar() {
           </span>) : <span>{unavailable || harnessFor(selected) === 'pi' ? 'account quota unavailable' : 'no quota report for this agent'}</span>}
         </> : <span>{selected ? 'Terminal · no model quota' : 'Select an agent to see its quota'}</span>}
       </div>
-      {today > 0 && <span title="spent today, all nodes">{fmtUsd(today)} today</span>}
+      {(today.usd > 0 || today.incomplete) && <span title={`spent today, all nodes${today.incomplete ? `; ${INCOMPLETE_NOTE}` : ''}`}>{fmtUsd(today.usd, today.incomplete)} today</span>}
       <span className="spacer" />
       {drain && <span className="drain-notice" title={drain.waiting.map((w) => w.title).join(', ')}>
         {drain.force || !waiting ? 'Restarting Tiller…' : `Waiting for ${waiting} agent${waiting === 1 ? '' : 's'} to finish their turn`}

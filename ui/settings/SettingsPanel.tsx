@@ -38,8 +38,12 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
   const [reload, setReload] = useState(0);
   const dirty = Object.keys(drafts).length > 0;
   const sections = [
-    ...Object.keys(efforts).map((harness) => ({ title: harness === 'pi' ? 'Pi' : harness === 'codex' ? 'Codex' : 'Claude', help: 'Model and effort resolve independently. Spawn options and presets take precedence over these defaults.', fields: profileFields(harness as keyof typeof efforts) })),
-    ...groups.filter((group) => !group.homeOnly || scope === 'home'),
+    // A harness's own group (such as Claude's MCP setting) follows its profile fields in the one section of that title.
+    ...Object.keys(efforts).map((harness) => {
+      const title = harness === 'pi' ? 'Pi' : harness === 'codex' ? 'Codex' : 'Claude';
+      return { title, help: 'Model and effort resolve independently. Spawn options and presets take precedence over these defaults.', fields: [...profileFields(harness as keyof typeof efforts), ...groups.filter((group) => group.title === title).flatMap((group) => group.fields)] };
+    }),
+    ...groups.filter((group) => (!group.homeOnly || scope === 'home') && !['Claude', 'Pi', 'Codex'].includes(group.title)),
   ];
   const matches = (field: Field, title = '') => !search.trim() || `${title} ${field.label} ${field.key} ${field.help ?? ''}`.toLowerCase().includes(search.trim().toLowerCase());
   const active = sections.find((section) => section.title === category) ?? sections[0];
@@ -156,6 +160,7 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
           {active.help && <p>{active.help}</p>}</div>
           {['Claude', 'Codex', 'Pi'].includes(active.title) ? <>
             {profiles.filter((profile) => visibleFields.some((field) => field.key.includes(`.${profile}.`))).map((profile) => <fieldset className="settings-profile" key={profile}><legend>{profile.charAt(0).toUpperCase() + profile.slice(1)}</legend>{visibleFields.filter((field) => field.key.includes(`.${profile}.`)).map(renderField)}</fieldset>)}
+            {visibleFields.some((field) => !field.key.startsWith('profiles.')) && <section className="settings-subsection"><h2>{active.title} nodes</h2>{visibleFields.filter((field) => !field.key.startsWith('profiles.')).map(renderField)}</section>}
           </> : active.title === 'Approvals & checks' ? <>
             {visibleFields.some((field) => field.key.startsWith('approvals.')) && <section className="settings-subsection"><h2>Approvals</h2>{visibleFields.filter((field) => field.key.startsWith('approvals.')).map(renderField)}</section>}
             {visibleFields.some((field) => field.key.startsWith('gate.')) && <section className="settings-subsection"><h2>Completion checks</h2><p>Require a command to pass before a worker reports success.</p>{visibleFields.filter((field) => field.key.startsWith('gate.')).map(renderField)}</section>}

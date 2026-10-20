@@ -17,6 +17,8 @@ export interface SettingsUpdate { scope: SettingsScope; nodeId?: string; revisio
 export interface SettingsField {
   key: string; label: string; type: 'text' | 'number' | 'boolean' | 'select' | 'lines';
   options?: readonly string[]; min?: number; integer?: boolean; description?: string;
+  /** lines only: words that a single line saves as that string instead of a list. */
+  keywords?: readonly string[];
 }
 /** Portable defaults used only after explicit profiles and legacy Claude roles.
  * Sonnet/Haiku aliases can resolve to older provider models without effort support:
@@ -38,6 +40,7 @@ export const SETTINGS_FIELDS: SettingsField[] = [
   ...SETTINGS_HARNESSES.flatMap(h => SETTINGS_PROFILES.flatMap(p => [field(`profiles.${h}.${p}.model`, 'text'), field(`profiles.${h}.${p}.effort`, 'select', { options: SETTINGS_EFFORTS[h] })])),
   ...['orchestrator', 'worker'].flatMap(r => [field(`roles.${r}.model`, 'text'), field(`roles.${r}.effort`, 'select', { options: EFFORTS })]),
   field('claude.inheritMcpServers', 'boolean'),
+  field('pi.extensions', 'lines', { keywords: ['all', 'none'] }),
   field('approvals.close', 'select', { options: ['never', 'done', 'always'] }), field('approvals.merge', 'boolean'),
   field('worktrees.isolation', 'select', { options: ['none', 'worktree'] }),
   field('worktrees.mergeStyle', 'select', { options: ['merge', 'squash', 'ff-only'] }),

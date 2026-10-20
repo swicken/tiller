@@ -289,6 +289,53 @@ describe("tiller pi extension", () => {
     await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
   });
 
+  it("writes the provider-reported cost into the assistant message and reports unpriced usage as incomplete", async () => {
+    setBaseEnv();
+    const calls = stubFetch();
+    const pi = fakePi();
+    tillerPiExtension(pi.api);
+    const entries: unknown[] = [];
+    const ctx = fakeContext({ sessionManager: { getSessionId: () => "sess-1", getEntries: () => entries } });
+    await pi.emit("session_start", { type: "session_start", reason: "startup" }, ctx);
+    await tick();
+
+    // An OpenRouter stream: content chunks, then the final chunk with usage.cost.
+    const stream = { type: "provider_stream_event", provider: "openrouter", api: "openai-completions", model: "openrouter/auto" };
+    await pi.emit("provider_stream_event", { ...stream, data: { id: "gen-1", choices: [{ delta: { content: "hi" } }] } }, ctx);
+    await pi.emit("provider_stream_event", { ...stream, data: { id: "gen-1", choices: [], usage: { prompt_tokens: 140, completion_tokens: 24, cost: 0.0004 } } }, ctx);
+    const assistant = { role: "assistant", responseId: "gen-1", usage: { input: 116, output: 24, cost: { total: 0 } } };
+    const [result] = (await pi.emit("message_end", { type: "message_end", message: assistant }, ctx)) as Array<{ message?: any }>;
+    expect(result?.message?.usage.cost).toEqual({ total: 0.0004, source: "provider" });
+    // A second message without a reported cost is left alone.
+    expect(await pi.emit("message_end", { type: "message_end", message: { ...assistant, responseId: "gen-2" } }, ctx)).toEqual([undefined]);
+
+    entries.push({ type: "message", message: result!.message });
+    await pi.emit("turn_end", { type: "turn_end", turnIndex: 0, message: result!.message }, ctx);
+    let measure = calls.filter((c) => c.body?.event === "session.measure").at(-1);
+    expect(measure?.body.payload.cost).toEqual({ usd: 0.0004 });
+
+    // An unpriced model with no provider cost: tokens but $0. Reported as a lower bound, not a known $0.
+    entries.push({ type: "message", message: { role: "assistant", usage: { input: 50, output: 5, cost: { total: 0 } } } });
+    await pi.emit("turn_end", { type: "turn_end", turnIndex: 1, message: {} }, ctx);
+    measure = calls.filter((c) => c.body?.event === "session.measure").at(-1);
+    expect(measure?.body.payload.cost).toEqual({ usd: 0.0004, incomplete: true, unpricedAdded: true });
+    // The next measure adds nothing unpriced: the session stays incomplete, but nothing new is flagged.
+    await pi.emit("turn_end", { type: "turn_end", turnIndex: 2, message: {} }, ctx);
+    measure = calls.filter((c) => c.body?.event === "session.measure").at(-1);
+    expect(measure?.body.payload.cost).toEqual({ usd: 0.0004, incomplete: true });
+
+    await pi.emit("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx);
+  });
+
+  it("leaves messages unchanged when Tiller did not launch Pi", async () => {
+    const pi = fakePi();
+    tillerPiExtension(pi.api);
+    await pi.emit("session_start", { type: "session_start", reason: "startup" });
+    await pi.emit("provider_stream_event", { data: { id: "gen-1", usage: { cost: 0.1 } } });
+    const message = { role: "assistant", responseId: "gen-1", usage: { cost: { total: 0 } } };
+    expect(await pi.emit("message_end", { type: "message_end", message })).toEqual([undefined]);
+  });
+
   it("maps a final assistant stopReason of error to turn.complete reason error", async () => {
     setBaseEnv();
     const calls = stubFetch();
