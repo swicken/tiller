@@ -108,12 +108,12 @@ describe('task profile prompts', () => {
   });
 });
 
-it('retains enforced reviewer preset guidance for Claude and uses portable review profiles for Codex/Pi', () => {
+it('retains enforced reviewer preset guidance for Claude and Pi and uses the portable review profile for Codex', () => {
   const base = { nodeId: 'n', title: 't', parentId: null, home: '/nonexistent', cwd: '/nonexistent' };
   for (const harness of ['claude', 'codex', 'pi'] as const) {
     const prompt = systemPrompt({ ...base, harness });
-    expect(prompt).toContain(harness === 'claude' ? 'spawn a node with preset "reviewer"' : 'spawn a node with profile "reviewer"');
-    expect(prompt).not.toContain(harness === 'claude' ? 'spawn a node with profile "reviewer"' : 'spawn a node with preset "reviewer"');
+    expect(prompt).toContain(harness !== 'codex' ? 'spawn a node with preset "reviewer"' : 'spawn a node with profile "reviewer"');
+    expect(prompt).not.toContain(harness !== 'codex' ? 'spawn a node with profile "reviewer"' : 'spawn a node with preset "reviewer"');
   }
 });
 

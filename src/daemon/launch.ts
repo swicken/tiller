@@ -64,7 +64,7 @@ You are a worker spawned by your parent node. Do exactly the task in your brief.
 
 /** Portable task guidance; restrictions in explicit presets remain enforced by the harness. */
 export const PROFILE_PROMPTS: Record<Profile, string> = {
-  orchestrator: 'Coordinate the task, delegate independent work with clear briefs, and verify results before integration. Use the restricted reviewer preset for Claude reviews; for Codex or Pi reviews use the portable reviewer profile.',
+  orchestrator: 'Coordinate the task, delegate independent work with clear briefs, and verify results before integration. Use the restricted reviewer preset for Claude and Pi reviews; for Codex reviews use the portable reviewer profile.',
   implementation: 'Implement the assigned change end to end. Read the surrounding code, preserve existing work, keep edits scoped, and run the relevant checks. Report changes, verification and remaining limitations.',
   explorer: 'Explore the codebase and available reference material to answer the brief. Work read-only: do not edit files or run commands that change state. Cite concrete files, lines and sources, distinguish findings from assumptions, and report what remains uncertain.',
   mechanical: 'Perform the narrowly specified mechanical task. Follow existing patterns, keep changes minimal, and verify the result. Ask your parent before expanding the scope or making a design decision the brief does not resolve.',
@@ -86,7 +86,7 @@ function rolePrompt(home: string, cwd: string, role: Role, harness: Harness = 'c
   const { path } = promptPath(home, cwd, role);
   try { if (path) return readFileSync(path, 'utf8').trim(); } catch { /* unreadable: use the default */ }
   const builtin = DEFAULT_PROMPTS[role].trim();
-  return harness === 'claude' ? builtin : builtin.replace('preset "reviewer"', 'profile "reviewer"');
+  return harness === 'codex' ? builtin.replace('preset "reviewer"', 'profile "reviewer"') : builtin;
 }
 
 function worktreeText(o: { worktree?: Worktree; sharesWorktreeOf?: string }): string {
@@ -162,6 +162,8 @@ export interface LaunchInput {
   preset?: Preset;
   /** Claude also loads its usual MCP servers; false passes `--strict-mcp-config` so the node has only tiller's. Unset means true. */
   inheritMcpServers?: boolean;
+  /** Pi loads the user's extensions ("all", or unset), only tiller's ("none"), or tiller's and these package sources. */
+  piExtensions?: 'all' | 'none' | string[];
 }
 
 export interface LaunchSpec { file: string; args: string[]; env: Record<string, string> }

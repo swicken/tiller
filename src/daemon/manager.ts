@@ -369,7 +369,7 @@ export class NodeManager extends EventEmitter {
       ? undefined : this.runtimes.get(parentId!)?.status?.permissionMode ?? parent.permissionMode;
     const permissionMode = req.permissionMode ?? p.permissionMode ?? (inherited === 'bypassPermissions' ? undefined : inherited);
     if (permissionMode === 'bypassPermissions' && !req.byHuman) throw new Error('refused: only the human may spawn a node with permissionMode bypassPermissions');
-    adapter?.validate({ permissionMode, preset: p });
+    adapter?.validate({ permissionMode, preset: p, piExtensions: { setting: config.pi.extensions, cwd: dir, path: this.path } });
     const isolation = req.isolation ?? p.isolation ?? (!adapter || isOrchestrator ? 'none' : config.worktrees.isolation);
     if (isolation === 'worktree' && !adapter) throw new Error('isolation "worktree" is for agent nodes only');
     this.checkLimits(req, config.limits);
@@ -594,8 +594,8 @@ export class NodeManager extends EventEmitter {
       const defaults = profileDefaults(loadConfig(this.projectDir(rec), this.home), harness, profileFor(rec.profile, rec.parentId, rec.role), roleFor(rec.role, rec.parentId));
       if (defaults.effort && !isSupportedEffort(harness, defaults.effort)) throw new Error(`unsupported ${harness} effort: ${defaults.effort}`);
       // Explicit confirmation resets preset/model/effort/permission overrides to target defaults.
-      adapter.validate({});
       requireHarnessExecutable(harness, this.path);
+      adapter.validate({ piExtensions: { setting: loadConfig(this.projectDir(rec), this.home).pi.extensions, cwd: this.projectDir(rec), path: this.path } });
       const owner = this.registry.list().find((n) => n.id !== id && n.worktree && inside(rec.cwd, n.worktree.path));
       const ownerRuntime = owner && this.runtimes.get(owner.id);
       if (ownerRuntime?.busy || ownerRuntime?.setup || ownerRuntime?.gate?.state === 'running') throw new Error('the shared worktree has a lifecycle operation running');
@@ -1062,12 +1062,13 @@ export class NodeManager extends EventEmitter {
     if (adapter?.prepareTranscript) {
       rec = this.registry.update(id, { transcriptPath: adapter.prepareTranscript(rec, sessionDir, resume) })!;
     }
+    const config = loadConfig(this.projectDir(rec), this.home);
     const input: LaunchInput = {
       nodeId: id, nodeDir: this.launchDir(id), endpoint: this.endpoint, path: this.path, harness: adapter?.id,
       title: rec.title, parentId: rec.parentId, home: this.home, cwd: this.projectDir(rec), role: rec.role, profile: rec.profile, sessionId: rec.sessionId ?? '',
       resume, forkSession, transcriptPath: rec.transcriptPath, prompt, model: rec.model, effort: rec.effort, permissionMode: rec.permissionMode, worktree: rec.worktree, sharesWorktreeOf: owner?.id, sessionDir,
       preset: rec.preset ? loadPreset(rec.preset, this.projectDir(rec), this.home) : undefined,
-      inheritMcpServers: loadConfig(this.projectDir(rec), this.home).claude.inheritMcpServers,
+      inheritMcpServers: config.claude.inheritMcpServers, piExtensions: config.pi.extensions,
     };
     const spec = adapter ? adapter.launch(input) : terminalLaunch(input, this.shell);
     const cwd = adapter ? adapter.cwd(rec) : rec.cwd;

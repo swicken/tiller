@@ -29,8 +29,21 @@ TL_TOKEN_FILE=<home>/nodes/n-abc123/token \
 TL_SESSION_ID=<tiller-session-uuid> \
 TL_PI_HOOK_TOOLS=1 \
 pi --session <home>/sessions/<rootId>/agents/n-abc123/<tiller-session-uuid>.jsonl \
-  --name <title> --extension <repo>/adapters/pi/index.ts --append-system-prompt <prompt>
+  --name <title> [extension policy] --extension <repo>/adapters/pi/index.ts [tool policy] \
+  --append-system-prompt <prompt>
 ```
+
+The extension policy comes from the `pi.extensions` config: nothing for `"all"`, else
+`--no-extensions --extension builtin:mcp --extension builtin:codemode --extension builtin:tool-search`
+followed by `--extension <install path>` for each listed package. The tool policy comes from a
+preset: `--tools` from its `tools` (always including `mcp__tl_<node prefix>_*`, this extension's server) and
+`--exclude-tools` from its `disallowedTools`, translated from Claude tool names. Both are decided
+in `piAdapter` (`src/daemon/harness.ts`); see `docs/harnesses.md`. The extension needs only
+`builtin:mcp` for its own server with the default `direct` exposure; the `codemode` and
+`deferred` exposures also need the codemode and tool-search built-ins. A preset's `tools`
+allowlist does not add the `codemode` or `tool_search` tools, so under those two exposures
+(`TL_PI_MCP_EXPOSURE`) a node with such a preset cannot reach Tiller's tools; keep the default
+`direct` exposure for restricted presets.
 
 `TL_SESSION_ID` is the daemon-minted Tiller session id. The bridge reports it as `session_id`,
 never Pi's own header session UUID, because the node record, transcript path and resume all key

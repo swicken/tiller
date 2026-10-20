@@ -132,6 +132,11 @@ it('removes informational disclosures while keeping editable profile groups', ()
   }
 });
 
+it('shows each harness group in its harness section', () => {
+  click('Claude'); expect(input('claude.inheritMcpServers')).toBeDefined();
+  click('Pi'); expect(input('pi.extensions')?.type).toBe('textarea');
+});
+
 it('guards scope changes and closing, keeps edits on request, and discards only with explicit action', async () => {
   input('profiles.claude.implementation.model').props.onChange({ target: { value: 'edited' } }); render();
   changeScope('home');

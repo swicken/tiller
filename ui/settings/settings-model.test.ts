@@ -17,6 +17,13 @@ describe('settings drafts', () => {
   it('rejects empty or nonfinite numeric drafts before sending', () => {
     for (const value of ['', 'abc', 'Infinity']) expect(() => buildChanges(snapshot, { 'limits.maxDepth': value }, fields)).toThrow('enter a number');
   });
+  it('saves a single all or none line of pi.extensions as that word, and anything else as a list', () => {
+    expect(buildChanges(snapshot, { 'pi.extensions': 'none' }, fields)).toEqual({ 'pi.extensions': 'none' });
+    expect(buildChanges(snapshot, { 'pi.extensions': 'npm:a\nnpm:b' }, fields)).toEqual({ 'pi.extensions': ['npm:a', 'npm:b'] });
+    expect(() => buildChanges(snapshot, { 'pi.extensions': 'all\nnpm:a' }, fields)).toThrow('put all on its own');
+    expect(() => buildChanges(snapshot, { 'pi.extensions': 'npm:a\n none' }, fields)).toThrow('put none on its own');
+    expect(buildChanges(snapshot, { 'pi.extensions': '' }, fields)).toEqual({ 'pi.extensions': [] }); // an empty list loads none
+  });
   it('keeps model IDs literal and rejects blank strings without treating them as resets', () => {
     expect(buildChanges(snapshot, { 'profiles.codex.explorer.model': 'model/custom-id' }, fields)).toEqual({ 'profiles.codex.explorer.model': 'model/custom-id' });
     expect(() => buildChanges(snapshot, { 'profiles.codex.explorer.model': '' }, fields)).toThrow('use the inherited default');

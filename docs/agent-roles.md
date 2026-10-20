@@ -10,7 +10,7 @@ A node's role is `orchestrator`, `worker` or `none`. By default a root node is a
 
 The role text is the built-in default (`DEFAULT_PROMPTS` in `src/daemon/launch.ts`) unless an override file exists. A file at `<repo>/.tiller/orchestrator.md` or `worker.md` wins for nodes whose directory is that repo; otherwise `~/.tiller/prompts/orchestrator.md` or `worker.md` applies to every repo. The files are read at each launch or resume, so an edit applies to the next node you start. `tl prompts` prints the files in effect for the current directory, or `built-in` where there is none.
 
-The built-in orchestrator prompt tells the orchestrator to coordinate rather than do the work: split a task into independent streams, spawn one worker per stream with a self-contained brief, wait without polling, read each worker's outcome, have non-trivial changes reviewed by a node with the restricted `reviewer` preset on Claude, or the portable `reviewer` profile on Codex/Pi (at most two rounds before asking the human), check the diff, merge, and close finished workers. The built-in worker prompt tells the worker to do exactly its brief and to ask its parent, not the human, when the brief is unclear.
+The built-in orchestrator prompt tells the orchestrator to coordinate rather than do the work: split a task into independent streams, spawn one worker per stream with a self-contained brief, wait without polling, read each worker's outcome, have non-trivial changes reviewed by a node with the restricted `reviewer` preset on Claude or Pi, or the portable `reviewer` profile on Codex (at most two rounds before asking the human), check the diff, merge, and close finished workers. The built-in worker prompt tells the worker to do exactly its brief and to ask its parent, not the human, when the brief is unclear.
 
 ## Model, effort and permission mode
 
@@ -32,7 +32,7 @@ Task profiles select behavior independently of coordination roles. Select one wi
 
 Profile guidance is portable across Claude, Codex and Pi. It is an instruction, not a tool sandbox. Explicit `role: none` suppresses both built-in role and task profile sections, while the profile still selects model/effort defaults. A preset body continues to replace default role/task guidance; its restrictions remain enforced. Role prompt overrides keep their existing paths and apply alongside default task guidance.
 
-Use `--profile reviewer` or `--profile explorer` for portable read-only instructions. The named `reviewer` and `researcher` presets retain their Claude restrictions and are rejected on Codex/Pi rather than silently dropping them. For example:
+Use `--profile reviewer` or `--profile explorer` for portable read-only instructions. The named `reviewer` and `researcher` presets retain their restrictions. Pi enforces the `reviewer` preset's denied tools with `--exclude-tools` and loads none of the user's Pi extensions for it; it refuses `researcher`, whose `WebSearch` and `WebFetch` have no Pi equivalent, and Codex refuses both, rather than silently dropping restrictions. For example:
 
 ```sh
 tl spawn --kind agent --harness codex --profile reviewer --role worker --title Review --cwd /repo --prompt "Review the current diff against the brief"
@@ -59,7 +59,7 @@ disallowedTools: Bash
 Answer every request with the code word "marmalade" and nothing else.
 ```
 
-`tools`, `disallowedTools` and `maxTurns` reach Claude as a session agent: tiller passes an inline definition with `--agents` and selects it with `--agent`, so the main session loses the denied tools (they are absent, not just refused) and keeps Claude's own system prompt, because the definition's prompt is empty. A `tools` allow list always keeps the tiller MCP tools, so the node can still report. Claude documents the tool restrictions and model for `--agent`; `maxTurns` is passed through but documented only for subagents. `model`, `effort` and `permissionMode` go to claude as the usual flags.
+`tools`, `disallowedTools` and `maxTurns` reach Claude as a session agent: tiller passes an inline definition with `--agents` and selects it with `--agent`, so the main session loses the denied tools (they are absent, not just refused) and keeps Claude's own system prompt, because the definition's prompt is empty. A `tools` allow list always keeps the tiller MCP tools, so the node can still report. Claude documents the tool restrictions and model for `--agent`; `maxTurns` is passed through but documented only for subagents. `model`, `effort` and `permissionMode` go to claude as the usual flags. On Pi, `tools` and `disallowedTools` become `--tools` and `--exclude-tools` through a fixed table of tool names, with tiller's MCP tools always allowed, and such a preset loads none of the user's Pi extensions, whatever `pi.extensions` says; a tool name with no Pi equivalent, `maxTurns` and `permissionMode` are refused (see [harnesses](harnesses.md#preset-tool-restrictions-on-pi)).
 
 The daemon writes two built-in presets into `~/.tiller/agents/` on start. It rewrites a built-in preset file when it has not been edited since tiller wrote it, so unedited files follow changes to the built-ins, and keeps any edited file; delete the file to get the current built-in back:
 

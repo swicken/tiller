@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { adapterFor, claudeAdapter, codexAdapter, piAdapter } from './harness.js';
+import { adapterFor, claudeAdapter, codexAdapter, piAdapter, piToolName } from './harness.js';
+import { DEFAULT_PRESETS, parsePreset } from './presets.js';
 import { claudeLaunch, type LaunchInput } from './launch.js';
 import { NodeManager } from './manager.js';
 import { startServer, type DaemonServer } from './server.js';
@@ -39,10 +40,63 @@ describe('harness boundary', () => {
   });
   it('fails closed on unsupported restrictions and forking', () => {
     expect(() => piAdapter.launch({ ...input(), permissionMode: 'plan' })).toThrow(/permissionMode/);
-    for (const preset of [{ tools: [] }, { disallowedTools: ['Bash'] }, { maxTurns: 1 }]) {
-      expect(() => piAdapter.validate({ preset })).toThrow(/preset tools/);
+    expect(() => piAdapter.validate({ preset: { maxTurns: 1 } })).toThrow(/maxTurns/);
+    for (const preset of [{ tools: ['Read', 'WebSearch'] }, { disallowedTools: ['Bash(rm *)'] }, { tools: ['mcp__context7'] }, { disallowedTools: ['constructor'] }]) {
+      expect(() => piAdapter.validate({ preset })).toThrow(/Pi has no equivalent of preset tool/);
     }
     expect(() => piAdapter.launch({ ...input(), forkSession: 'old' })).toThrow(/forking/);
+  });
+  it('translates Claude tool names to Pi tools, mapping tiller\'s MCP tools to the adapter\'s server name', () => {
+    expect(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'Grep', 'Glob', 'LS'].map((t) => piToolName(t, 'n-test')))
+      .toEqual(['read', 'write', 'edit', 'edit', 'edit', 'bash', 'grep', 'find', 'ls']);
+    // Only this node's server, tl_<first 8 of the id>_<random>, not any server named tl_*.
+    expect(piToolName('mcp__tiller', 'n-1e1e28db')).toBe('mcp__tl_1e1e28db_*');
+    expect(piToolName('mcp__tiller__spawn', 'n-1e1e28db')).toBe('mcp__tl_1e1e28db_*__spawn');
+  });
+  it('passes preset tools as --tools, always keeping tiller\'s MCP tools, and disallowedTools as --exclude-tools', () => {
+    const arg = (args: string[], flag: string) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
+    const reviewer = piAdapter.launch({ ...input(), preset: parsePreset(DEFAULT_PRESETS.reviewer, 'reviewer.md') }).args;
+    expect(arg(reviewer, '--exclude-tools')).toBe('edit,write');
+    expect(reviewer).toContain('--no-extensions'); // with pi.extensions unset ("all")
+    // A listed package is not loaded either: this path has no pi, so consulting pi list would throw.
+    expect(piAdapter.launch({ ...input(), piExtensions: ['npm:web'], preset: { name: 'p', body: '', source: 'p.md', disallowedTools: ['Write'] } }).args).toContain('--no-extensions');
+    expect(arg(reviewer, '--tools')).toBeUndefined();
+    const allow = piAdapter.launch({ ...input(), preset: { name: 'p', body: '', source: 'p.md', tools: ['Read', 'Grep', 'mcp__tiller__send'] } }).args;
+    expect(arg(allow, '--tools')).toBe('read,grep,mcp__tl_test_*__send,mcp__tl_test_*');
+    expect(arg(allow, '--exclude-tools')).toBeUndefined();
+    expect(allow).toContain('--no-extensions');
+    expect(piAdapter.launch(input()).args.some((a) => a === '--tools' || a === '--exclude-tools' || a === '--no-extensions')).toBe(false);
+    expect(piAdapter.launch({ ...input(), preset: { name: 'p', body: 'prompt only', source: 'p.md' } }).args).not.toContain('--no-extensions');
+  });
+  it('loads the user\'s Pi extensions for "all", only tiller\'s and the needed built-ins for "none", and listed packages by install path', () => {
+    const path = fakePiList();
+    const launch = (piExtensions: LaunchInput['piExtensions']) => piAdapter.launch({ ...input(), path, piExtensions }).args;
+    const extensions = (args: string[]) => args.flatMap((a, n) => args[n - 1] === '--extension' ? [a] : []);
+    for (const all of [undefined, 'all'] as const) {
+      expect(launch(all)).not.toContain('--no-extensions');
+      expect(extensions(launch(all))).toHaveLength(1); // tiller's adapter only; Pi adds what its settings configure
+    }
+    const builtins = ['builtin:mcp', 'builtin:codemode', 'builtin:tool-search'];
+    for (const none of ['none', []] satisfies LaunchInput['piExtensions'][]) {
+      expect(launch(none)).toContain('--no-extensions');
+      expect(extensions(launch(none)).slice(0, -1)).toEqual(builtins);
+    }
+    expect(extensions(launch(['npm:web'])).slice(0, -1)).toEqual([...builtins, '/project/web']); // the project entry replaces the user's
+    expect(() => launch(['npm:gone'])).toThrow('pi.extensions lists npm:gone, which is not an installed Pi package');
+    expect(() => launch(['npm:missing'])).toThrow('pi.extensions lists npm:missing, which is not an installed Pi package');
+    expect(() => launch(['npm:filt'])).toThrow(/has filters/);
+    expect(() => piAdapter.validate({ piExtensions: { setting: ['npm:gone'], cwd: home, path } })).toThrow(/npm:gone/);
+    expect(() => piAdapter.validate({ preset: { disallowedTools: ['Write'] }, piExtensions: { setting: ['npm:gone'], cwd: home, path } })).not.toThrow();
+  });
+  it('refuses a Pi spawn whose pi.extensions list is not installed before creating the node or its worktree', async () => {
+    const repo = join(home, 'repo'); mkdirSync(join(repo, '.tiller'), { recursive: true });
+    writeFileSync(join(repo, '.tiller', 'config.json'), JSON.stringify({ pi: { extensions: ['npm:gone'] } }));
+    execFileSync('git', ['init', '-q', repo]);
+    execFileSync('git', ['-C', repo, '-c', 'user.name=Tiller Test', '-c', 'user.email=tiller@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'initial']);
+    manager = new NodeManager({ home: join(home, 'tl'), path: fakePiList() });
+    await expect(manager.spawn({ kind: 'agent', harness: 'pi', title: 'w', cwd: repo, byHuman: true, isolation: 'worktree' })).rejects.toThrow('pi.extensions lists npm:gone');
+    expect(manager.list()).toEqual([]);
+    expect(existsSync(join(repo, '.claude', 'worktrees'))).toBe(false);
   });
   it('preserves independent launch effort validation for Codex and Pi', () => {
     for (const effort of ['low', 'medium', 'high', 'xhigh'] as const) {
@@ -57,6 +111,17 @@ describe('harness boundary', () => {
     expect(piAdapter.launch(i).args.slice(0, 2)).toEqual(['--session', i.transcriptPath]);
   });
 });
+
+/** A `pi` whose only command is `list`: a user and a project listing with chalk-style colour codes, as FORCE_COLOR gives. */
+function fakePiList(): string {
+  const bin = join(home, 'listbin'); mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'pi'), `#!/bin/sh
+[ "$1" = list ] || exit 2
+printf '\\033[1mUser packages:\\033[22m\\n  npm:web\\n\\033[2m    /pkgs/web\\033[22m\\n  npm:gone\\n  npm:filt (filtered)\\n\\033[2m    /pkgs/filt\\033[22m\\n\\n\\033[1mProject packages:\\033[22m\\n  npm:web\\n\\033[2m    /project/web\\033[22m\\n'
+`);
+  chmodSync(join(bin, 'pi'), 0o755);
+  return `${bin}:/usr/bin:/bin`;
+}
 
 // A fake Pi CLI loads the REAL extension and uses the REAL daemon HTTP API, but never calls a model.
 // This checks launch env, lifecycle/status, MCP config/auth, inbox receipts and persisted sessions together.
