@@ -135,6 +135,7 @@ describe('loadConfig', () => {
       [JSON.stringify({ claude: { inheritMcpServers: 'no' }, limits: { maxChildren: 2 } }), 'claude.inheritMcpServers'],
       [JSON.stringify({ pi: { extensions: 'some' }, limits: { maxChildren: 2 } }), 'pi.extensions'],
       [JSON.stringify({ pi: { extensions: ['npm:ok', ''] }, limits: { maxChildren: 2 } }), 'pi.extensions'],
+      [JSON.stringify({ pi: { extensions: ['none', 'npm:ok'] }, limits: { maxChildren: 2 } }), 'pi.extensions: use "all" or "none" alone'],
       [JSON.stringify({ roles: { worker: { effort: 'extreme' } }, limits: { maxChildren: 2 } }), 'roles.worker.effort'],
       [JSON.stringify({ profiles: { codex: { explorer: { effort: 'extreme' } } }, limits: { maxChildren: 2 } }), 'profiles.codex.explorer.effort'],
       [JSON.stringify({ profiles: { codex: { worker: { model: 'bad-profile' } } }, limits: { maxChildren: 2 } }), 'profiles.codex.worker: unknown key'],

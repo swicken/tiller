@@ -160,12 +160,13 @@ A preset's `tools` becomes Pi's `--tools` allowlist and its `disallowedTools` be
 | `Grep` | `grep` |
 | `Glob` | `find` |
 | `LS` | `ls` |
-| `mcp__tiller`, `mcp__tiller__<tool>` | `mcp__tl_*`, `mcp__tl_*__<tool>` |
+| `mcp__tiller`, `mcp__tiller__<tool>` | `mcp__tl_<node prefix>_*`, `mcp__tl_<node prefix>_*__<tool>` |
 
 A preset naming any other tool, such as `WebSearch`, `WebFetch`, a Claude permission rule like
 `Bash(npm *)` or another MCP server's tools, is refused for Pi, so a restriction is never weaker
-than written. An allowlist always keeps tiller's MCP tools (`mcp__tl_*`: the adapter registers
-tiller's server as `tl_<node>_<random>`), so the node can still report; because the list has an
+than written. An allowlist always keeps this node's tiller MCP tools (`mcp__tl_<node prefix>_*`: the
+adapter registers tiller's server as `tl_<first 8 characters of the node id>_<random>`), so the
+node can still report; because the list has an
 `mcp__` entry, Pi then also leaves out every other MCP server's tools, and extension tools not
 named. Pi has no equivalent of `maxTurns`, so a preset with it is still refused, as are Claude
 `permissionMode` and session forking.
@@ -173,7 +174,13 @@ named. Pi has no equivalent of `maxTurns`, so a preset with it is still refused,
 A preset with `tools` or `disallowedTools` also launches as if `pi.extensions` were `"none"`,
 whatever the setting says: only tiller's adapter and the built-ins it needs load, because an
 extension's tools, such as subagents or background tasks, could do what the preset denies.
-Prompt-only presets follow `pi.extensions`.
+Prompt-only presets follow `pi.extensions`. `builtin:mcp` still connects the user's own Pi MCP
+servers (from Pi's `mcp.json`), and their tools stay callable unless the preset has a `tools`
+allowlist, which leaves out every MCP tool it does not name; a `disallowedTools` list alone does
+not remove them.
+
+Restrictions apply to the node they are set on, not to its children: a restricted Pi node can
+spawn an unrestricted Pi child, as a restricted Claude node can spawn an unrestricted Claude child.
 
 The built-in `reviewer` preset runs on Pi as `--exclude-tools edit,write`, without the user's extensions. The `researcher`
 preset names `WebSearch` and `WebFetch`, which have no Pi built-in, so it is still refused; use

@@ -252,3 +252,12 @@ it('refuses terminal, nonhuman, pending, setup, busy and completion-gate transit
   expect(await change(id, 'pi')).toMatchObject({ ok: false, error: 'completion gate is running' });
   expect(processes.every((p) => p.kills === 0)).toBe(true);
 });
+
+it('refuses a change to Pi whose pi.extensions list is not installed before stopping the old process', async () => {
+  writeFileSync(join(manager.home, 'config.json'), JSON.stringify({ pi: { extensions: ['npm:gone'] } })); // the fake pi lists nothing
+  const { id } = await spawn();
+  expect(await change(id, 'pi')).toMatchObject({ ok: false, error: expect.stringContaining('pi.extensions lists npm:gone') });
+  expect(processes).toHaveLength(1);
+  expect(processes[0].kills).toBe(0);
+  expect(manager.view(id)!.harness).toBe('claude');
+});

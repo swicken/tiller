@@ -38,7 +38,9 @@ export const ConfigFile = z.object({
    * extensions: which of the user's Pi extensions a Pi node loads besides tiller's adapter. "all" is what Pi's settings
    * configure; "none" is no others; a list loads only those package sources, as written in Pi's settings.
    */
-  pi: z.object({ extensions: z.union([z.enum(['all', 'none']), z.array(z.string().min(1))]).optional() }).strict().optional(),
+  pi: z.object({
+    extensions: z.union([z.enum(['all', 'none']), z.array(z.string().min(1)).refine((l) => !l.includes('all') && !l.includes('none'), 'use "all" or "none" alone, not in a list')]).optional(),
+  }).strict().optional(),
   /**
    * When an agent's action skips the human's approval. close: "always"; "done" when every node in the batch is done, has
    * exited or has reported an outcome; "never". merge: true means an agent's merge never asks.

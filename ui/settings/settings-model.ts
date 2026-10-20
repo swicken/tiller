@@ -76,7 +76,9 @@ export function buildChanges(snapshot: SettingsSnapshot, drafts: Record<string, 
       else if (f.type === 'boolean') value = raw === 'true';
       else if (f.type === 'lines') {
         const lines = raw === '' ? [] : raw.split('\n').filter((line) => line.trim());
-        value = lines.length === 1 && f.keywords?.includes(lines[0].trim()) ? lines[0].trim() : lines;
+        const keyword = lines.find((line) => f.keywords?.includes(line.trim()));
+        if (keyword && lines.length > 1) throw new Error(`${f.label}: put ${keyword.trim()} on its own, without other lines.`);
+        value = keyword ? keyword.trim() : lines;
       }
       else if (!raw.trim()) throw new Error(`${f.label}: enter a value or use the inherited default.`);
     }

@@ -405,7 +405,8 @@ describe('NodeManager harness delegation and lifecycle', () => {
     expect(await pi(parent.id, { byHuman: true })).toMatchObject({ harness: 'pi', permissionMode: undefined });
     // Human selection does not silently discard unsupported requested restrictions.
     await expect(pi(parent.id, { byHuman: true, permissionMode: 'plan' })).rejects.toThrow(/does not support Claude permissionMode/);
-    await expect(pi(parent.id, { byHuman: true, preset: 'reviewer' })).rejects.toThrow(/does not support Claude preset/);
+    // Pi enforces the reviewer's denied tools itself (see harness.test.ts).
+    expect(await pi(parent.id, { byHuman: true, preset: 'reviewer' })).toMatchObject({ harness: 'pi', preset: 'reviewer' });
   });
 
   it('allows Pi parents and inherits their harness, not a Claude permission_mode hook field', async () => {
