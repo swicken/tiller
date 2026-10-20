@@ -80,7 +80,8 @@ All calls use `Authorization: Bearer <token>` and `X-TL-Node: <nodeId>`.
 | `session_start` | `pi.registerMcpServer("tl_<node-prefix>_<random>", …)` | HTTP MCP at `<endpoint>/mcp`, node-scoped headers. Fresh compact names (<=24 characters, 48-bit random suffix) prevent ordinary `mcp.json` entries named `tiller` from silently overriding the registration and leave provider tool-name headroom. |
 | `before_agent_start` (`user`) | `POST /hook` `UserPromptSubmit` | The actual prompt Pi accepted; also the only source of bridge acceptance, so a void `sendUserMessage` return is never treated as delivered. |
 | `agent_start` | `POST /mod-event` `turn.start` | Once per run (`{ text, turnId }`, informational), not per model turn. |
-| `turn_end` | `POST /mod-event` `session.measure` | Context usage + cumulative session cost. |
+| `turn_end` | `POST /mod-event` `session.measure` | Context usage + cumulative session cost; `cost.incomplete` when some usage had tokens but no price. |
+| `provider_stream_event` + `message_end` | none (rewrites the message) | A provider-reported cost on a raw stream chunk (OpenRouter's `usage.cost`) replaces Pi's catalog-priced `usage.cost.total` on that assistant message before Pi persists it, marked `cost.source: "provider"`. Only on managed nodes. |
 | `agent_settled` | `POST /mod-event` `turn.complete` | The authoritative, final boundary. `aborted`, `durationMs`, `answer`, `usage.model`, and the final `stopReason` mapped to `reason` (`answer` / `aborted` / `error`). |
 | `agent_settled` | `POST /mod-event` `session.measure` | See above. |
 | `ui_prompt_start` | `POST /hook` `Notification` | `confirm` → `permission_prompt` (blocked); other kinds → `elicitation_dialog` (waiting). Only during an active run. |
@@ -194,6 +195,15 @@ The trust guard is advisory, not a sandbox; see [Worktrees and safety](../../doc
   `agent_start` event does not carry it.
 - `session.measure.cost` is derived from session entries the way Pi's `getSessionStats()` does.
   It is a snapshot; `rateLimits` are not available in Pi and are never reported.
+- Pi prices usage from its model catalog, so a model without a price (such as `openrouter/auto`
+  added through `models.json`) records $0. When the provider reports what it charged on the stream,
+  as OpenRouter does on every completion's final chunk, the adapter writes that figure into the
+  assistant message instead, so OpenRouter costs are what OpenRouter billed (for a bring-your-own-key
+  request, that is OpenRouter's fee, not the upstream provider's charge). Other unpriced usage, with
+  tokens but no cost, sets `cost.incomplete`: Tiller then shows the node's spend as a lower bound
+  such as `$0.12+`. A model whose catalog price is $0 (a local model, for example) also shows `+`,
+  because Pi's entries cannot tell a zero price from a missing one. Tiller never reads the
+  provider key; the cost comes from the response Pi already receives.
 - `turn.complete.reason` is `answer`, `aborted` or `error`: the final assistant message's
   `stopReason` (`aborted`/`error`) is mapped at `agent_settled`. Pi does not expose a distinct
   `refusal` reason.

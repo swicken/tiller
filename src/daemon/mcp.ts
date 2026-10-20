@@ -43,12 +43,14 @@ function flags(v: NodeView): string[] {
 }
 
 function summarize(v: NodeView, now: number, all: NodeView[]) {
+  const tree = subtreeSpend(all, v.id);
   return {
     id: v.id, parentId: v.parentId, title: v.title, kind: v.kind, ...(v.harness ? { harness: v.harness } : {}), cwd: v.cwd, state: v.status.state, flags: flags(v), exited: !!v.status.exited, createdAt: v.createdAt,
     age: fmtAge(now - v.createdAt), activity: v.status.activity, lastAssistantMessage: v.status.lastAssistantMessage?.slice(0, PREVIEW_CHARS),
     outcome: v.outcome, gate: v.gate, preset: v.preset, profile: v.profile, role: v.role,
     model: v.status.model, effort: v.status.effort, contextPct: v.status.contextPct, contextTokens: v.status.contextTokens, contextWindow: v.status.contextWindow, costUsd: v.status.costUsd,
-    spentUsd: v.spentUsd, subtreeSpentUsd: subtreeSpend(all, v.id),
+    spentUsd: v.spentUsd, ...(v.spentIncomplete ? { spentIncomplete: true } : {}),
+    subtreeSpentUsd: tree.usd, ...(tree.incomplete ? { subtreeSpentIncomplete: true } : {}),
     worktree: v.worktree && worktreeSummary(v),
   };
 }
@@ -66,7 +68,10 @@ function branchText(w: ReturnType<typeof worktreeSummary>): string {
 function modelInfo(n: ReturnType<typeof summarize>): string {
   const me = [n.profile && `profile ${n.profile}`, n.preset && `preset ${n.preset}`, n.model && shortModel(n.model), n.effort && shortEffort(n.effort)].filter(Boolean).join(' ');
   const own = n.spentUsd ?? 0;
-  const spend = n.subtreeSpentUsd ? fmtUsd(own) + (n.subtreeSpentUsd > own ? ` (tree ${fmtUsd(n.subtreeSpentUsd)})` : '') : '';
+  const treeMore = n.subtreeSpentUsd > own || (!!n.subtreeSpentIncomplete && !n.spentIncomplete);
+  const spend = n.subtreeSpentUsd || n.subtreeSpentIncomplete
+    ? fmtUsd(own, n.spentIncomplete) + (treeMore ? ` (tree ${fmtUsd(n.subtreeSpentUsd, n.subtreeSpentIncomplete)})` : '')
+    : '';
   return [me, n.contextPct !== undefined && `ctx ${Math.round(n.contextPct)}%`, spend].filter(Boolean).map((p) => ` · ${p}`).join('');
 }
 
@@ -129,7 +134,7 @@ async function requireArchived(c: Ctx, id: string): Promise<ArchivedNode> {
 /** `n-x "title" closed 2h ago: succeeded: ... (merged into main) ⎇ tl/n-x $0.42` for the history tool. */
 function historyLine(a: ArchivedNode, now: number): string {
   const age = fmtAge(now - a.closedAt);
-  return [`${a.id} "${a.title}" closed ${age === 'now' ? 'just now' : `${age} ago`}${a.brief ? `: ${a.brief}` : ''}`, a.branch && `⎇ ${a.branch}`, a.spentUsd && fmtUsd(a.spentUsd)].filter(Boolean).join(' ');
+  return [`${a.id} "${a.title}" closed ${age === 'now' ? 'just now' : `${age} ago`}${a.brief ? `: ${a.brief}` : ''}`, a.branch && `⎇ ${a.branch}`, (a.spentUsd || a.spentIncomplete) && fmtUsd(a.spentUsd ?? 0, a.spentIncomplete)].filter(Boolean).join(' ');
 }
 
 const requireOwned = (c: Ctx, id: string, allowSelf: boolean): NodeView => {
@@ -175,7 +180,7 @@ const spawned = new Map<string, { args: string; result: unknown; at: number }>()
 const tools = {
   list_nodes: tool(
     'List nodes',
-    `List the nodes you can see (yourself, your ancestors, siblings and descendants) as an indented tree plus JSON. The text starts with one line of account-level Claude usage (5-hour and 7-day rate-limit windows, percent used and reset time), which every node draws on. Each node has id, parentId, title, kind (claude, agent or terminal), harness (claude, pi or codex on generic agent nodes), cwd, state (working, waiting, blocked, done, unknown, none; armed: waiting on spawn dependencies, queued: waiting on daemon.maxWorking, with the reason in activity),flags (errored, interrupted, exited, stale, stalled: working with no hook event for limits.stallMinutes), age, current activity, its last assistant message truncated to ${PREVIEW_CHARS} characters, the outcome it reported through report_outcome, if any ({ outcome, note, summary, changedFiles, verified, openQuestions, gate }: read these before calling read on a finished worker), gate (its completion gate: running, passed or failed), spentUsd (its total spend across sessions) and subtreeSpentUsd (with all its descendants), and for a node with its own git worktree, worktree { path, branch, base, ahead, behind, dirty, missing, merged }: its commits not yet in base, base's commits not on the branch, the count of uncommitted files, and whether merge has merged it. Use it to find node ids before calling send, read or close.`,
+    `List the nodes you can see (yourself, your ancestors, siblings and descendants) as an indented tree plus JSON. The text starts with one line of account-level Claude usage (5-hour and 7-day rate-limit windows, percent used and reset time), which every node draws on. Each node has id, parentId, title, kind (claude, agent or terminal), harness (claude, pi or codex on generic agent nodes), cwd, state (working, waiting, blocked, done, unknown, none; armed: waiting on spawn dependencies, queued: waiting on daemon.maxWorking, with the reason in activity),flags (errored, interrupted, exited, stale, stalled: working with no hook event for limits.stallMinutes), age, current activity, its last assistant message truncated to ${PREVIEW_CHARS} characters, the outcome it reported through report_outcome, if any ({ outcome, note, summary, changedFiles, verified, openQuestions, gate }: read these before calling read on a finished worker), gate (its completion gate: running, passed or failed), spentUsd (its total spend across sessions) and subtreeSpentUsd (with all its descendants), with spentIncomplete or subtreeSpentIncomplete true (and a trailing + on the figure in the tree text, as in $0.12+) when some usage had no price so the figure is only a lower bound, and for a node with its own git worktree, worktree { path, branch, base, ahead, behind, dirty, missing, merged }: its commits not yet in base, base's commits not on the branch, the count of uncommitted files, and whether merge has merged it. Use it to find node ids before calling send, read or close.`,
     {},
     async (c) => {
       const all = c.manager.list();

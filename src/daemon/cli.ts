@@ -17,6 +17,7 @@ import { agentStatus, install, LABEL, TLD, plistPath, uninstall } from './autost
 import { buildChildEnv, loginShellPath } from './pty.js';
 import { formatEvent, listSessions, parseSince, readEvents, sessionDir, type SessionEvent } from './sessions.js';
 import { fmtAge } from '../shared/format.js';
+import { fmtUsd } from '../shared/spend.js';
 import type { Harness, NodeKind } from '../shared/protocol.js';
 import { mainCheckout, runCommands, WORKTREES_DIR } from './worktree.js';
 import { cancelDrain, drainDaemon, restartDaemon, findDaemon, humanEnv, pickOrchestrator, spawnReload, startDaemon, upDir, type OrchestratorCandidate } from './up.js';
@@ -149,7 +150,10 @@ switch (cmd) {
   case 'list': await call('list_nodes', {}); break;
   case 'usage': console.log((await call('list_nodes', {}, false)).text?.split('\n')[0]); break; // list_nodes' first line
   case 'ps':
-    for (const n of (await call('list_nodes', {}, false)).data ?? []) console.log([n.id, n.state, n.title, n.parentId ?? '-', n.age].join('\t'));
+    for (const n of (await call('list_nodes', {}, false)).data ?? []) {
+      const spent = n.spentUsd !== undefined || n.spentIncomplete ? fmtUsd(n.spentUsd ?? 0, n.spentIncomplete) : '-';
+      console.log([n.id, n.state, n.title, n.parentId ?? '-', n.age, spent].join('\t'));
+    }
     break;
   case 'new': {
     if (!pos[0]) fail(usage());

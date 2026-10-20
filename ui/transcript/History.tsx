@@ -60,7 +60,7 @@ export function HistoryPanel() {
               {(a.branch || a.spentUsd !== undefined) && (
                 <span className="meta">
                   {a.branch && <span className="part"><span className="branch" title={branchLine(a)}>⎇ {branchLine(a)}</span></span>}
-                  {a.spentUsd !== undefined && <span className="part">{fmtUsd(a.spentUsd)}</span>}
+                  {a.spentUsd !== undefined && <span className="part">{fmtUsd(a.spentUsd, a.spentIncomplete)}</span>}
                 </span>
               )}
               {line && <span className="line">{line}</span>}
@@ -91,7 +91,7 @@ export function ArchivePane({ a }: { a: ArchivedNode }) {
         <div className="tb2">
           <span className="cwd" title={a.cwd}>{a.cwd}</span>
           {a.branch && <span className="tag">⎇ {branchLine(a)}</span>}
-          {a.spentUsd !== undefined && <span>{fmtUsd(a.spentUsd)}</span>}
+          {a.spentUsd !== undefined && <span>{fmtUsd(a.spentUsd, a.spentIncomplete)}</span>}
         </div>
         {a.brief && <p className="brief">{a.brief}</p>}
         {a.prompt && <details className="prompt"><summary>First prompt</summary><div>{a.prompt}</div></details>}

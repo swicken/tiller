@@ -51,7 +51,7 @@ export function archivedOf(rec: NodeRecord, status: NodeStatus | undefined, outc
     id: rec.id, rootId, parentId: rec.parentId, title: rec.title, cwd: rec.cwd, model: archiveModel(rec, status), effort: rec.effort,
     role: roleFor(rec.role, rec.parentId), profile: profileFor(rec.profile, rec.parentId, rec.role), ...(rec.harness && rec.harness !== 'claude' ? { harness: rec.harness } : {}),
     prompt: rec.prompt, sessionId: rec.sessionId, previousSessions: rec.previousSessions, sessionHistory: rec.sessionHistory,
-    transcriptPath: rec.transcriptPath, lastAssistantMessage: status?.lastAssistantMessage, outcome, spentUsd: rec.spentUsd, lastCost: rec.lastCost,
+    transcriptPath: rec.transcriptPath, lastAssistantMessage: status?.lastAssistantMessage, outcome, spentUsd: rec.spentUsd, spentIncomplete: rec.spentIncomplete, lastCost: rec.lastCost,
     branch: rec.worktree?.branch, ...fate, createdAt: rec.createdAt, closedAt,
   };
   return { ...a, brief: briefOf(a) };

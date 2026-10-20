@@ -780,6 +780,28 @@ describe('NodeManager guardrails', () => {
     measure(1.0); // the same session, resumed: its cost keeps counting from 0.8
     expect(m.view(id)!.spentUsd).toBeCloseTo(1.0);
   });
+
+  it('marks spend incomplete when a measure says some usage had no price, and only then', async () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-'));
+    const bin = join(home, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nsleep 5\n'); // stands in for claude
+    chmodSync(join(bin, 'claude'), 0o755);
+    m = new NodeManager({ home, shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` });
+    const day = new Date().toLocaleDateString('en-CA');
+    const unpriced = (await m.spawn({ kind: 'claude', title: 'unpriced', cwd: home, byHuman: true })).id;
+    const priced = (await m.spawn({ kind: 'claude', title: 'priced', cwd: home, byHuman: true })).id;
+    // Unpriced usage only: no known amount yet, but not a known $0.
+    m.applyModEvent(unpriced, { event: 'session.measure', payload: { cost: { usd: 0, incomplete: true } } });
+    expect(m.view(unpriced)).toMatchObject({ spentUsd: 0, spentIncomplete: true, spentToday: { day, usd: 0, incomplete: true } });
+    m.applyModEvent(unpriced, { event: 'session.measure', payload: { cost: { usd: 0.2, incomplete: true } } });
+    expect(m.view(unpriced)).toMatchObject({ spentUsd: 0.2, spentIncomplete: true, spentToday: { day, usd: 0.2, incomplete: true } });
+    // A measure without the flag (Claude, Codex, or a fully priced Pi session) leaves spend complete.
+    m.applyModEvent(priced, { event: 'session.measure', payload: { cost: { usd: 0.5 } } });
+    expect(m.view(priced)).toMatchObject({ spentUsd: 0.5, spentToday: { day, usd: 0.5 } });
+    expect(m.view(priced)!.spentIncomplete).toBeUndefined();
+    expect(m.view(priced)!.spentToday!.incomplete).toBeUndefined();
+  });
 });
 
 describe('restart drain and the cut-off message', () => {

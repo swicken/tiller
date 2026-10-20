@@ -211,9 +211,12 @@ export function measureContext(
 /**
  * Sum the session cost the way Pi's own `getSessionStats()` does: `usage` entries, compaction /
  * branch-summary usage, and assistant/tool-result message usage. Used for `session.measure.cost`.
+ * `incomplete` is set when some usage has tokens but no cost (an unpriced model with no
+ * provider-reported cost), so `usd` is only a lower bound.
  */
-export function sumSessionCost(entries: readonly unknown[]): number {
-  let total = 0;
+export function sumSessionCost(entries: readonly unknown[]): { usd: number; incomplete: boolean } {
+  let usd = 0;
+  let incomplete = false;
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     const record = entry as Record<string, any>;
@@ -229,10 +232,44 @@ export function sumSessionCost(entries: readonly unknown[]): number {
       const message = record.message;
       if (message?.role === "assistant" || message?.role === "toolResult") usage = message.usage;
     }
-    const cost = (usage as { cost?: { total?: unknown } } | undefined)?.cost?.total;
-    if (typeof cost === "number" && Number.isFinite(cost)) total += cost;
+    if (!usage || typeof usage !== "object") continue;
+    const u = usage as Record<string, any>;
+    const cost = u.cost?.total;
+    if (typeof cost === "number" && Number.isFinite(cost)) usd += cost;
+    const tokens = [u.input, u.output, u.cacheRead, u.cacheWrite].reduce(
+      (sum: number, n: unknown) => sum + (typeof n === "number" ? n : 0),
+      0,
+    );
+    if (tokens > 0 && !(typeof cost === "number" && cost > 0) && u.cost?.source !== "provider") incomplete = true;
   }
-  return total;
+  return { usd, incomplete };
+}
+
+/**
+ * The cost a provider reported for one generation in a raw stream chunk, keyed by the chunk's
+ * response id (Pi stores the first chunk's id as the message's `responseId`). OpenRouter puts
+ * `usage.cost` (USD charged to the account) on the final chunk of every streamed completion.
+ */
+export function providerReportedCost(data: unknown): { responseId: string; usd: number } | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const { id, usage } = data as { id?: unknown; usage?: { cost?: unknown } };
+  const usd = usage?.cost;
+  if (typeof id !== "string" || !id || typeof usd !== "number" || !Number.isFinite(usd) || usd < 0) return undefined;
+  return { responseId: id, usd };
+}
+
+/**
+ * The assistant message with its cost total replaced by the provider-reported one, marked
+ * `cost.source: "provider"` so a reported $0 (a free model) does not read as unpriced. Pi's
+ * per-category breakdown is left as Pi computed it. Undefined when no reported cost applies.
+ */
+export function withProviderCost(message: unknown, costs: ReadonlyMap<string, number>): unknown {
+  if (!message || typeof message !== "object") return undefined;
+  const m = message as { role?: unknown; responseId?: unknown; usage?: Record<string, any> };
+  if (m.role !== "assistant" || typeof m.responseId !== "string" || !m.usage) return undefined;
+  const usd = costs.get(m.responseId);
+  if (usd === undefined) return undefined;
+  return { ...m, usage: { ...m.usage, cost: { ...m.usage.cost, total: usd, source: "provider" } } };
 }
 
 /** Best-effort plain text of an assistant message, for the `turn.complete.answer` field. */

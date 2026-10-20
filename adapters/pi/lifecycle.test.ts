@@ -3,6 +3,7 @@ import {
   measureContext,
   messageText,
   normalizeToolInput,
+  providerReportedCost,
   sessionEndHook,
   sessionStartHook,
   sumSessionCost,
@@ -11,6 +12,7 @@ import {
   turnStartPayload,
   uiPromptHook,
   userPromptHook,
+  withProviderCost,
 } from "./lifecycle.ts";
 
 describe("hook mappers", () => {
@@ -164,7 +166,61 @@ describe("mod-event mappers", () => {
       { type: "custom" },
       null,
     ];
-    expect(sumSessionCost(entries)).toBeCloseTo(2.5, 10);
+    const { usd, incomplete } = sumSessionCost(entries);
+    expect(usd).toBeCloseTo(2.5, 10);
+    expect(incomplete).toBe(false);
+  });
+
+  it("sumSessionCost marks usage with tokens but no cost as incomplete", () => {
+    const priced = { type: "message", message: { role: "assistant", usage: { input: 10, output: 5, cost: { total: 0.12 } } } };
+    // The real openrouter/auto entry: tokens recorded, catalog has no price.
+    const unpriced = {
+      type: "message",
+      message: { role: "assistant", usage: { input: 116, output: 24, cacheRead: 12800, cacheWrite: 0, cost: { total: 0 } } },
+    };
+    const failed = { type: "message", message: { role: "assistant", usage: { input: 0, output: 0, cost: { total: 0 } } } };
+    expect(sumSessionCost([priced, failed])).toEqual({ usd: 0.12, incomplete: false });
+    expect(sumSessionCost([priced, unpriced])).toEqual({ usd: 0.12, incomplete: true });
+    expect(sumSessionCost([unpriced])).toEqual({ usd: 0, incomplete: true });
+    // A provider-reported $0 (a free model) is a known amount, not a missing price.
+    const free = { type: "message", message: { role: "assistant", usage: { input: 9, output: 1, cost: { total: 0, source: "provider" } } } };
+    expect(sumSessionCost([free])).toEqual({ usd: 0, incomplete: false });
+  });
+});
+
+describe("provider-reported cost", () => {
+  // Shape of OpenRouter's final streamed chunk (usage is always included; cost is USD charged).
+  const finalChunk = {
+    id: "gen-1",
+    model: "deepseek/deepseek-v4.1-flash-1017",
+    choices: [],
+    usage: { prompt_tokens: 12916, completion_tokens: 24, cost: 0.00042, is_byok: false },
+  };
+
+  it("reads usage.cost and the response id from a raw stream chunk", () => {
+    expect(providerReportedCost(finalChunk)).toEqual({ responseId: "gen-1", usd: 0.00042 });
+    expect(providerReportedCost({ id: "gen-1", choices: [{ delta: { content: "hi" } }] })).toBeUndefined();
+    expect(providerReportedCost({ id: "gen-1", usage: { prompt_tokens: 3 } })).toBeUndefined();
+    expect(providerReportedCost({ usage: { cost: 0.1 } })).toBeUndefined();
+    expect(providerReportedCost({ id: "gen-1", usage: { cost: "0.1" } })).toBeUndefined();
+    expect(providerReportedCost(null)).toBeUndefined();
+  });
+
+  it("replaces Pi's computed total with the reported one, preferring it over a catalog price", () => {
+    const message = {
+      role: "assistant",
+      responseId: "gen-1",
+      usage: { input: 116, output: 24, cost: { input: 0.001, output: 0.002, total: 0.003 } },
+    };
+    const replaced = withProviderCost(message, new Map([["gen-1", 0.00042]]));
+    expect(replaced).toEqual({
+      role: "assistant",
+      responseId: "gen-1",
+      usage: { input: 116, output: 24, cost: { input: 0.001, output: 0.002, total: 0.00042, source: "provider" } },
+    });
+    expect(sumSessionCost([{ type: "message", message: replaced }])).toEqual({ usd: 0.00042, incomplete: false });
+    expect(withProviderCost(message, new Map([["gen-2", 1]]))).toBeUndefined();
+    expect(withProviderCost({ ...message, role: "user" }, new Map([["gen-1", 1]]))).toBeUndefined();
   });
 });
 
