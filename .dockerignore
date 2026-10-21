@@ -1,0 +1,7 @@
+node_modules
+.git
+.claude
+src-tauri/target
+ui/dist
+spike/docker-remote
+**/*.log

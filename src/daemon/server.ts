@@ -317,7 +317,9 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
     }
   }
 
-  await new Promise<void>((ok, fail) => { server.once('error', fail); server.listen(opts.port ?? DEFAULT_PORT, '127.0.0.1', ok); });
+  // SPIKE, uncommitted: TL_BIND lets the docker-remote experiment reach the daemon from outside the
+  // container. Default is unchanged, so a live daemon restart still binds loopback only.
+  await new Promise<void>((ok, fail) => { server.once('error', fail); server.listen(opts.port ?? DEFAULT_PORT, process.env.TL_BIND || '127.0.0.1', ok); });
   const port = (server.address() as AddressInfo).port;
   manager.endpoint = `http://127.0.0.1:${port}`;
   publishAdminToken();
