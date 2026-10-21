@@ -1,14 +1,4 @@
 {
-  "roles": {
-    "orchestrator": {
-      "model": "claude-opus-5-5",
-      "effort": "high"
-    },
-    "worker": {
-      "model": "claude-opus-5-5",
-      "effort": "medium"
-    }
-  },
   "approvals": {
     "close": "done"
   },
@@ -24,6 +14,26 @@
     "protected": []
   },
   "profiles": {
+    "claude": {
+      "orchestrator": {
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      },
+      "implementation": {
+        "model": "claude-opus-5-5",
+        "effort": "medium"
+      },
+      "explorer": {
+        "model": "haiku"
+      },
+      "mechanical": {
+        "model": "haiku"
+      },
+      "reviewer": {
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      }
+    },
     "codex": {
       "orchestrator": {
         "model": "gpt-6-astra",
