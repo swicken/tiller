@@ -207,6 +207,31 @@ describe('the gardener node', () => {
     (m as unknown as { pendingResume: Set<string> }).pendingResume = new Set([rec.id]);
     expect(await m.resumeLive()).toContain(`${rec.id} (${GARDENER_REFUSAL})`);
   });
+
+  it('refuses a follow-up and a fork of a closed gardener node, from its archive line', async () => {
+    seed();
+    const { id } = await run();
+    m.applyHook(id, { hook_event_name: 'SessionStart', session_id: m.registry.get(id)!.sessionId, transcript_path: join(dir, 't.jsonl') });
+    writeFileSync(join(dir, 't.jsonl'), '');
+    await m.close(id, true);
+    expect(m.registry.get(id)).toBeUndefined();
+    await expect(m.followup(id, 'carry on')).rejects.toThrow(GARDENER_REFUSAL);
+    await expect(m.spawn({ kind: 'claude', title: 'f', cwd: repo, fork: id, byHuman: true })).rejects.toThrow(GARDENER_REFUSAL);
+  });
+
+  it('a cancelled drain interrupts the live run and schedules again; a shutdown stops for good', async () => {
+    seed();
+    const first = await run();
+    m.drain('test');
+    expect(await ended(first.runId)).toMatchObject({ state: 'interrupted', note: 'the daemon stopped' });
+    expect(await m.gardener.runNow({ repoPath: repo })).toEqual({ ok: false, reason: 'the daemon is stopping' });
+    m.endDrain();
+    expect(await m.gardener.runNow({ repoPath: repo })).toMatchObject({ ok: true });
+    m.drain('restart');
+    await m.shutdown();
+    m.endDrain(); // the drain's lease ending after the shutdown
+    expect(await m.gardener.runNow({ repoPath: repo })).toEqual({ ok: false, reason: 'the daemon is stopping' });
+  });
 });
 
 describe('no client makes a gardener node (decision 7)', () => {

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NodeRecord } from '../shared/protocol.js';
 import { type DueFacts, due, type GardenHost, Gardener, GARDENER_PROMPT, gardenAccount, gardenerSystemPrompt, pausedBy, runSummary, turnBound } from './gardener.js';
-import type { GardenActionView, GardenRunView, GardenStore, GardenTarget, GardenUndoTarget, MemoryScope } from './memory-schema.js';
+import { type GardenActionView, type GardenRunView, type GardenStore, type GardenTarget, type GardenUndoTarget, LIMITS, type MemoryScope } from './memory-schema.js';
 
 let dir: string, home: string, repo: string, repoKey: string;
 let log: string[], store: FakeStore, host: ReturnType<typeof fakeHost>, g: Gardener;
@@ -400,6 +400,17 @@ describe('Gardener finish paths', () => {
     expect(lastRun()).toMatchObject({ state: 'interrupted', costUsd: 0.25, costIncomplete: true });
     await g.tick();
     expect(host.spawns).toHaveLength(1);
+  });
+
+  it('schedules again after resume, as a cancelled drain does', async () => {
+    await startScheduled();
+    await g.stop();
+    g.resume();
+    expect(await g.runNow({ repoPath: repo })).toMatchObject({ ok: true });
+    await g.stop();
+    g.resume();
+    await vi.advanceTimersByTimeAsync(LIMITS.garden.afterCloseMs); // its first tick, as start schedules it
+    expect(host.spawns).toHaveLength(3);
   });
 
   it('ends a run as interrupted when the human closes its node, without undo', async () => {

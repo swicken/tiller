@@ -254,6 +254,8 @@ export interface ArchivedNode {
   explicit?: ('model' | 'effort')[];
   /** NodeRecord.account, so a follow-up stays in the same Claude account. */
   account?: string;
+  /** NodeRecord.gardener: a memory gardener's conversation is never followed up or forked. */
+  gardener?: NodeRecord['gardener'];
   role?: Role;
   profile?: Profile;
   /** The first prompt the node was spawned with. */

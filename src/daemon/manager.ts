@@ -557,7 +557,7 @@ export class NodeManager extends EventEmitter {
     if (!adapterFor(req).capabilities.fork) throw new Error('this harness does not support session forking');
     const src = this.registry.get(req.fork!) ?? await findArchived(this.home, req.fork!, req.parentId ? this.rootIdOf(req.parentId) : undefined);
     if (!src) throw new Error(`no such node to fork: ${req.fork}`);
-    if ('gardener' in src && src.gardener) throw new Error(GARDENER_REFUSAL);
+    if (src.gardener) throw new Error(GARDENER_REFUSAL);
     if ((src.harness ?? 'claude') !== harnessFor(req)) throw new Error('cannot fork a session across harnesses');
     // transcriptPath comes with SessionStart: without it the session has not started and there is nothing to fork.
     if (!src.sessionId || !src.transcriptPath) throw new Error(`refused: ${req.fork} has no session yet to fork`);
@@ -575,6 +575,7 @@ export class NodeManager extends EventEmitter {
   async followup(id: string, prompt: string, title?: string): Promise<NodeView> {
     const a = await findArchived(this.home, id);
     if (!a) throw new Error(`no archived node ${id}`);
+    if (a.gardener) throw new Error(GARDENER_REFUSAL);
     if (!a.sessionId || !a.transcriptPath) throw new Error(`${id} never started a session to follow up`);
     if (!existsSync(a.transcriptPath)) throw new Error(`the transcript of ${id} is gone (${a.transcriptPath})`);
     const twin = this.registry.list().find((n) => n.followupOf === id || n.sessionId === a.sessionId);
@@ -1105,6 +1106,7 @@ export class NodeManager extends EventEmitter {
     this.drainState = undefined;
     holdDeliveries(this);
     scheduleSoon(this);
+    if (!this.shutDown) this.gardener.resume(); // drain stopped it; a shutdown stops it for good
     this.emit('drain', undefined);
   }
 
