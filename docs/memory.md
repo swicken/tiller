@@ -105,7 +105,7 @@ Every agent node with memory on gets these tools through the daemon's MCP server
 | `memory_add` | all | Record a `procedure`, `pitfall` or `note`; it is shown later only if the node reports success. |
 | `memory_forget` | all | Hide an item with a reason. Purging is human only. |
 | `memory_pin` | human | Pin a new instruction, or pin, unpin or restore an item. |
-| `memory_status` | human | File health, size against the limit, the on/off resolution and the digest comparison. Takes `repo` (an absolute directory) or `nodeId` for a project; an agent calling the tool at all is refused. |
+| `memory_status` | human | File health, size against the limit, the on/off resolution, the digest comparison, and per file the gardener's 30-day spend, paused repositories and newest runs. Takes `repo` (an absolute directory) or `nodeId` for a project; an agent calling the tool at all is refused. |
 | `memory_switch` | human | What `tl memory on|off|inherit` calls. |
 | `memory_garden` | human | What `tl memory garden` calls: the [gardener](#gardener)'s status, a manual run, a run's actions and undo. |
 

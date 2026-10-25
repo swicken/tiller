@@ -51,8 +51,10 @@ describe('item state', () => {
     expect(badges(hidden('superseded'), 9)).toEqual(['Superseded by m9']);
     expect(badges(hidden('evicted', { tombstone: 'evicted' }))).toEqual(['Evicted']);
     expect(badges(hidden('human', { tombstone: 'purged', pinned: true }))).toEqual(['Pinned', 'Purged']);
-    expect(badges(hidden('gardener'))).toEqual(['Hidden (gardener) by gardener']);
-    expect(badges(item({ invalid: { at: 1, kind: 'merged' as never } }))).toEqual(['Hidden (merged)']);
+    expect(badges(hidden('gardener'))).toEqual(['Hidden by the gardener']);
+    expect(badges(item({ invalid: { at: 1, kind: 'merged', by: 'gardener:r3' }, mergedInto: 12 }))).toEqual(['Merged into m12 by the gardener']);
+    expect(badges(item({ invalid: { at: 1, kind: 'merged' } }))).toEqual(['Merged by the gardener']);
+    expect(badges(item({ invalid: { at: 1, kind: 'later' as never, by: 'v9' } }))).toEqual(['Hidden (later) by v9']);
     expect(badges(item({ eligible: false }))).toEqual(['Search only']);
   });
 });

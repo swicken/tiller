@@ -89,6 +89,9 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl memory show mID | add KIND TEXT [--body B] [--supersedes mID] | forget mID REASON [--purge]
   tl memory pin (mID | --text TEXT) [--unpin]         the human's standing instructions; outside a node, memory is the repo
                                                       of --repo (default: this directory) in --account (default: by project)
+  tl memory garden [status] [--repo PATH] [--account NAME]   the gardener's spend, paused repositories and recent runs
+  tl memory garden run --repo PATH [--account NAME] [--wait] | show rN | undo (rN [--immune] | mID)
+                                                      start a gardener run now, show a run's actions, or undo a run or an item's hiding
   tl help`;
 
 const fail = (msg: string): never => { console.error(msg); process.exit(1); };
@@ -149,6 +152,7 @@ const { values: f, positionals: pos } = parseArgs({
     fork: { type: 'string' }, root: { type: 'string' }, session: { type: 'string' }, base: { type: 'string' }, account: { type: 'string' },
     repo: { type: 'string' }, project: { type: 'string' }, days: { type: 'string' }, node: { type: 'string' }, all: { type: 'boolean' },
     body: { type: 'string' }, supersedes: { type: 'string' }, purge: { type: 'boolean' }, text: { type: 'string' }, unpin: { type: 'boolean' },
+    wait: { type: 'boolean' }, immune: { type: 'boolean' },
   },
 });
 /** `--after a,b --after c` as [a, b, c]; undefined when absent. */
@@ -499,6 +503,33 @@ switch (cmd) {
         if (words.length) fail(usage());
         await call('memory_pin', { id: ref, text: f.text, unpin: f.unpin, ...scope });
         break;
+      case 'garden': {
+        const [target, ...extra] = words;
+        // status and run name a repository only when asked: status then covers every one, and run refuses without it.
+        const named = { repo: f.repo && resolve(f.repo), account: f.account };
+        if (extra.length) fail(usage());
+        if (!ref || ref === 'status') {
+          if (target) fail(usage());
+          await call('memory_garden', { action: 'status', ...named });
+        } else if (ref === 'run') {
+          if (target) fail(usage());
+          // Polled rather than held open: a run may take longer than an HTTP response may.
+          const { data } = await call('memory_garden', { action: 'run', ...named }, !f.wait);
+          if (!f.wait) break;
+          const run = `r${data.id}`;
+          console.log(`started ${run}; waiting for it to end`);
+          let shown;
+          while ((shown = await call('memory_garden', { action: 'show', run, ...named }, false)).data.state === 'running') await new Promise((ok) => setTimeout(ok, 2000));
+          console.log(shown.text);
+        } else if (ref === 'show') {
+          if (!target) fail(usage());
+          await call('memory_garden', { action: 'show', run: target, ...scope });
+        } else if (ref === 'undo') {
+          if (!target) fail(usage());
+          await call('memory_garden', { action: 'undo', ...(target.startsWith('m') ? { id: target } : { run: target }), immune: f.immune, ...scope });
+        } else fail(usage());
+        break;
+      }
       default: fail(usage());
     }
     break;
