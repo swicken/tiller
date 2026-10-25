@@ -8,13 +8,15 @@ import { join } from 'node:path';
 import type { MemoryItemDetail } from '../shared/protocol.js';
 import { claudeAccounts, type ClaudeAccount } from './claude-accounts.js';
 import { loadConfig } from './config.js';
+import { digestFor, oneLine } from './memory-digest.js';
 import {
-  accountKey, ADD_KINDS, firstErrorLine, ftsTerms, ITEM_KINDS, itemRef, LIMITS, normalizeDedupe, pinDedupe, redact, SCHEMA_V1, SCHEMA_VERSION,
+  accountKey, ADD_KINDS, contained, firstErrorLine, ftsTerms, GARDEN_KINDS, ITEM_KINDS, itemRef, keepRank, LIMITS, MIGRATIONS, normalizeDedupe,
+  pinDedupe, redact, runRef, SCHEMA_V1, SCHEMA_VERSION,
   type Actor, type Arm, type Cause, type Derived, type DigestCandidates, type DigestRole, type DigestSource, type EpisodeInput,
-  type EpisodeKind, type EpisodeSkeleton, type GardenActionInput, type GardenApplyResult, type GardenCandidate, type GardenPage,
-  type GardenRefused, type GardenRunView, type GardenStore, type GardenTarget, type GardenTrigger, type GardenUndoneBy,
-  type GardenUndoResult, type GardenUndoTarget, type HistoryEntry, type InjectionRow, type InjectionView, type ItemKind,
-  type ItemRow, type ItemView, type MemoryScope, type RunState,
+  type EpisodeKind, type EpisodeSkeleton, type GardenActionInput, type GardenActionKind, type GardenActionView, type GardenApplyResult,
+  type GardenCandidate, type GardenPage, type GardenRefused, type GardenRule, type GardenRunStats, type GardenRunView, type GardenSnapshot,
+  type GardenStore, type GardenTarget, type GardenTrigger, type GardenUndoneBy, type GardenUndoResult, type GardenUndoTarget,
+  type HistoryEntry, type InjectionRow, type InjectionView, type ItemKind, type ItemRow, type ItemView, type MemoryScope, type RunState,
 } from './memory-schema.js';
 import { logError } from './util.js';
 
@@ -76,7 +78,8 @@ export interface ArmStats {
   repeatedInjectedPitfalls: number;
 }
 
-export type AddResult = { id: number; existing?: true; revived?: true };
+/** merged: the text's row was merged by the gardener, and id is the live keep its redirect ends on, counted again. */
+export type AddResult = { id: number; existing?: true; revived?: true; merged?: true };
 /** The panel's browse cursor: the last row's (updated_at, id). */
 export interface ListCursor { updatedAt: number; id: number }
 /** Live items per kind in one repository, plus its live pins and its retracted items (tombstones included). */
@@ -123,6 +126,7 @@ function view(r: ItemRow, withBody = false): ItemView {
     ...(r.invalid_at !== null && r.invalid_kind !== null ? { invalid: {
       at: r.invalid_at, kind: r.invalid_kind, ...(r.invalid_by ? { by: r.invalid_by } : {}), ...(r.invalid_reason ? { reason: r.invalid_reason } : {}),
     } } : {}),
+    ...(r.invalid_kind === 'merged' && r.merged_into !== null ? { mergedInto: r.merged_into } : {}),
     ...(r.text === '' ? { tombstone: r.dedupe.startsWith('purged:') ? 'purged' as const : 'evicted' as const } : {}),
     ...(isTextPin(r) ? { textPin: true as const } : {}),
   };
@@ -160,6 +164,120 @@ function tx<T>(db: DatabaseSync, fn: () => T): T {
     throw err;
   }
 }
+
+// ---- The gardener's rows and pure helpers (memory v3, D6-D9).
+
+/** A garden_runs row with its repository's key. */
+interface RunRow {
+  id: number; repo_id: number; repo_key: string; node_id: string | null; trigger: GardenTrigger; state: RunState; started_at: number;
+  ended_at: number | null; heartbeat_at: number; watermark: number; model: string | null; cost_usd: number | null; cost_incomplete: number;
+  stats: string; note: string | null;
+}
+const RUN_SQL = 'SELECT g.*, r.key AS repo_key FROM garden_runs g JOIN repos r ON r.id = g.repo_id';
+interface ActionRow {
+  id: number; run_id: number; ts: number; action: GardenActionKind; item_id: number; into_id: number | null; seen_delta: number;
+  reason: string; undone_at: number | null; undone_by: GardenUndoneBy | null; immune: number;
+}
+type EligibleRow = ItemRow & { eligible: number };
+type Refuse = (rule: GardenRule, message: string) => GardenRefused;
+const GARDEN_IN = GARDEN_KINDS.map((k) => `'${k}'`).join(', ');
+/** What a garden_list page keeps free for its header and page 1's clusters and hints, below LIMITS.garden.maxPageChars. */
+const PROPOSALS_RESERVE = 20_000;
+
+/** Why a candidate cannot be read or acted on now: hidden or tombstoned, or no longer ELIGIBLE. */
+const unfit = (r: EligibleRow, refuse: Refuse): GardenRefused | undefined =>
+  (r.invalid_at !== null ? refuse('not live', `${itemRef(r.id)} is ${r.text === '' ? 'tombstoned' : 'hidden'}`)
+    : r.eligible ? undefined : refuse('ineligible', `${itemRef(r.id)} may no longer enter a digest`));
+
+/** What a garden run may use as a merge keep or supersede by, never hide: a pinned, human-authored or ledger item (D8 rule 3). */
+const protectedWhy = (r: ItemRow): string | undefined =>
+  (r.pinned ? 'pinned' : r.author === 'human' ? "the human's" : r.kind === 'ledger' ? 'a ledger line' : undefined);
+const gardenBy = (runId: number) => `gardener:${runRef(runId)}`;
+/** A duration as "40m", "5h" or "12d". */
+function since(ms: number): string {
+  const min = Math.max(0, Math.floor(ms / 60_000));
+  return min < 60 ? `${min}m` : min < 24 * 60 ? `${Math.floor(min / 60)}h` : `${Math.floor(min / (24 * 60))}d`;
+}
+const emptySnapshot = (): GardenSnapshot => ({ live: {}, digest: { ids: [], chars: 0 }, redundancy: 0 });
+
+/**
+ * The daemon's proposals over live, eligible rows (§3.4). clusters: union-find over same-kind pairs whose lower-ranked
+ * member is hideable, not immune against the higher, and contained in it at minContained; each cluster is its keep
+ * (keepRank) first, then the members that pass against that keep. hints: an open question or pitfall outside every
+ * cluster, with at least minSupersedeTerms terms, and the newer same-kind item or ledger line containing the most of it.
+ * immune holds "<item>:<into>" pairs.
+ */
+function propose(rows: ItemRow[], immune: Set<string>): { clusters: ItemRow[][]; hints: [ItemRow, ItemRow][] } {
+  const g = LIMITS.garden;
+  const terms = new Map(rows.map((r) => [r.id, ftsTerms(r.text, Infinity)]));
+  const sets = new Map(rows.map((r) => [r.id, new Set(terms.get(r.id))]));
+  // contained() (memory-schema.ts) over terms computed once per row: proposals compare every pair.
+  const covers = (h: ItemRow, t: ItemRow) => {
+    const ht = terms.get(h.id)!, ts = sets.get(t.id)!;
+    return ht.length ? ht.filter((x) => ts.has(x)).length / ht.length : 0;
+  };
+  const passes = (m: ItemRow, keep: ItemRow) => !protectedWhy(m) && !immune.has(`${m.id}:${keep.id}`) && covers(m, keep) >= g.minContained;
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    const p = parent.get(x) ?? x;
+    if (p === x) return x;
+    const root = find(p);
+    parent.set(x, root);
+    return root;
+  };
+  // prune: every pair of at most 2 × LIMITS.garden.candidates rows; bucket by shared term if the candidate limit grows.
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      if (rows[i].kind !== rows[j].kind) continue;
+      const [keep, m] = [rows[i], rows[j]].sort(keepRank);
+      if (passes(m, keep)) parent.set(find(m.id), find(keep.id));
+    }
+  }
+  const groups = new Map<number, ItemRow[]>();
+  for (const r of rows) groups.set(find(r.id), [...(groups.get(find(r.id)) ?? []), r]);
+  const clusters = [...groups.values()].flatMap((group) => {
+    const [keep, ...rest] = group.sort(keepRank);
+    const members = rest.filter((m) => passes(m, keep));
+    return members.length ? [[keep, ...members]] : [];
+  });
+  const clustered = new Set(clusters.flat().map((r) => r.id));
+  const hints: [ItemRow, ItemRow][] = [];
+  for (const h of rows) {
+    if ((h.kind !== 'open_question' && h.kind !== 'pitfall') || clustered.has(h.id) || protectedWhy(h) || terms.get(h.id)!.length < g.minSupersedeTerms) continue;
+    let best: ItemRow | undefined, score: number = g.minContained;
+    for (const by of rows) {
+      if (by.created_at <= h.created_at || (by.kind !== h.kind && by.kind !== 'ledger') || immune.has(`${h.id}:${by.id}`)) continue;
+      const c = covers(h, by);
+      if (c > score || (c === score && (!best || by.created_at > best.created_at))) [best, score] = [by, c];
+    }
+    if (best) hints.push([h, best]);
+  }
+  return { clusters, hints };
+}
+
+function runView(r: RunRow): GardenRunView {
+  return {
+    id: r.id, repoKey: r.repo_key, ...(r.node_id ? { nodeId: r.node_id } : {}), trigger: r.trigger, state: r.state, startedAt: r.started_at,
+    ...(r.ended_at !== null ? { endedAt: r.ended_at } : {}), heartbeatAt: r.heartbeat_at, watermark: r.watermark,
+    ...(r.model ? { model: r.model } : {}), ...(r.cost_usd !== null ? { costUsd: r.cost_usd } : {}), costIncomplete: r.cost_incomplete === 1,
+    ...(r.note ? { note: r.note } : {}), stats: JSON.parse(r.stats) as GardenRunStats,
+  };
+}
+
+function actionView(a: ActionRow & { item_text?: string; into_text?: string | null }): GardenActionView {
+  return {
+    id: a.id, runId: a.run_id, ts: a.ts, action: a.action, itemId: a.item_id, ...(a.into_id !== null ? { intoId: a.into_id } : {}),
+    seenDelta: a.seen_delta, reason: a.reason, ...(a.undone_at !== null ? { undoneAt: a.undone_at } : {}),
+    ...(a.undone_by ? { undoneBy: a.undone_by } : {}), immune: a.immune === 1,
+    ...(a.item_text !== undefined ? { itemText: a.item_text } : {}), ...(typeof a.into_text === 'string' ? { intoText: a.into_text } : {}),
+  };
+}
+
+/** A garden_list item: text oneLine'd and capped, ages relative to now. */
+const candidateView = (r: ItemRow, now: number): GardenCandidate => ({
+  id: itemRef(r.id), kind: r.kind, text: oneLine(r.text, LIMITS.garden.text), age: since(now - r.created_at), lastSeen: since(now - r.updated_at),
+  seen: r.seen, author: r.author, protected: protectedWhy(r) !== undefined,
+});
 
 /**
  * Replace rows by id with changed copies, deleting them first. An UPDATE that shrinks a row leaves its page as full as
@@ -526,9 +644,14 @@ export class MemoryStore implements DigestSource, GardenStore {
           // A text pin exists only as a pin: unpinned, by text or by id, it is the human's retracted note.
           if (isTextPin(item)) this.invalidate(db, item.id, 'human', 'human', 'unpinned');
         } else {
-          db.prepare(`UPDATE items SET pinned = 1, updated_at = ?, invalid_at = NULL, invalid_kind = NULL, invalid_by = NULL, invalid_reason = NULL
-            WHERE id = ?`).run(this.now(), item.id);
+          // A gardener hide is undone as the human's undo would (the keep's seen restored); pinning then clears immunities.
+          const action = this.gardened(db, item);
+          if (action) this.undoActions(db, [action], 'human', false);
+          db.prepare(`UPDATE items SET pinned = 1, updated_at = ?, invalid_at = NULL, invalid_kind = NULL, invalid_by = NULL, invalid_reason = NULL,
+            merged_into = NULL WHERE id = ?`).run(this.now(), item.id);
         }
+        // Pinning or unpinning an item clears its garden immunities (D7).
+        db.prepare('UPDATE garden_actions SET immune = 0 WHERE immune = 1 AND (item_id = ? OR into_id = ?)').run(item.id, item.id);
         this.episode(db, repo, { ...scope, nodeId: 'human', rootId: 'human' }, { kind: 'pin', ts: this.now(), data: { itemId: item.id, ...(input.unpin ? { unpin: true } : {}) } });
         return this.item(db, repo, item.id);
       });
@@ -538,7 +661,8 @@ export class MemoryStore implements DigestSource, GardenStore {
 
   /**
    * The human's restore of an item hidden by an agent's or the human's retraction or supersede; pinned stays as it is.
-   * Refuses live items, tombstones, text pins (pinning the text again revives one) and any other kind of hiding.
+   * A gardener hide is undone instead, as `tl memory garden undo m<id>` does, which makes that pair immune. Refuses live
+   * items, tombstones, text pins (pinning the text again revives one) and any other kind of hiding.
    */
   restore(scope: MemoryScope, actor: Actor, input: { id: number }): ItemView {
     return this.loud(() => {
@@ -551,10 +675,17 @@ export class MemoryStore implements DigestSource, GardenStore {
         if (item.invalid_at === null) throw new MemoryError(`${ref} is not retracted`);
         if (item.text === '') throw new MemoryError(`${ref} was ${view(item).tombstone}; its text is gone`);
         if (isTextPin(item)) throw new MemoryError(`${ref} is a text pin; pin it again instead`);
-        // Other kinds (v3's) are undone by their own path, never cleared blindly here.
-        if (!['agent', 'human', 'superseded'].includes(item.invalid_kind!)) throw new MemoryError(`cannot restore a ${item.invalid_kind} item here`);
-        // updated_at: it comes back at the top of the panel's browse.
-        db.prepare('UPDATE items SET invalid_at = NULL, invalid_kind = NULL, invalid_by = NULL, invalid_reason = NULL, updated_at = ? WHERE id = ?').run(this.now(), item.id);
+        const action = this.gardened(db, item);
+        if (action) {
+          const result = this.undoActions(db, [action], 'human', true);
+          if (!result.undone.length) throw new MemoryError(`cannot restore ${ref}: ${result.skipped[0].reason}`);
+        } else if (!['agent', 'human', 'superseded'].includes(item.invalid_kind!)) {
+          throw new MemoryError(`cannot restore a ${item.invalid_kind} item here`);
+        } else {
+          // updated_at: it comes back at the top of the panel's browse.
+          db.prepare(`UPDATE items SET invalid_at = NULL, invalid_kind = NULL, invalid_by = NULL, invalid_reason = NULL, merged_into = NULL,
+            updated_at = ? WHERE id = ?`).run(this.now(), item.id);
+        }
         this.episode(db, repo, { ...scope, ...this.episodeScope(actor) }, { kind: 'restore', ts: this.now(), data: { itemId: item.id, actor: 'human' } });
         return this.item(db, repo, item.id);
       });
@@ -637,32 +768,280 @@ export class MemoryStore implements DigestSource, GardenStore {
     });
   }
 
-  // --- The gardener (GardenStore, memory-schema.ts): stubs until memory v3's store work lands ---
+  // --- The gardener (GardenStore, memory-schema.ts). Tool-facing: they throw as the methods above. ---
 
-  gardenTargets(): GardenTarget[] { throw new Error('not implemented'); }
-  startRun(_scope: MemoryScope, _input: { trigger: GardenTrigger; model: string }): { ok: true; run: GardenRunView } | { ok: false; reason: string } {
-    throw new Error('not implemented');
+  /** Every repository of every existing account file; a file that cannot be read is logged and left out. */
+  gardenTargets(): GardenTarget[] {
+    return this.existingKeys().flatMap((key) => this.quiet(key, [], () => {
+      const db = this.handle(key, false);
+      if (!db) return [];
+      const repos = db.prepare(`SELECT id, key, path FROM repos WHERE key <> 'account:' ORDER BY id`).all() as { id: number; key: string; path: string }[];
+      return repos.map((repo) => {
+        const recent = (db.prepare(`${RUN_SQL} WHERE g.repo_id = ? AND g.state <> 'skipped' ORDER BY g.id DESC LIMIT ${LIMITS.garden.recentRuns}`)
+          .all(repo.id) as unknown as RunRow[]).map(runView);
+        const mark = recent[0]?.watermark ?? 0;
+        const newItems = Number((db.prepare(`SELECT count(*) AS n FROM items i WHERE i.repo_id = ? AND i.id > ? AND i.invalid_at IS NULL
+          AND i.pinned = 0 AND i.kind IN (${GARDEN_IN}) AND ${ELIGIBLE}`).get(repo.id, mark) as { n: number }).n);
+        const p = newItems ? this.freeze(db, repo.id).proposals : { clusters: [], hints: [] };
+        const proposals = p.clusters.filter((c) => c.some((r) => r.id > mark)).length + p.hints.filter(([h, by]) => h.id > mark || by.id > mark).length;
+        return { key, repoKey: repo.key, repoPath: repo.path, newItems, proposals, recent };
+      });
+    }));
   }
-  skipRun(_scope: MemoryScope, _input: { trigger: GardenTrigger; note: string }): void { throw new Error('not implemented'); }
-  heartbeat(_account: string | undefined, _runId: number): void { throw new Error('not implemented'); }
-  setRunNode(_account: string | undefined, _runId: number, _nodeId: string): void { throw new Error('not implemented'); }
-  gardenPage(_account: string | undefined, _runId: number, _q: { cursor?: string; callsLeft: number }): GardenPage | GardenRefused {
-    throw new Error('not implemented');
+
+  startRun(scope: MemoryScope, input: { trigger: GardenTrigger; model: string }): { ok: true; run: GardenRunView } | { ok: false; reason: string } {
+    return this.loud(() => {
+      const db = this.db(scope.account, false);
+      const repo = db && this.repo(db, scope, false);
+      if (!db || repo === undefined) return { ok: false, reason: 'no memory for this repository yet' };
+      return tx(db, () => {
+        const g = LIMITS.garden, now = this.now();
+        const held = db.prepare(`SELECT id FROM garden_runs WHERE state = 'running' AND heartbeat_at > ? ORDER BY id DESC LIMIT 1`)
+          .get(now - g.leaseMs) as { id: number } | undefined;
+        if (held) return { ok: false as const, reason: `garden run ${runRef(held.id)} holds this memory file's lease` };
+        const { items, ids, proposals } = this.freeze(db, repo);
+        const stats: GardenRunStats = {
+          candidates: ids, maxHides: Math.min(g.maxHides, Math.ceil(g.maxHideShare * items.filter((r) => !protectedWhy(r)).length)),
+          before: this.gardenSnapshot(db, scope, repo, proposals.clusters), refused: {}, calls: 0, outputChars: 0,
+        };
+        const id = Number((db.prepare(`INSERT INTO garden_runs (repo_id, trigger, state, started_at, heartbeat_at, watermark, model, stats)
+          VALUES (?, ?, 'running', ?, ?, (SELECT coalesce(max(id), 0) FROM items), ?, ?) RETURNING id`)
+          .get(repo, input.trigger, now, now, input.model, JSON.stringify(stats)) as { id: number }).id);
+        return { ok: true as const, run: runView(this.runRow(db, id)) };
+      });
+    });
   }
-  gardenGet(_account: string | undefined, _runId: number, _id: number): { ok: true; item: GardenCandidate & { body: string } } | GardenRefused {
-    throw new Error('not implemented');
+
+  skipRun(scope: MemoryScope, input: { trigger: GardenTrigger; note: string }): void {
+    this.loud(() => {
+      const db = this.db(scope.account, false);
+      const repo = db && this.repo(db, scope, false);
+      if (!db || repo === undefined) return;
+      tx(db, () => {
+        const last = db.prepare('SELECT state, note FROM garden_runs WHERE repo_id = ? ORDER BY id DESC LIMIT 1').get(repo) as { state: string; note: string | null } | undefined;
+        if (last?.state === 'skipped' && last.note === input.note) return;
+        const now = this.now();
+        const stats: GardenRunStats = { candidates: [], maxHides: 0, before: emptySnapshot(), refused: {}, calls: 0, outputChars: 0 };
+        db.prepare(`INSERT INTO garden_runs (repo_id, trigger, state, started_at, ended_at, heartbeat_at, watermark, stats, note)
+          VALUES (?, ?, 'skipped', ?, ?, ?, (SELECT coalesce(max(id), 0) FROM items), ?, ?)`).run(repo, input.trigger, now, now, now, JSON.stringify(stats), input.note);
+      });
+    });
   }
-  gardenApply(_account: string | undefined, _runId: number, _input: GardenActionInput): GardenApplyResult { throw new Error('not implemented'); }
-  countCalls(_account: string | undefined, _runId: number, _totals: { calls: number; outputChars: number }): void { throw new Error('not implemented'); }
-  endRun(_account: string | undefined, _runId: number, _state: Exclude<RunState, 'running' | 'skipped'>, _note?: string): boolean {
-    throw new Error('not implemented');
+
+  heartbeat(account: string | undefined, runId: number): void {
+    this.loud(() => this.setRun(account, runId, 'heartbeat_at = :now', { now: this.now() }, `AND state = 'running'`));
   }
-  finishRun(_account: string | undefined, _runId: number, _cost: { usd: number; incomplete: boolean }): GardenRunView { throw new Error('not implemented'); }
-  verifyRun(_account: string | undefined, _runId: number): string[] { throw new Error('not implemented'); }
-  undo(_scope: MemoryScope, _target: GardenUndoTarget, _by: GardenUndoneBy): GardenUndoResult { throw new Error('not implemented'); }
-  runs(_account: string | undefined, _q?: { repoKey?: string; limit?: number }): GardenRunView[] { throw new Error('not implemented'); }
-  run(_account: string | undefined, _runId: number): GardenRunView { throw new Error('not implemented'); }
-  cost30d(_account: string | undefined): number { throw new Error('not implemented'); }
+
+  setRunNode(account: string | undefined, runId: number, nodeId: string): void {
+    this.loud(() => this.setRun(account, runId, 'node_id = :node', { node: nodeId }));
+  }
+
+  gardenPage(account: string | undefined, runId: number, q: { cursor?: string; callsLeft: number }): GardenPage | GardenRefused {
+    return this.gardenCall(account, runId, (db, run, stats) => {
+      const g = LIMITS.garden, now = this.now(), n = q.cursor ? Number(q.cursor.slice(1)) : 1;
+      const rows = this.rowsOf(db, run.repo_id, stats.candidates);
+      // Pages cut the frozen set, hidden items included, so a cursor names the same items all run long.
+      const pages: EligibleRow[][] = [];
+      let chars = 0;
+      for (const r of rows) {
+        const len = JSON.stringify(candidateView(r, now)).length + 1, last = pages.at(-1);
+        if (last && last.length < g.page && chars + len <= g.maxPageChars - PROPOSALS_RESERVE) {
+          last.push(r);
+          chars += len;
+        } else {
+          pages.push([r]);
+          chars = len;
+        }
+      }
+      const shown = (r: EligibleRow) => r.invalid_at === null && r.eligible === 1;
+      const p = n === 1 ? propose(rows.filter(shown), this.immunePairs(db)) : { clusters: [], hints: [] };
+      return {
+        run: runRef(run.id), page: n, pages: Math.max(1, pages.length), ...(n < pages.length ? { next: `c${n + 1}` } : {}), now,
+        rules: { ...this.left(db, run.id, stats), callsLeft: q.callsLeft, minContained: g.minContained },
+        clusters: p.clusters.map(([keep, ...rest]) => ({ kind: keep.kind, keep: itemRef(keep.id), ids: [keep, ...rest].map((r) => itemRef(r.id)) })),
+        supersedeHints: p.hints.map(([h, by]) => ({ id: itemRef(h.id), by: itemRef(by.id) })),
+        items: (pages[n - 1] ?? []).filter(shown).map((r) => candidateView(r, now)),
+      };
+    });
+  }
+
+  gardenGet(account: string | undefined, runId: number, id: number): { ok: true; item: GardenCandidate & { body: string } } | GardenRefused {
+    return this.gardenCall(account, runId, (db, run, stats, refuse) => {
+      if (!stats.candidates.includes(id)) return refuse('not a candidate', `${itemRef(id)} is not in this run's candidate set`);
+      const [r] = this.rowsOf(db, run.repo_id, [id]);
+      return unfit(r, refuse) ?? { ok: true as const, item: { ...candidateView(r, this.now()), body: oneLine(r.body, LIMITS.item.ledgerBody) } };
+    });
+  }
+
+  gardenApply(account: string | undefined, runId: number, input: GardenActionInput): GardenApplyResult {
+    return this.gardenCall(account, runId, (db, run, stats, refuse): GardenApplyResult => {
+      const g = LIMITS.garden;
+      const ids = input.action === 'merge' ? input.ids : [input.id, input.by];
+      if (new Set(ids).size !== ids.length) return refuse('duplicate', input.action === 'merge' ? 'an id is given twice' : 'id and by are the same item');
+      const outside = ids.find((id) => !stats.candidates.includes(id));
+      if (outside !== undefined) return refuse('not a candidate', `${itemRef(outside)} is not in this run's candidate set`);
+      const rows = this.rowsOf(db, run.repo_id, ids);
+      for (const r of rows) {
+        const refused = unfit(r, refuse);
+        if (refused) return refused;
+      }
+      const ref = (r: ItemRow) => itemRef(r.id);
+      const shield = (r: ItemRow) => protectedWhy(r) && refuse('protected', `${ref(r)} is ${protectedWhy(r)}; it is never hidden`);
+      const immune = (h: ItemRow, into: ItemRow) => db.prepare('SELECT 1 FROM garden_actions WHERE item_id = ? AND into_id = ? AND immune = 1').get(h.id, into.id)
+        && refuse('immune', `the human undid hiding ${ref(h)} behind ${ref(into)}`);
+      const cover = (h: ItemRow, t: ItemRow) => contained(h.text, t.text) < g.minContained
+        && refuse('containment', `${ref(t)} covers under ${g.minContained * 100}% of ${ref(h)}'s terms`);
+      const done = this.left(db, run.id, stats);
+      const reason = oneLine(redact(input.reason.trim()), g.reason), now = this.now();
+      const hide = db.prepare(`UPDATE items SET invalid_at = ?, invalid_kind = ?, invalid_by = ?, invalid_reason = ?, merged_into = ? WHERE id = ?`);
+      const log = db.prepare('INSERT INTO garden_actions (run_id, ts, action, item_id, into_id, seen_delta, reason) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      if (input.action === 'merge') {
+        if (new Set(rows.map((r) => r.kind)).size > 1) return refuse('kind', 'merge members must share one kind');
+        // The daemon picks the keep; the gardener's order never counts (D8 rule 4).
+        const [keep, ...members] = [...rows].sort(keepRank);
+        for (const m of members) {
+          const refused = shield(m) || immune(m, keep) || cover(m, keep)
+            || (this.hopsBelow(db, m.id) >= g.chainDepth && refuse('chain', `merging ${ref(m)} into ${ref(keep)} makes a merge chain longer than ${g.chainDepth}`));
+          if (refused) return refused;
+        }
+        if (members.length > done.hidesLeft) return refuse('hides', `this run may hide ${done.hidesLeft} more items`);
+        // A pinned or human keep's row is never written, so its undo subtracts nothing (seen_delta 0).
+        const written = !keep.pinned && keep.author !== 'human';
+        for (const m of members) {
+          hide.run(now, 'merged', gardenBy(run.id), reason, keep.id, m.id);
+          log.run(run.id, now, 'merge', m.id, keep.id, written ? m.seen : 0, reason);
+        }
+        if (written) db.prepare('UPDATE items SET seen = seen + ? WHERE id = ?').run(members.reduce((n, m) => n + m.seen, 0), keep.id);
+        return { ok: true, action: 'merge', kept: keep.id, hidden: members.map((m) => m.id), ...this.left(db, run.id, stats) };
+      }
+      const [item, by] = rows;
+      const refused = shield(item)
+        || (by.kind !== item.kind && by.kind !== 'ledger' && by.author !== 'daemon' && by.seen < 2
+          && refuse('kind', `${ref(by)} is a ${by.kind}: a supersede's by is the same kind, a ledger line, daemon-written or seen twice`))
+        || (by.created_at <= item.created_at && refuse('newer', `${ref(by)} is not newer than ${ref(item)}`))
+        || (ftsTerms(item.text, Infinity).length < g.minSupersedeTerms && refuse('terms', `${ref(item)} has under ${g.minSupersedeTerms} terms`))
+        || cover(item, by) || immune(item, by)
+        || (done.hidesLeft < 1 && refuse('hides', 'this run may hide no more items'))
+        || (done.supersedesLeft < 1 && refuse('supersedes', 'this run may supersede no more items'));
+      if (refused) return refused;
+      hide.run(now, 'gardener', gardenBy(run.id), reason, null, item.id);
+      log.run(run.id, now, 'supersede', item.id, by.id, 0, reason);
+      return { ok: true, action: 'supersede', hidden: item.id, by: by.id, ...this.left(db, run.id, stats) };
+    });
+  }
+
+  countCalls(account: string | undefined, runId: number, totals: { calls: number; outputChars: number }): void {
+    this.loud(() => this.setRun(account, runId, `stats = json_set(stats, '$.calls', :calls, '$.outputChars', :chars)`,
+      { calls: totals.calls, chars: totals.outputChars }));
+  }
+
+  endRun(account: string | undefined, runId: number, state: Exclude<RunState, 'running' | 'skipped'>, note?: string): boolean {
+    return this.loud(() => this.setRun(account, runId, 'state = :state, note = coalesce(:note, note)', { state, note: note ?? null },
+      `AND (state = 'running' OR (:state = 'reverted' AND ended_at IS NOT NULL AND state NOT IN ('skipped', 'reverted')))`));
+  }
+
+  finishRun(account: string | undefined, runId: number, cost: { usd: number; incomplete: boolean }): GardenRunView {
+    return this.loud(() => {
+      const db = this.runFile(account, runId);
+      return runView(tx(db, () => {
+        const run = this.runRow(db, runId);
+        if (run.ended_at !== null) return run;
+        const scope = { account, repoKey: run.repo_key, repoPath: '' };
+        const stats: GardenRunStats = { ...JSON.parse(run.stats), after: this.gardenSnapshot(db, scope, run.repo_id, this.freeze(db, run.repo_id).proposals.clusters) };
+        db.prepare(`UPDATE garden_runs SET state = CASE state WHEN 'running' THEN 'interrupted' ELSE state END, ended_at = ?, cost_usd = ?,
+          cost_incomplete = ?, stats = ? WHERE id = ?`).run(this.now(), cost.usd, cost.incomplete ? 1 : 0, JSON.stringify(stats), runId);
+        return this.runRow(db, runId);
+      }));
+    });
+  }
+
+  verifyRun(account: string | undefined, runId: number): string[] {
+    return this.loud(() => {
+      const db = this.runFile(account, runId);
+      return tx(db, () => {
+        const run = this.runRow(db, runId), stats = JSON.parse(run.stats) as GardenRunStats, by = gardenBy(runId), r = runRef(runId);
+        const found: string[] = [];
+        const actions = (db.prepare('SELECT * FROM garden_actions WHERE run_id = ? AND undone_at IS NULL ORDER BY id').all(runId) as unknown as ActionRow[]);
+        // 1. Every row the run hides has its action, was a candidate and is not protected. Eligibility can lapse after the
+        // hide (a failed outcome), so gardenApply checks it inside the hide's own transaction instead.
+        for (const h of db.prepare('SELECT * FROM items WHERE invalid_by = ?').all(by) as unknown as ItemRow[]) {
+          if (!actions.some((a) => a.item_id === h.id)) found.push(`m${h.id} is hidden by ${r} with no action`);
+          if (protectedWhy(h)) found.push(`m${h.id} is ${protectedWhy(h)} but hidden by ${r}`);
+          if (!stats.candidates.includes(h.id)) found.push(`m${h.id} was not a candidate of ${r}`);
+        }
+        // 2. Every merge chain the run made ends on a live item, or on one someone else retracted after the merge.
+        for (const a of actions.filter((x) => x.action === 'merge')) {
+          const item = db.prepare('SELECT * FROM items WHERE id = ?').get(a.item_id) as unknown as ItemRow;
+          if (item.invalid_kind !== 'merged' || item.invalid_by !== by) continue; // revived or retracted since: no longer this run's redirect
+          const end = this.chainEnd(db, item);
+          if (!end || end.invalid_kind === 'merged') found.push(`m${item.id}'s merge chain is broken or longer than ${LIMITS.garden.chainDepth}`);
+          else if (end.invalid_at !== null && (end.invalid_by === by || end.invalid_at < a.ts)) {
+            found.push(`m${item.id} merges into m${end.id}, which ${end.invalid_by === by ? `${r} also hid` : 'was hidden before the merge'}`);
+          }
+        }
+        // 3. The caps.
+        const supersedes = actions.filter((a) => a.action === 'supersede').length;
+        if (actions.length > stats.maxHides) found.push(`${r} hid ${actions.length} items, over its cap of ${stats.maxHides}`);
+        if (supersedes > LIMITS.garden.maxSupersedes) found.push(`${r} superseded ${supersedes} items, over the cap of ${LIMITS.garden.maxSupersedes}`);
+        // 4. The orchestrator digest keeps every pin it had before the run that the run hid or kept. The rules already
+        // shield pins; this is the backstop. Untouched pins can leave it by the human's hand or the digest's own budget.
+        const touched = new Set(actions.flatMap((a) => [a.item_id, a.into_id ?? a.item_id]));
+        const after = new Set(stats.after?.digest.ids ?? digestFor(this, { account, repoKey: run.repo_key, repoPath: '' }, { role: 'orchestrator', now: this.now() }).itemIds);
+        const pin = db.prepare('SELECT pinned, invalid_at, invalid_by FROM items WHERE id = ?');
+        for (const id of stats.before.digest.ids.filter((x) => touched.has(x) && !after.has(x))) {
+          const p = pin.get(id) as { pinned: number; invalid_at: number | null; invalid_by: string | null } | undefined;
+          if (p?.pinned && (p.invalid_at === null || p.invalid_by === by)) found.push(`pin m${id} left the orchestrator digest`);
+        }
+        // 5. No item the run touched is live while its newest retraction or restore was the human's forget.
+        for (const { id } of db.prepare(`SELECT i.id FROM items i WHERE i.id IN (SELECT value FROM json_each(?)) AND i.invalid_at IS NULL
+          AND (SELECT e.kind = 'forget' AND json_extract(e.data, '$.actor') = 'human' FROM episodes e
+            WHERE e.kind IN ('forget', 'pin', 'restore') AND json_extract(e.data, '$.itemId') = i.id ORDER BY e.id DESC LIMIT 1)`).all(JSON.stringify([...touched])) as { id: number }[]) {
+          found.push(`m${id} is live after the human forgot it`);
+        }
+        if (found.length) db.prepare('UPDATE garden_runs SET stats = ? WHERE id = ?').run(JSON.stringify({ ...stats, violations: found }), runId);
+        return found;
+      });
+    });
+  }
+
+  undo(scope: MemoryScope, target: GardenUndoTarget, by: GardenUndoneBy): GardenUndoResult {
+    return this.loud(() => {
+      const missing = 'run' in target ? `no such run ${runRef(target.run)}` : `no such item ${itemRef(target.item)}`;
+      const db = this.db(scope.account, false);
+      const repo = db && this.repo(db, scope, false);
+      if (!db || repo === undefined) throw new MemoryError(missing);
+      return tx(db, () => {
+        if ('run' in target) {
+          if (this.runRow(db, target.run).repo_id !== repo) throw new MemoryError(missing);
+          const actions = db.prepare('SELECT * FROM garden_actions WHERE run_id = ? AND undone_at IS NULL ORDER BY id DESC').all(target.run) as unknown as ActionRow[];
+          return this.undoActions(db, actions, by, by === 'human' && target.immune === true);
+        }
+        const action = this.latestAction(db, this.item(db, repo, target.item).id);
+        if (!action) throw new MemoryError(`${itemRef(target.item)} was never hidden by the gardener`);
+        return this.undoActions(db, [action], by, by === 'human');
+      });
+    });
+  }
+
+  runs(account: string | undefined, q: { repoKey?: string; limit?: number } = {}): GardenRunView[] {
+    return this.loud(() => (this.db(account, false)?.prepare(`${RUN_SQL} ${q.repoKey === undefined ? '' : 'WHERE r.key = :repo'} ORDER BY g.id DESC LIMIT :limit`)
+      .all({ ...(q.repoKey === undefined ? {} : { repo: q.repoKey }), limit: q.limit ?? LIMITS.garden.recentRuns }) as unknown as RunRow[] | undefined ?? [])
+      .map(runView));
+  }
+
+  run(account: string | undefined, runId: number): GardenRunView {
+    return this.loud(() => {
+      const db = this.runFile(account, runId), run = runView(this.runRow(db, runId));
+      const actions = db.prepare(`SELECT a.*, i.text AS item_text, k.text AS into_text FROM garden_actions a JOIN items i ON i.id = a.item_id
+        LEFT JOIN items k ON k.id = a.into_id WHERE a.run_id = ? ORDER BY a.id`).all(runId) as unknown as (ActionRow & { item_text: string; into_text: string | null })[];
+      return { ...run, actions: actions.map(actionView) };
+    });
+  }
+
+  cost30d(account: string | undefined): number {
+    return this.loud(() => Number((this.db(account, false)?.prepare('SELECT coalesce(sum(cost_usd), 0) AS usd FROM garden_runs WHERE started_at >= ?')
+      .get(this.now() - 30 * DAY) as { usd: number } | undefined)?.usd ?? 0));
+  }
 
   close(): void {
     for (const t of this.checks.values()) if (t) clearImmediate(t);
@@ -805,6 +1184,10 @@ export class MemoryStore implements DigestSource, GardenStore {
         db.exec(SCHEMA_V1.slice(0, tables));
         tx(db, () => { if (pragma(db, 'user_version') === 0) db.exec(SCHEMA_V1.slice(tables)); });
       }
+      // Each in its own transaction, re-checked inside it, so a second daemon migrating the same file skips what is done.
+      for (const m of MIGRATIONS) {
+        if (version < m.version) tx(db, () => { if (pragma(db, 'user_version') < m.version) db.exec(m.sql); });
+      }
       return db;
     } catch (err) {
       db.close();
@@ -849,13 +1232,15 @@ export class MemoryStore implements DigestSource, GardenStore {
     ) as { id: number }).id);
   }
 
-  /** Bump a live item, revive an agent-retracted or evicted one with the new text, skip a human-retracted one, else insert. */
+  /**
+   * Bump a live item, revive an agent-retracted, gardener-hidden or evicted one with the new text, skip a human-retracted
+   * one, else insert. A merged one bumps instead the live item its redirect chain ends on; with none, it revives.
+   */
   private upsert(db: DatabaseSync, it: {
     repo_id: number; kind: ItemKind; text: string; body: string; author: string; dedupe: string; node_id: string | null;
     root_id: string | null; harness: string | null; model: string | null; episode_id: number | null; now: number;
   }): AddResult | { sticky: number } {
-    const row = db.prepare('SELECT id, invalid_kind FROM items WHERE repo_id = ? AND kind = ? AND dedupe = ?')
-      .get(it.repo_id, it.kind, it.dedupe) as { id: number; invalid_kind: string | null } | undefined;
+    const row = db.prepare('SELECT * FROM items WHERE repo_id = ? AND kind = ? AND dedupe = ?').get(it.repo_id, it.kind, it.dedupe) as ItemRow | undefined;
     if (!row) {
       const { now, ...cols } = it;
       const id = db.prepare(`INSERT INTO items (repo_id, kind, text, body, author, dedupe, node_id, root_id, harness, model, episode_id, created_at, updated_at)
@@ -864,17 +1249,161 @@ export class MemoryStore implements DigestSource, GardenStore {
       return { id: Number(id.id) };
     }
     if (row.invalid_kind === 'human' || row.invalid_kind === 'superseded') return { sticky: row.id };
+    const end = row.invalid_kind === 'merged' ? this.chainEnd(db, row) : undefined;
+    if (end?.invalid_at === null) {
+      db.prepare('UPDATE items SET seen = seen + 1, updated_at = ? WHERE id = ?').run(it.now, end.id);
+      return { id: end.id, existing: true, merged: true };
+    }
     // A revive is the reviver's item: its text, author and node decide eligibility, provenance and what purge reaches.
     const revived = row.invalid_kind !== null;
     const { repo_id, kind, dedupe, now, ...fresh } = it;
     db.prepare(`UPDATE items SET seen = seen + 1, updated_at = :now${revived
-      ? `, ${Object.keys(fresh).map((c) => `${c} = :${c}`).join(', ')}, invalid_at = NULL, invalid_kind = NULL, invalid_by = NULL, invalid_reason = NULL` : ''}
+      ? `, ${Object.keys(fresh).map((c) => `${c} = :${c}`).join(', ')}, invalid_at = NULL, invalid_kind = NULL, invalid_by = NULL, invalid_reason = NULL,
+        merged_into = NULL` : ''}
       WHERE id = :id`).run({ now, id: row.id, ...(revived ? fresh : {}) });
     return revived ? { id: row.id, revived: true } : { id: row.id, existing: true };
   }
 
   private invalidate(db: DatabaseSync, id: number, kind: 'agent' | 'human' | 'superseded', by: string, reason: string): void {
-    db.prepare('UPDATE items SET invalid_at = ?, invalid_kind = ?, invalid_by = ?, invalid_reason = ? WHERE id = ?').run(this.now(), kind, by, reason, id);
+    db.prepare('UPDATE items SET invalid_at = ?, invalid_kind = ?, invalid_by = ?, invalid_reason = ?, merged_into = NULL WHERE id = ?')
+      .run(this.now(), kind, by, reason, id);
+  }
+
+  /** The account's file for a run method; "no such run" when there is none. */
+  private runFile(account: string | undefined, runId: number): DatabaseSync {
+    const db = this.db(account, false);
+    if (!db) throw new MemoryError(`no such run ${runRef(runId)}`);
+    return db;
+  }
+
+  private runRow(db: DatabaseSync, runId: number): RunRow {
+    const row = db.prepare(`${RUN_SQL} WHERE g.id = ?`).get(runId) as unknown as RunRow | undefined;
+    if (!row) throw new MemoryError(`no such run ${runRef(runId)}`);
+    return row;
+  }
+
+  /** UPDATE garden_runs SET <set> WHERE id = :id <where>, after checking the run exists; whether it changed the row. */
+  private setRun(account: string | undefined, runId: number, set: string, params: Record<string, SQLInputValue> = {}, where = ''): boolean {
+    const db = this.runFile(account, runId);
+    return tx(db, () => {
+      this.runRow(db, runId);
+      return Number(db.prepare(`UPDATE garden_runs SET ${set} WHERE id = :id ${where}`).run({ ...params, id: runId }).changes) > 0;
+    });
+  }
+
+  /**
+   * A garden tool call, in one transaction: refused 'not running' once the lease has ended. refuse() counts its rule in
+   * stats.refused in the same transaction and builds the refusal.
+   */
+  private gardenCall<T>(account: string | undefined, runId: number,
+    fn: (db: DatabaseSync, run: RunRow, stats: GardenRunStats, refuse: Refuse) => T | GardenRefused): T | GardenRefused {
+    return this.loud(() => {
+      const db = this.runFile(account, runId);
+      return tx(db, () => {
+        const run = this.runRow(db, runId), stats = JSON.parse(run.stats) as GardenRunStats;
+        const refuse: Refuse = (rule, message) => {
+          stats.refused[rule] = (stats.refused[rule] ?? 0) + 1;
+          db.prepare('UPDATE garden_runs SET stats = ? WHERE id = ?').run(JSON.stringify(stats), runId);
+          return { ok: false, rule, message: `refused (${rule}): ${message}` };
+        };
+        return run.state === 'running' ? fn(db, run, stats, refuse) : refuse('not running', `${runRef(runId)} has ended (${run.state})`);
+      });
+    });
+  }
+
+  /** The repository's rows of these ids in their order, with ELIGIBLE as eligible; another repository's are left out. */
+  private rowsOf(db: DatabaseSync, repo: number, ids: number[]): EligibleRow[] {
+    const byId = new Map((db.prepare(`SELECT i.*, ${ELIGIBLE} AS eligible FROM items i WHERE i.repo_id = ? AND i.id IN (SELECT value FROM json_each(?))`)
+      .all(repo, JSON.stringify(ids)) as unknown as EligibleRow[]).map((r) => [r.id, r]));
+    return ids.flatMap((id) => byId.get(id) ?? []);
+  }
+
+  /** The hides and supersedes a run has left under its caps. */
+  private left(db: DatabaseSync, runId: number, stats: GardenRunStats): { hidesLeft: number; supersedesLeft: number } {
+    const n = db.prepare(`SELECT count(*) AS hides, coalesce(sum(action = 'supersede'), 0) AS supersedes FROM garden_actions WHERE run_id = ?`)
+      .get(runId) as { hides: number; supersedes: number };
+    const hidesLeft = Math.max(0, stats.maxHides - Number(n.hides));
+    return { hidesLeft, supersedesLeft: Math.min(hidesLeft, Math.max(0, LIMITS.garden.maxSupersedes - Number(n.supersedes))) };
+  }
+
+  /**
+   * A run's candidate set (D8 rule 1, §3.4): the newest LIMITS.garden.candidates live, eligible items of GARDEN_KINDS,
+   * pinned and human ones included, plus every ledger line a supersede hint names; with the proposals over those items
+   * and the repository's newest eligible ledger lines.
+   */
+  private freeze(db: DatabaseSync, repo: number): { items: ItemRow[]; ids: number[]; proposals: ReturnType<typeof propose> } {
+    const live = (kinds: string, order: string) => db.prepare(`SELECT i.* FROM items i WHERE i.repo_id = ? AND i.invalid_at IS NULL
+      AND i.kind IN (${kinds}) AND ${ELIGIBLE} ORDER BY ${order} LIMIT ${LIMITS.garden.candidates}`).all(repo) as unknown as ItemRow[];
+    const items = live(GARDEN_IN, 'i.updated_at DESC, i.id DESC');
+    const proposals = propose([...items, ...live(`'ledger'`, 'i.created_at DESC, i.id DESC')], this.immunePairs(db));
+    return { items, ids: [...new Set([...items.map((r) => r.id), ...proposals.hints.map(([, by]) => by.id)])], proposals };
+  }
+
+  /** The (item, into) pairs the human made immune, as "<item>:<into>". */
+  private immunePairs(db: DatabaseSync): Set<string> {
+    return new Set((db.prepare('SELECT item_id, into_id FROM garden_actions WHERE immune = 1').all() as { item_id: number; into_id: number }[])
+      .map((a) => `${a.item_id}:${a.into_id}`));
+  }
+
+  /** The repository's live counts and orchestrator digest on one side of a run (D9); redundancy is over these clusters. */
+  private gardenSnapshot(db: DatabaseSync, scope: MemoryScope, repo: number, clusters: ItemRow[][]): GardenSnapshot {
+    const live = Object.fromEntries((db.prepare('SELECT kind, count(*) AS n FROM items WHERE repo_id = ? AND invalid_at IS NULL GROUP BY kind')
+      .all(repo) as { kind: ItemKind; n: number }[]).map((r) => [r.kind, Number(r.n)]));
+    const digest = digestFor(this, scope, { role: 'orchestrator', now: this.now() }), shown = new Set(digest.itemIds);
+    const redundancy = clusters.map((c) => c.filter((r) => shown.has(r.id)).length).filter((n) => n > 1).reduce((a, b) => a + b, 0);
+    return { live, digest: { ids: digest.itemIds, chars: digest.text.length }, redundancy };
+  }
+
+  /** Where a merged row's redirect ends: the last row along merged_into, or undefined past LIMITS.garden.chainDepth hops. */
+  private chainEnd(db: DatabaseSync, row: ItemRow): ItemRow | undefined {
+    let r = row;
+    for (let hops = 0; r.invalid_kind === 'merged' && r.merged_into !== null; hops++) {
+      if (hops === LIMITS.garden.chainDepth) return undefined;
+      r = db.prepare('SELECT * FROM items WHERE id = ?').get(r.merged_into) as unknown as ItemRow;
+    }
+    return r;
+  }
+
+  /** The most hops any merged row takes to redirect to this one, counted no further than LIMITS.garden.chainDepth. */
+  private hopsBelow(db: DatabaseSync, id: number): number {
+    const members = db.prepare(`SELECT id FROM items WHERE invalid_kind = 'merged' AND merged_into IN (SELECT value FROM json_each(?))`);
+    let level = [id], hops = 0;
+    for (; hops < LIMITS.garden.chainDepth; hops++) {
+      level = (members.all(JSON.stringify(level)) as { id: number }[]).map((r) => Number(r.id));
+      if (!level.length) break;
+    }
+    return hops;
+  }
+
+  private latestAction(db: DatabaseSync, itemId: number): ActionRow | undefined {
+    return db.prepare('SELECT * FROM garden_actions WHERE item_id = ? ORDER BY id DESC LIMIT 1').get(itemId) as unknown as ActionRow | undefined;
+  }
+
+  /** The garden action behind a merged or gardener-hidden row; undefined for any other row. */
+  private gardened(db: DatabaseSync, item: ItemRow): ActionRow | undefined {
+    return item.invalid_kind === 'merged' || item.invalid_kind === 'gardener' ? this.latestAction(db, item.id) : undefined;
+  }
+
+  /**
+   * Undo these actions in order (D7): an item its action's run still hides is cleared, and a merge's keep gives back
+   * seen_delta. An item since revived, retracted by someone else, purged or evicted is skipped with the reason.
+   */
+  private undoActions(db: DatabaseSync, actions: ActionRow[], by: GardenUndoneBy, immune: boolean): GardenUndoResult {
+    const result: GardenUndoResult = { undone: [], skipped: [] };
+    for (const a of actions) {
+      const r = db.prepare('SELECT * FROM items WHERE id = ?').get(a.item_id) as unknown as ItemRow;
+      const why = a.undone_at !== null ? 'already undone' : r.text === '' ? (r.dedupe.startsWith('purged:') ? 'purged' : 'evicted')
+        : r.invalid_at === null ? 'live again' : r.invalid_by !== gardenBy(a.run_id) ? `retracted since by ${r.invalid_by}` : undefined;
+      if (why) {
+        result.skipped.push({ actionId: a.id, itemId: a.item_id, reason: why });
+        continue;
+      }
+      db.prepare('UPDATE items SET invalid_at = NULL, invalid_kind = NULL, invalid_by = NULL, invalid_reason = NULL, merged_into = NULL WHERE id = ?').run(r.id);
+      if (a.seen_delta) db.prepare('UPDATE items SET seen = max(1, seen - ?) WHERE id = ?').run(a.seen_delta, a.into_id);
+      db.prepare('UPDATE garden_actions SET undone_at = ?, undone_by = ?, immune = ? WHERE id = ?').run(this.now(), by, immune ? 1 : 0, a.id);
+      result.undone.push({ actionId: a.id, runId: a.run_id, itemId: a.item_id, ...(a.into_id !== null ? { intoId: a.into_id } : {}) });
+    }
+    return result;
   }
 
   private cap(db: DatabaseSync, nodeId: string, kind: 'add' | 'forget', max: number, tool: string): void {
@@ -896,15 +1425,21 @@ export class MemoryStore implements DigestSource, GardenStore {
   }
 
   /**
-   * Tombstone the item and every item of its episode, cut that episode and the node's gate runs before it (since the
-   * previous outcome) to their skeletons, and blank every injection that named one of the items. Runs in the caller's
-   * transaction; scrub() then removes the bytes.
+   * Tombstone the item, every item of its episode and every item merged into one of those, down the chain (judged
+   * duplicates, they may hold the same secret). Cut that episode and the node's gate runs before it (since the previous
+   * outcome) to their skeletons, and blank every injection that named one of the items and every garden action reason
+   * about one. Runs in the caller's transaction; scrub() then removes the bytes.
    */
   private purge(db: DatabaseSync, item: ItemRow, reason: string): void {
-    const ids = item.episode_id === null ? [item.id]
-      : (db.prepare('SELECT id FROM items WHERE episode_id = ? OR id = ?').all(item.episode_id, item.id) as { id: number }[]).map((r) => Number(r.id));
-    db.prepare(`UPDATE items SET text = '', body = '', dedupe = 'purged:' || id, invalid_at = :now, invalid_kind = 'human',
-      invalid_by = 'human', invalid_reason = :reason WHERE id IN (SELECT value FROM json_each(:ids))`).run({ now: this.now(), reason, ids: JSON.stringify(ids) });
+    const ids = new Set(item.episode_id === null ? [item.id]
+      : (db.prepare('SELECT id FROM items WHERE episode_id = ? OR id = ?').all(item.episode_id, item.id) as { id: number }[]).map((r) => Number(r.id)));
+    const members = db.prepare(`SELECT id FROM items WHERE invalid_kind = 'merged' AND merged_into = ?`);
+    for (const id of ids) for (const r of members.all(id) as { id: number }[]) ids.add(Number(r.id)); // iteration visits what it adds
+    const json = JSON.stringify([...ids]);
+    db.prepare(`UPDATE items SET text = '', body = '', dedupe = 'purged:' || id, invalid_at = :now, invalid_kind = 'human', invalid_by = 'human',
+      invalid_reason = :reason, merged_into = NULL WHERE id IN (SELECT value FROM json_each(:ids))`).run({ now: this.now(), reason, ids: json });
+    db.prepare(`UPDATE garden_actions SET reason = '' WHERE item_id IN (SELECT value FROM json_each(:ids)) OR into_id IN (SELECT value FROM json_each(:ids))`)
+      .run({ ids: json });
     const ep = item.episode_id === null ? undefined
       : db.prepare('SELECT id, node_id, kind, data FROM episodes WHERE id = ?').get(item.episode_id) as { id: number; node_id: string; kind: string; data: string } | undefined;
     if (ep) {
@@ -916,7 +1451,7 @@ export class MemoryStore implements DigestSource, GardenStore {
       for (const e of [ep, ...gates]) set.run(JSON.stringify(skeleton(e.kind, JSON.parse(e.data))), e.id);
     }
     db.prepare(`UPDATE injections SET text = '' WHERE text <> '' AND EXISTS (SELECT 1 FROM json_each(item_ids) WHERE value IN (SELECT value FROM json_each(?)))`)
-      .run(JSON.stringify(ids));
+      .run(json);
   }
 
   /**

@@ -162,10 +162,11 @@ export type GardenUndoneBy = (typeof GARDEN_UNDONE_BY)[number];
  * kind that is not a ledger, daemon-authored or seen at least twice. containment: below minContained against the keep
  * or by. terms: a superseded item with fewer than minSupersedeTerms terms. newer: by was not created after id.
  * immune: the human undid this pair. hides, supersedes: the run's caps. duplicate: an id given twice, or id equal to by.
+ * chain: the merge would leave a redirect chain longer than LIMITS.garden.chainDepth.
  */
 export const GARDEN_RULES = [
   'not running', 'not a candidate', 'ineligible', 'protected', 'not live', 'kind', 'containment', 'terms', 'newer', 'immune',
-  'hides', 'supersedes', 'duplicate',
+  'hides', 'supersedes', 'duplicate', 'chain',
 ] as const;
 export type GardenRule = (typeof GARDEN_RULES)[number];
 /** The digest arm a launch applied, and why: memory.digest on/off, the ab split, or a resume reusing its frozen text. */

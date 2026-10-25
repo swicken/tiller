@@ -109,7 +109,7 @@ describe('memory tools', () => {
       { sessionId: 's-1', arm: 'on', cause: 'resume', itemIds: [], text: '', ts: expect.any(Number) },
     ]);
     expect(r.data.memory).toEqual({ on: true, source: `memory.enabled in ${join(home, 'config.json')}` });
-    expect(r.data.dbs).toMatchObject([{ key: '_default', state: 'ok', schema: 1 }]);
+    expect(r.data.dbs).toMatchObject([{ key: '_default', state: 'ok', schema: 2 }]);
     expect(r.data.arms.on.nodes).toBe(1);
     expect(r.text).toContain(`injections of ${a}: 2`);
   });
