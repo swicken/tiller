@@ -280,7 +280,7 @@ The node's spend is the run's cost, and the tree shows it like any node's. Three
 - **Per account file:** `memory.gardener.maxUsdPer30Days`, default $3. A run starts only when a full per-run cap still fits.
 - **Hides:** at most 40 per run, and at most a quarter of the live gardenable items. At most 10 of them may be supersedes.
 
-**A run that ends without a reported cost** is charged the full `maxUsdPerRun` and marked incomplete, whatever it had spent. That covers the call cap, the tripwire, the timeout, memory turned off, a crash and a daemon restart, so the 30-day total never under-counts. A turn that ends without a priced cost report also pauses the repository.
+**A run that ends without a reported cost** is charged the full `maxUsdPerRun` and marked incomplete, whatever it had spent. That covers the call cap, the tripwire, the timeout, memory turned off, a failed launch, a crash and a daemon restart, so the 30-day total never under-counts. A turn that ends without a priced cost report also pauses the repository.
 
 On a subscription account the cost is Claude Code's API-equivalent estimate. The run uses the same account's quota as your work, which is why it starts only when the daemon is quiet and the rate limits are under 80 percent.
 
@@ -297,7 +297,7 @@ On a subscription account the cost is Claude Code's API-equivalent estimate. The
 | `disabled` | `memory.gardener.enabled` was turned off during a scheduled run, or the account's `gardener: false` was set during any run. |
 | `interrupted` | The daemon stopped, restarted or crashed during the run, or you closed the gardener node while it ran. Its changes are kept, not undone. |
 | `failed` | The tripwire fired: the model tried a tool other than its four. The run's changes are undone. |
-| `reverted` | The check after the run found a violation, and the run's changes were undone. |
+| `reverted` | The check after the run found a violation, or could not run, and the run's changes were undone. |
 | `skipped` | It never started, because the checkout was missing or not trusted. |
 
 After every run, crashed ones included, the daemon checks that:
