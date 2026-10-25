@@ -246,7 +246,7 @@ The daemon checks every hour, and once more a minute after the last node closes.
 
 At most one run is live per daemon, and the repository with the most new items goes first.
 
-**By hand,** `tl memory garden run --repo PATH [--account NAME] [--wait]` starts a run now. It skips only `enabled`, the 24 hours, the new-item threshold and a pause. Memory, both ceilings, the budget, the trust check and the one-run rule still apply.
+**By hand,** `tl memory garden run --repo PATH [--account NAME] [--wait]` starts a run now. It skips `enabled`, the 24 hours, the new-item threshold, a pause and the quiet-daemon check, except the 80 percent rate-limit guard. Memory, both ceilings, the budget, the rate-limit guard, the checkout and trust check, and the one-run rule still apply.
 
 ### The gardener node
 
@@ -273,10 +273,10 @@ The node's spend is the run's cost, and the tree shows it like any node's. Three
 
 - **Per run:** `memory.gardener.maxUsdPerRun`, default $0.25. Claude Code reports a node's cost only when its turn ends, so the daemon cannot stop a run on cost partway through. Instead, other limits keep the run from reaching the cap:
   - at most 20 tool calls, counting attempts, refused ones included. Lowering `maxUsdPerRun` lowers this cap;
-  - at most 160,000 characters of tool output; a tool result past it is refused;
+  - at most 160,000 characters of tool output;
   - at most 10 minutes.
 
-  The 21st call, or the timeout, ends the run.
+  The 21st call, going past the output limit, or the timeout ends the run.
 - **Per account file:** `memory.gardener.maxUsdPer30Days`, default $3. A run starts only when a full per-run cap still fits.
 - **Hides:** at most 40 per run, and at most a quarter of the live gardenable items. At most 10 of them may be supersedes.
 
@@ -291,11 +291,11 @@ On a subscription account the cost is Claude Code's API-equivalent estimate. The
 | State | Meaning |
 | --- | --- |
 | `done` | The turn ended normally. |
-| `capped` | The tool-call cap ended it. |
+| `capped` | The tool-call cap or the tool-output limit ended it. |
 | `timeout` | It ran for 10 minutes. |
 | `off` | Memory was turned off for the repository or account during the run. |
 | `disabled` | `memory.gardener.enabled` was turned off during a scheduled run, or the account's `gardener: false` was set during any run. |
-| `interrupted` | The daemon stopped, restarted or crashed during the run. |
+| `interrupted` | The daemon stopped, restarted or crashed during the run, or you closed the gardener node while it ran. Its changes are kept, not undone. |
 | `failed` | The tripwire fired: the model tried a tool other than its four. The run's changes are undone. |
 | `reverted` | The check after the run found a violation, and the run's changes were undone. |
 | `skipped` | It never started, because the checkout was missing or not trusted. |
