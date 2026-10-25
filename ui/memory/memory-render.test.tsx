@@ -28,8 +28,8 @@ describe('untrusted item text', () => {
   });
 
   it('shows the generic badge for a kind it does not know, and "(stays pinned)" on restoring a pinned item', () => {
-    const gardener = renderToStaticMarkup(<ItemRow item={{ ...item, invalid: { at: 1, kind: 'gardener' as never, by: 'gardener' } }} now={0} selected={false} onSelect={() => {}} />);
-    expect(gardener).toContain('Hidden (gardener) by gardener');
+    const later = renderToStaticMarkup(<ItemRow item={{ ...item, invalid: { at: 1, kind: 'later' as never, by: 'v9' } }} now={0} selected={false} onSelect={() => {}} />);
+    expect(later).toContain('Hidden (later) by v9');
     const forgotten = renderToStaticMarkup(<ItemDetail detail={{ item: { ...item, pinned: true, invalid: { at: 1, kind: 'human', by: 'human' } }, givenTo: [] }} page={page} now={0} act={() => {}} onClose={() => {}} />);
     expect(forgotten).toContain('Restore (stays pinned)');
   });

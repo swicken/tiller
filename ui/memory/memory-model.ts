@@ -23,6 +23,8 @@ const INVALID_LABEL: Record<string, string> = {
   human: 'Retracted by the human (permanent)',
   agent: 'Hidden by an agent until recorded again',
   superseded: 'Superseded',
+  merged: 'Merged by the gardener',
+  gardener: 'Hidden by the gardener',
 };
 const RESTORABLE = new Set(['agent', 'human', 'superseded']);
 
@@ -33,6 +35,7 @@ export function badges(item: MemoryItemView, supersededBy?: number): string[] {
   else if (item.invalid) {
     const { kind, by } = item.invalid;
     if (kind === 'superseded' && supersededBy) out.push(`Superseded by m${supersededBy}`);
+    else if (kind === 'merged' && item.mergedInto) out.push(`Merged into m${item.mergedInto} by the gardener`);
     else out.push(INVALID_LABEL[kind] ?? `Hidden (${kind})${by ? ` by ${by}` : ''}`);
   }
   if (item.eligible === false) out.push('Search only');
