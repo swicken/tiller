@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  normalizeDedupe, type Actor, type Derived, type DerivedItem, type EpisodeInput, type ItemKind, type MemoryScope,
+  LIMITS, normalizeDedupe, SCHEMA_V1, type Actor, type Derived, type DerivedItem, type EpisodeInput, type ItemKind, type MemoryScope,
 } from './memory-schema.js';
 import { DIGEST_SECTIONS, digestFor } from './memory-digest.js';
 import { ftsQuery, MemoryStore, readFailure } from './memory-store.js';
@@ -264,7 +264,23 @@ describe('create only on write', () => {
     expect(statSync(`${file()}-wal`).mode & 0o777).toBe(0o600);
     const db = raw();
     expect([db.prepare('PRAGMA auto_vacuum').get(), db.prepare('PRAGMA journal_mode').get(), db.prepare('PRAGMA user_version').get()])
-      .toEqual([{ auto_vacuum: 2 }, { journal_mode: 'wal' }, { user_version: 1 }]);
+      .toEqual([{ auto_vacuum: 2 }, { journal_mode: 'wal' }, { user_version: 2 }]);
+    db.close();
+  });
+
+  it('migrates a v1 file to schema 2 when it opens, keeping its items', () => {
+    mkdirSync(join(home, 'memory'), { recursive: true });
+    const v1 = new DatabaseSync(file());
+    v1.exec(SCHEMA_V1);
+    v1.prepare(`INSERT INTO repos (key, path, created_at) VALUES ('git:example.com/a/b', '/repo', 0)`).run();
+    v1.prepare(`INSERT INTO items (repo_id, kind, text, author, dedupe, created_at, updated_at) VALUES (2, 'note', 'kept from v1', 'agent', 'kept from v1', 0, 0)`).run();
+    v1.close();
+    const s = open();
+    expect(s.search(scope(), { query: 'kept' }).map((v) => v.text)).toEqual(['kept from v1']);
+    expect(s.status()[0]).toMatchObject({ state: 'ok', schema: 2 });
+    const db = raw();
+    expect(db.prepare('SELECT merged_into FROM items').get()).toEqual({ merged_into: null });
+    expect(db.prepare('SELECT count(*) AS n FROM garden_runs').get()).toEqual({ n: 0 });
     db.close();
   });
 });
@@ -828,5 +844,459 @@ describe('the panel (v2)', () => {
     expect(() => s.editPin(scope(), human, { id: 1, text: 'x' })).toThrow('no such item m1');
     expect(() => s.pin(scope(), human, { id: 1, unpin: true })).toThrow('no such item m1');
     expect(existsSync(join(home, 'memory'))).toBe(false);
+  });
+});
+
+describe('the gardener (v3)', () => {
+  const P = {
+    A: 'parser crashes when socket timeout expires',
+    B: 'parser crashes when socket timeout expires early',
+    C: 'socket timeout crashes parser',
+    Q: 'why does release signing hang forever',
+    L: 'fixed release signing hang forever in the ci pipeline',
+  };
+  const query = <T>(fn: (db: DatabaseSync) => T): T => { const db = raw(); try { return fn(db); } finally { db.close(); } };
+  const idOf = (text: string) => Number(query((db) => (db.prepare('SELECT id FROM items WHERE text = ?').get(text) as { id: number }).id));
+  const rows = (sql: string) => query((db) => db.prepare(sql).all());
+  /** Root-written, so eligible, items one second apart, so created_at orders them; their ids by name. */
+  function seed<K extends string>(s: MemoryStore, items: Record<K, DerivedItem>): Record<K, number> {
+    const ids = {} as Record<K, number>;
+    for (const [name, it] of Object.entries(items) as [K, DerivedItem][]) {
+      clock += 1000;
+      s.apply(scope('n-r1'), derived([it]));
+      ids[name] = idOf(it.text);
+    }
+    return ids;
+  }
+  /** Distinct one-term notes, so a run's hide cap (a quarter of its hideable candidates) has room. */
+  const filler = (s: MemoryStore, n = 40) => s.apply(scope('n-r1'), derived(Array.from({ length: n }, (_, i) => item('note', `filler${i}zz`))));
+  /**
+   * In this order C, A, B: three pitfalls, C seen three times so it outranks A even after B merges into A (a chain).
+   * Then question Q and the newer ledger line L answering it.
+   */
+  const fixture = (s: MemoryStore) => {
+    const ids = seed(s, {
+      C: item('pitfall', P.C), A: item('pitfall', P.A), B: item('pitfall', P.B), Q: item('open_question', P.Q), L: item('ledger', P.L, 'daemon'),
+    });
+    for (let i = 0; i < 2; i++) s.apply(scope('n-r1'), derived([item('pitfall', P.C)]));
+    return ids;
+  };
+  const start = (s: MemoryStore, sc = scope()) => {
+    const r = s.startRun(sc, { trigger: 'manual', model: 'claude-haiku-5-5' });
+    if (!r.ok) throw new Error(r.reason);
+    return r.run.id;
+  };
+  /** End a run as done and start the next. */
+  const next = (s: MemoryStore, run: number) => {
+    s.endRun(undefined, run, 'done');
+    s.finishRun(undefined, run, { usd: 0.01, incomplete: false });
+    return start(s);
+  };
+  const merge = (s: MemoryStore, run: number, ids: number[], reason = 'same fact') => s.gardenApply(undefined, run, { action: 'merge', ids, reason });
+  const supersede = (s: MemoryStore, run: number, id: number, by: number) => s.gardenApply(undefined, run, { action: 'supersede', id, by, reason: 'answered' });
+  const refused = (rule: string) => ({ ok: false, rule, message: expect.stringContaining(`refused (${rule}): `) });
+
+  it('creates no file from its reads, a start, a skip or an undo', () => {
+    const s = open();
+    expect(s.gardenTargets()).toEqual([]);
+    expect(s.runs(undefined)).toEqual([]);
+    expect(s.cost30d(undefined)).toBe(0);
+    expect(s.startRun(scope(), { trigger: 'manual', model: 'm' })).toEqual({ ok: false, reason: 'no memory for this repository yet' });
+    s.skipRun(scope(), { trigger: 'schedule', note: 'untrusted' });
+    expect(() => s.undo(scope(), { run: 1 }, 'human')).toThrow('no such run r1');
+    expect(() => s.run(undefined, 1)).toThrow('no such run r1');
+    expect(() => s.heartbeat(undefined, 1)).toThrow('no such run r1');
+    expect(existsSync(join(home, 'memory'))).toBe(false);
+  });
+
+  it('freezes the candidates, proposes the cluster and the hint, and lists them on page 1', () => {
+    const s = open();
+    const ids = fixture(s);
+    const pin = s.pin(scope(), human, { text: 'never force push shared branches' }).id;
+    s.apply(scope('n-bad'), derived([item('pitfall', 'parser crashes when socket timeout expires badly')], outcome('failed')));
+    s.apply(scope('n-r1', 'n-r1', 'git:example.com/other'), derived([item('pitfall', 'parser crashes when socket timeout expires elsewhere')]));
+    const run = start(s);
+    const byId = (a: number, b: number) => a - b;
+    expect(s.run(undefined, run).stats.candidates.sort(byId)).toEqual([ids.C, ids.A, ids.B, ids.Q, ids.L, pin].sort(byId));
+    const page = s.gardenPage(undefined, run, { callsLeft: 19 });
+    expect(page).toMatchObject({
+      run: `r${run}`, page: 1, pages: 1, now: clock, rules: { hidesLeft: 1, supersedesLeft: 1, callsLeft: 19, minContained: 0.5 },
+      clusters: [{ kind: 'pitfall', keep: `m${ids.C}`, ids: [`m${ids.C}`, `m${ids.A}`, `m${ids.B}`] }],
+      supersedeHints: [{ id: `m${ids.Q}`, by: `m${ids.L}` }],
+    });
+    expect(page).not.toHaveProperty('next');
+    if (!('items' in page)) throw new Error('refused');
+    expect(Object.fromEntries(page.items.map((c) => [c.id, c.protected]))).toEqual({
+      [`m${ids.C}`]: false, [`m${ids.A}`]: false, [`m${ids.B}`]: false, [`m${ids.Q}`]: false, [`m${ids.L}`]: true, [`m${pin}`]: true,
+    });
+    expect(page.items.find((c) => c.id === `m${ids.A}`)).toEqual({
+      id: `m${ids.A}`, kind: 'pitfall', text: P.A, age: '0m', lastSeen: '0m', seen: 1, author: 'agent', protected: false,
+    });
+    expect(s.gardenGet(undefined, run, ids.L)).toMatchObject({ ok: true, item: { id: `m${ids.L}`, body: '' } });
+    expect(row(ids.L).gets).toBe(0);
+    expect(s.gardenGet(undefined, run, idOf('parser crashes when socket timeout expires badly'))).toEqual(refused('not a candidate'));
+  });
+
+  it('pages a large candidate set by cursor, and leaves what the run hid out of its pages and proposals', () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s, 160);
+    const run = start(s);
+    const first = s.gardenPage(undefined, run, { callsLeft: 19 });
+    const second = s.gardenPage(undefined, run, { cursor: 'c2', callsLeft: 18 });
+    expect(first).toMatchObject({ page: 1, pages: 2, next: 'c2', rules: { hidesLeft: 40, supersedesLeft: 10 } });
+    expect(second).toMatchObject({ page: 2, pages: 2, clusters: [], supersedeHints: [] });
+    expect(second).not.toHaveProperty('next');
+    const shown = (p: ReturnType<MemoryStore['gardenPage']>) => ('items' in p ? p.items.map((c) => c.id) : []);
+    expect(shown(first)).toHaveLength(LIMITS.garden.page);
+    expect(shown(first).length + shown(second).length).toBe(165);
+    expect(merge(s, run, [ids.A, ids.B, ids.C])).toEqual({ ok: true, action: 'merge', kept: ids.C, hidden: [ids.A, ids.B], hidesLeft: 38, supersedesLeft: 10 });
+    const after = s.gardenPage(undefined, run, { callsLeft: 17 });
+    expect(after).toMatchObject({ clusters: [], supersedeHints: [{ id: `m${ids.Q}`, by: `m${ids.L}` }] });
+    expect([...shown(after), ...shown(s.gardenPage(undefined, run, { cursor: 'c2', callsLeft: 16 }))]).toHaveLength(163);
+  });
+
+  it('merges into the keep the daemon ranks highest, never writing a pinned keep, with a redacted reason', () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s);
+    for (let i = 0; i < 3; i++) s.apply(scope('n-r1'), derived([item('pitfall', P.B)]));
+    const bumped = clock;
+    const run = start(s);
+    // B was seen four times: it outranks the older C and A whatever order the gardener gives.
+    expect(merge(s, run, [ids.C, ids.A, ids.B], 'dup of AKIAABCDEFGHIJKLMNOP\nline two')).toMatchObject({ ok: true, kept: ids.B, hidden: [ids.C, ids.A] });
+    expect(row(ids.B)).toMatchObject({ seen: 8, updated_at: bumped, invalid_at: null });
+    expect(row(ids.A)).toMatchObject({ invalid_kind: 'merged', merged_into: ids.B, invalid_by: `gardener:r${run}`, invalid_reason: 'dup of [redacted] line two' });
+    expect(s.get(scope(), ids.A)).toMatchObject({ mergedInto: ids.B, invalid: { kind: 'merged', by: `gardener:r${run}` } });
+    // A pinned keep comes first, and its row is never written.
+    const notes = seed(s, { x: item('note', 'release notes live in the wiki'), y: item('note', 'release notes live in the team wiki') });
+    s.pin(scope(), human, { id: notes.x });
+    const run2 = next(s, run);
+    expect(merge(s, run2, [notes.y, notes.x])).toMatchObject({ ok: true, kept: notes.x, hidden: [notes.y] });
+    expect(row(notes.x).seen).toBe(1);
+    expect(s.run(undefined, run2).actions).toEqual([expect.objectContaining({
+      action: 'merge', itemId: notes.y, intoId: notes.x, seenDelta: 0, itemText: 'release notes live in the team wiki', intoText: 'release notes live in the wiki',
+    })]);
+  });
+
+  it('refuses every broken rule by name and counts the refusals', () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s);
+    const more = seed(s, {
+      long: item('pitfall', 'webpack build fails because node modules cache holds stale lockfile'),
+      tiny: item('pitfall', 'flaky ports'),
+      docker: item('pitfall', 'docker compose leaves orphan volumes'),
+      short: item('pitfall', 'webpack build fails'),
+      big: item('pitfall', 'flaky ports in parallel runs'),
+      note: item('note', 'docker compose leaves orphan volumes behind'),
+      cargo: item('note', 'cargo lockfile drifts after rebase'),
+      pin: item('pitfall', 'socket timeout crashes parser on boot'),
+    });
+    s.apply(scope('n-ok'), derived([item('note', 'cargo lockfile drifts after every rebase')], outcome('succeeded')));
+    const cargo2 = idOf('cargo lockfile drifts after every rebase');
+    const pin = s.pin(scope(), human, { id: more.pin }).id;
+    s.apply(scope('n-bad'), derived([item('pitfall', 'parser crashes when socket timeout expires badly')], outcome('failed')));
+    s.apply(scope('n-r1', 'n-r1', 'git:example.com/other'), derived([item('pitfall', 'parser crashes on another repo')]));
+    const run = start(s);
+    s.apply(scope('n-ok'), derived([], outcome('failed'))); // n-ok's note was a candidate and is no longer eligible
+    s.forget(scope(), human, { id: ids.Q, reason: 'moot' });
+    expect(merge(s, run, [ids.A, idOf('parser crashes when socket timeout expires badly')])).toEqual(refused('not a candidate'));
+    expect(merge(s, run, [ids.A, idOf('parser crashes on another repo')])).toEqual(refused('not a candidate'));
+    expect(merge(s, run, [ids.A, ids.A])).toEqual(refused('duplicate'));
+    expect(supersede(s, run, ids.A, ids.A)).toEqual(refused('duplicate'));
+    expect(merge(s, run, [more.cargo, cargo2])).toEqual(refused('ineligible'));
+    expect(supersede(s, run, ids.Q, ids.L)).toEqual(refused('not live'));
+    expect(merge(s, run, [ids.A, more.note])).toEqual(refused('kind'));
+    expect(merge(s, run, [ids.A, more.docker])).toEqual(refused('containment'));
+    expect(supersede(s, run, pin, ids.L)).toEqual(refused('protected'));
+    expect(merge(s, run, [ids.C, pin])).toMatchObject({ ok: true, kept: pin }); // a pin may be the keep
+    expect(supersede(s, run, more.long, more.short)).toEqual(refused('containment')); // the short subset
+    expect(supersede(s, run, more.tiny, more.big)).toEqual(refused('terms'));
+    expect(supersede(s, run, more.short, more.long)).toEqual(refused('newer'));
+    expect(supersede(s, run, more.docker, more.note)).toEqual(refused('kind'));
+    s.apply(scope('n-r1'), derived([item('note', 'docker compose leaves orphan volumes behind')])); // seen twice: it may supersede across kinds
+    expect(supersede(s, run, more.docker, more.note)).toMatchObject({ ok: true, hidden: more.docker, by: more.note });
+    expect(s.run(undefined, run).stats.refused).toEqual({
+      'not a candidate': 2, duplicate: 2, ineligible: 1, 'not live': 1, kind: 2, containment: 2, protected: 1, terms: 1, newer: 1,
+    });
+    s.endRun(undefined, run, 'done');
+    expect(merge(s, run, [ids.A, ids.B])).toEqual(refused('not running'));
+    expect(s.gardenPage(undefined, run, { callsLeft: 1 })).toEqual(refused('not running'));
+  });
+
+  it('caps hides at a quarter of the hideable candidates, and supersedes at ten', () => {
+    const s = open();
+    const ids = fixture(s);
+    const small = start(s); // C, A, B and Q are hideable: one hide
+    expect(merge(s, small, [ids.A, ids.B, ids.C])).toEqual(refused('hides'));
+    expect(merge(s, small, [ids.A, ids.C])).toMatchObject({ ok: true, hidesLeft: 0, supersedesLeft: 0 });
+    expect(supersede(s, small, ids.Q, ids.L)).toEqual(refused('hides'));
+    filler(s);
+    const pairs = Array.from({ length: 11 }, (_, i) => seed(s, {
+      q: item('open_question', `gadget${i} sprocket${i} flange${i} widget${i}`), l: item('ledger', `fixed gadget${i} sprocket${i} flange${i} widget${i}`, 'daemon'),
+    }));
+    const run = next(s, small);
+    for (const p of pairs.slice(0, 10)) expect(supersede(s, run, p.q, p.l)).toMatchObject({ ok: true });
+    expect(supersede(s, run, pairs[10].q, pairs[10].l)).toEqual(refused('supersedes'));
+    expect(row(pairs[0].q)).toMatchObject({ invalid_kind: 'gardener', merged_into: null, invalid_by: `gardener:r${run}` });
+  });
+
+  it('redirects re-derivation along a merge chain to its live end, and revives the row when the end is gone', () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s);
+    const run = start(s);
+    merge(s, run, [ids.A, ids.B]); // B into A
+    merge(s, run, [ids.A, ids.C]); // A into C: B → A → C
+    expect([row(ids.A).seen, row(ids.C).seen]).toEqual([2, 5]);
+    s.apply(scope('n-r1'), derived([item('pitfall', P.B)]));
+    expect(row(ids.C).seen).toBe(6);
+    expect(row(ids.B)).toMatchObject({ invalid_kind: 'merged', merged_into: ids.A });
+    expect(s.add(scope('n-r1'), agent('n-r1'), { kind: 'pitfall', text: P.B })).toEqual({ id: ids.C, existing: true, merged: true });
+    s.forget(scope(), agent(), { id: ids.C, reason: 'stale' });
+    s.apply(scope('n-r1'), derived([item('pitfall', P.B)]));
+    expect(row(ids.B)).toMatchObject({ invalid_kind: null, merged_into: null, seen: 2 });
+  });
+
+  it('follows at most eight hops, and treats merged_into without the merged kind as unset', () => {
+    const s = open();
+    s.apply(scope('n-r1'), derived(Array.from({ length: 10 }, (_, i) => item('note', `hop note ${i}`))));
+    const chain = (n: number) => query((db) => {
+      for (let id = 1; id <= n; id++) {
+        db.prepare(`UPDATE items SET invalid_at = 1, invalid_kind = 'merged', invalid_by = 'gardener:r1', merged_into = ? WHERE id = ?`).run(id + 1, id);
+      }
+    });
+    chain(8); // 1 → … → 9: eight hops
+    s.apply(scope('n-r1'), derived([item('note', 'hop note 0')]));
+    expect([row(1).invalid_kind, row(9).seen]).toEqual(['merged', 2]);
+    chain(9); // 1 → … → 10: nine hops, past the depth
+    s.apply(scope('n-r1'), derived([item('note', 'hop note 0')]));
+    expect(row(1)).toMatchObject({ invalid_kind: null, merged_into: null, seen: 2 });
+    // A v1 daemon's revive clears invalid_* but not merged_into: readers treat the row as unmerged.
+    query((db) => db.prepare(`UPDATE items SET invalid_at = NULL, invalid_kind = NULL, invalid_by = NULL, merged_into = 10 WHERE id = 2`).run());
+    expect(s.get(scope(), 2)).not.toHaveProperty('mergedInto');
+    s.apply(scope('n-r1'), derived([item('note', 'hop note 1')]));
+    expect([row(2).seen, row(10).seen]).toEqual([2, 1]);
+  });
+
+  it('undoes a run newest first back to the rows it found, the second time doing nothing', () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s);
+    const before = rows('SELECT * FROM items ORDER BY id');
+    const run = start(s);
+    merge(s, run, [ids.A, ids.B]);
+    merge(s, run, [ids.A, ids.C]);
+    supersede(s, run, ids.Q, ids.L);
+    expect(s.undo(scope(), { run }, 'human')).toMatchObject({ undone: [{ itemId: ids.Q }, { itemId: ids.A, intoId: ids.C }, { itemId: ids.B, intoId: ids.A }], skipped: [] });
+    expect(rows('SELECT * FROM items ORDER BY id')).toEqual(before);
+    expect(s.undo(scope(), { run }, 'human')).toEqual({ undone: [], skipped: [] });
+    expect(s.run(undefined, run).actions!.map((a) => [a.undoneBy, a.immune])).toEqual([['human', false], ['human', false], ['human', false]]);
+    expect(() => s.undo(scope('n-w1', 'n-r1', 'git:example.com/other'), { run }, 'human')).toThrow(`no such run r${run}`);
+  });
+
+  it('skips actions whose item was revived, retracted by someone else or purged since', () => {
+    const s = open();
+    const ids = fixture(s);
+    const notes = seed(s, { x: item('note', 'release notes live in the wiki'), y: item('note', 'release notes live in the team wiki') });
+    filler(s);
+    const run = start(s);
+    merge(s, run, [ids.A, ids.B]);
+    supersede(s, run, ids.Q, ids.L);
+    merge(s, run, [notes.x, notes.y]);
+    s.forget(scope(), agent(), { id: ids.A, reason: 'stale' });
+    s.apply(scope('n-r1'), derived([item('pitfall', P.B)])); // its end is gone: B revives
+    s.forget(scope(), human, { id: ids.Q, reason: 'moot' });
+    s.forget(scope(), human, { id: notes.y, reason: 'leak', purge: true });
+    expect(s.undo(scope(), { run }, 'human')).toEqual({
+      undone: [],
+      skipped: [
+        { actionId: 3, itemId: notes.y, reason: 'purged' }, { actionId: 2, itemId: ids.Q, reason: 'retracted since by human' },
+        { actionId: 1, itemId: ids.B, reason: 'live again' },
+      ],
+    });
+  });
+
+  it('gives a pinned keep back nothing it never got, after an unpin', () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s);
+    s.pin(scope(), human, { id: ids.A });
+    const run = start(s);
+    expect(merge(s, run, [ids.B, ids.A])).toMatchObject({ ok: true, kept: ids.A });
+    s.pin(scope(), human, { id: ids.A, unpin: true });
+    s.apply(scope('n-r1'), derived([item('pitfall', P.A)]));
+    s.undo(scope(), { run }, 'human');
+    expect([row(ids.A).seen, row(ids.B).invalid_at]).toEqual([2, null]);
+  });
+
+  it('makes a pair immune after undo m<id>, or undo r<id> with immune, never after the daemon undo; a pin clears it', () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s);
+    let run = start(s);
+    merge(s, run, [ids.A, ids.B]);
+    expect(s.undo(scope(), { item: ids.B }, 'human')).toMatchObject({ undone: [{ itemId: ids.B, intoId: ids.A }] });
+    run = next(s, run);
+    expect(merge(s, run, [ids.A, ids.B])).toEqual(refused('immune'));
+    expect(s.gardenPage(undefined, run, { callsLeft: 9 })).toMatchObject({ clusters: [{ ids: [`m${ids.C}`, `m${ids.A}`, `m${ids.B}`] }] });
+    expect(merge(s, run, [ids.B, ids.C])).toMatchObject({ ok: true, kept: ids.C }); // B may still go into another keep
+    s.undo(scope(), { run }, 'human');
+    run = next(s, run);
+    expect(merge(s, run, [ids.B, ids.C])).toMatchObject({ ok: true });
+    s.undo(scope(), { run, immune: true }, 'daemon');
+    expect(s.run(undefined, run).actions![0]).toMatchObject({ undoneBy: 'daemon', immune: false });
+    run = next(s, run);
+    expect(merge(s, run, [ids.B, ids.C])).toMatchObject({ ok: true });
+    s.undo(scope(), { run, immune: true }, 'human');
+    run = next(s, run);
+    expect(merge(s, run, [ids.B, ids.C])).toEqual(refused('immune'));
+    s.pin(scope(), human, { id: ids.C });
+    s.pin(scope(), human, { id: ids.C, unpin: true });
+    expect(merge(s, run, [ids.B, ids.C])).toMatchObject({ ok: true });
+    expect(() => s.undo(scope(), { item: ids.Q }, 'human')).toThrow(`m${ids.Q} was never hidden by the gardener`);
+  });
+
+  it("hands the panel's restore, and pin by id, of a gardener-hidden item to the undo", () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s);
+    const run = start(s);
+    merge(s, run, [ids.A, ids.B]);
+    supersede(s, run, ids.Q, ids.L);
+    expect(s.restore(scope(), human, { id: ids.B })).toMatchObject({ id: ids.B, seen: 1 });
+    expect(row(ids.A).seen).toBe(1);
+    expect(s.pin(scope(), human, { id: ids.Q })).toMatchObject({ pinned: true });
+    expect(s.run(undefined, run).actions!.map((a) => [a.itemId, a.undoneBy, a.immune])).toEqual([[ids.B, 'human', true], [ids.Q, 'human', false]]);
+    expect(rows(`SELECT json_extract(data, '$.itemId') AS id FROM episodes WHERE kind = 'restore'`)).toEqual([{ id: ids.B }]);
+  });
+
+  it('purges the items merged into a purged keep, down the chain, and blanks their reasons', () => {
+    const s = open();
+    const ids = fixture(s);
+    filler(s);
+    const run = start(s);
+    merge(s, run, [ids.A, ids.B], 'mentions plughword');
+    merge(s, run, [ids.A, ids.C], 'mentions plughword');
+    s.forget(scope(), human, { id: ids.C, reason: 'secret', purge: true });
+    for (const id of [ids.A, ids.B, ids.C]) expect(row(id)).toMatchObject({ text: '', invalid_kind: 'human', merged_into: null });
+    expect(rows('SELECT DISTINCT reason FROM garden_actions')).toEqual([{ reason: '' }]);
+  });
+
+  it('holds one lease per file while its heartbeat is fresh', () => {
+    const s = open();
+    fixture(s);
+    s.apply(scope('n-r1', 'n-r1', 'git:example.com/other'), derived([item('note', 'elsewhere')]));
+    const run = start(s);
+    const other = scope('n-w1', 'n-r1', 'git:example.com/other');
+    clock += LIMITS.garden.leaseMs - 1000;
+    s.heartbeat(undefined, run);
+    const beat = clock;
+    clock += LIMITS.garden.leaseMs - 1000;
+    expect(s.startRun(other, { trigger: 'schedule', model: 'm' })).toEqual({ ok: false, reason: `garden run r${run} holds this memory file's lease` });
+    clock += 2000;
+    expect(s.startRun(other, { trigger: 'schedule', model: 'm' })).toMatchObject({ ok: true, run: { id: run + 1, repoKey: 'git:example.com/other', state: 'running' } });
+    s.setRunNode(undefined, run, 'n-gardener');
+    s.countCalls(undefined, run, { calls: 7, outputChars: 12_345 });
+    expect(s.run(undefined, run)).toMatchObject({ nodeId: 'n-gardener', heartbeatAt: beat, stats: { calls: 7, outputChars: 12_345 } });
+  });
+
+  it('finishes a stale run once as interrupted with its cost, and ends and reverts runs only by the rules', () => {
+    const s = open();
+    fixture(s);
+    const run = start(s);
+    clock += LIMITS.garden.leaseMs * 2;
+    const done = s.finishRun(undefined, run, { usd: 0.25, incomplete: true });
+    expect(done).toMatchObject({ state: 'interrupted', costUsd: 0.25, costIncomplete: true, endedAt: clock, stats: { after: { live: { pitfall: 3 } } } });
+    expect(s.finishRun(undefined, run, { usd: 9, incomplete: false })).toEqual(done);
+    expect(s.verifyRun(undefined, run)).toEqual([]);
+    expect(s.endRun(undefined, run, 'failed')).toBe(false);
+    expect(s.endRun(undefined, run, 'reverted', 'post-run check failed')).toBe(true);
+    expect(s.endRun(undefined, run, 'reverted')).toBe(false);
+    expect(s.run(undefined, run)).toMatchObject({ state: 'reverted', note: 'post-run check failed', costUsd: 0.25 });
+    const live = start(s);
+    expect(s.endRun(undefined, live, 'capped', 'cap')).toBe(true);
+    expect(s.endRun(undefined, live, 'timeout')).toBe(false);
+    expect(s.finishRun(undefined, live, { usd: 0.1, incomplete: false })).toMatchObject({ state: 'capped', costUsd: 0.1 });
+    expect(s.cost30d(undefined)).toBeCloseTo(0.35);
+    clock += 31 * DAY;
+    expect(s.cost30d(undefined)).toBe(0);
+  });
+
+  it('records a skip once per repeated note, and leaves skips out of the recent runs', () => {
+    const s = open();
+    fixture(s);
+    s.skipRun(scope(), { trigger: 'schedule', note: 'run claude once in /repo to trust it' });
+    s.skipRun(scope(), { trigger: 'schedule', note: 'run claude once in /repo to trust it' });
+    s.skipRun(scope(), { trigger: 'schedule', note: '/repo is missing' });
+    expect(s.runs(undefined).map((r) => [r.state, r.note])).toEqual([['skipped', '/repo is missing'], ['skipped', 'run claude once in /repo to trust it']]);
+    expect(s.gardenTargets()[0].recent).toEqual([]);
+  });
+
+  it('lists each repository with its new items and proposals above the last run’s watermark', () => {
+    const s = open();
+    const ids = fixture(s);
+    s.pin(scope(), human, { text: 'pinned rules are not new items' });
+    s.apply(scope('n-r1', 'n-r1', 'git:example.com/other'), derived([item('note', 'elsewhere')]));
+    expect(s.gardenTargets()).toEqual([
+      { key: '_default', repoKey: 'git:example.com/a/b', repoPath: '/repo', newItems: 4, proposals: 2, recent: [] },
+      { key: '_default', repoKey: 'git:example.com/other', repoPath: '/repo', newItems: 1, proposals: 0, recent: [] },
+    ]);
+    const run = start(s);
+    s.endRun(undefined, run, 'done');
+    s.finishRun(undefined, run, { usd: 0.02, incomplete: false });
+    s.apply(scope('n-r1'), derived([item('pitfall', 'parser crashes when socket timeout expires again')]));
+    expect(s.gardenTargets()[0]).toMatchObject({ newItems: 1, proposals: 1, recent: [{ id: run, state: 'done', watermark: ids.L + 2 }] });
+  });
+
+  describe('verifyRun', () => {
+    it('passes an in-run chain and a human forget of its keep after the merge', () => {
+      const s = open();
+      const ids = fixture(s);
+      filler(s);
+      const run = start(s);
+      merge(s, run, [ids.A, ids.B]);
+      merge(s, run, [ids.A, ids.C]);
+      supersede(s, run, ids.Q, ids.L);
+      clock += 1000;
+      s.forget(scope(), human, { id: ids.C, reason: 'wrong' });
+      s.endRun(undefined, run, 'done');
+      s.finishRun(undefined, run, { usd: 0.03, incomplete: false });
+      expect(s.verifyRun(undefined, run)).toEqual([]);
+      expect(s.run(undefined, run).stats).not.toHaveProperty('violations');
+    });
+
+    it('fails a merge whose chain ends on an item the run superseded, which the daemon undo then reverts', () => {
+      const s = open();
+      const ids = fixture(s);
+      const newer = seed(s, { D: item('pitfall', 'parser crashes when socket timeout expires under load') });
+      filler(s);
+      const run = start(s);
+      expect(merge(s, run, [ids.B, ids.C])).toMatchObject({ ok: true, kept: ids.C });
+      expect(supersede(s, run, ids.C, newer.D)).toMatchObject({ ok: true });
+      s.endRun(undefined, run, 'done');
+      s.finishRun(undefined, run, { usd: 0.03, incomplete: false });
+      const found = s.verifyRun(undefined, run);
+      expect(found).toEqual([`m${ids.B} merges into m${ids.C}, which r${run} also hid`]);
+      expect(s.run(undefined, run).stats.violations).toEqual(found);
+      expect(s.undo(scope(), { run }, 'daemon').undone).toHaveLength(2);
+      expect(s.endRun(undefined, run, 'reverted', found.join('; '))).toBe(true);
+      expect([row(ids.B).invalid_at, row(ids.C).invalid_at, row(ids.C).seen]).toEqual([null, null, 3]);
+    });
+
+    it('fails a row hidden with no action, and a pin that left the digest', () => {
+      const s = open();
+      const ids = fixture(s);
+      const pin = s.pin(scope(), human, { text: 'never force push shared branches' }).id;
+      const run = start(s);
+      query((db) => db.prepare(`UPDATE items SET invalid_at = 1, invalid_kind = 'gardener', invalid_by = ? WHERE id = ?`).run(`gardener:r${run}`, ids.A));
+      s.endRun(undefined, run, 'done');
+      const stats = s.finishRun(undefined, run, { usd: 0, incomplete: false }).stats;
+      expect(stats.before.digest.ids).toContain(pin);
+      const after = { ...stats, after: { ...stats.after!, digest: { ids: [], chars: 0 } } };
+      query((db) => db.prepare('UPDATE garden_runs SET stats = ? WHERE id = ?').run(JSON.stringify(after), run));
+      expect(s.verifyRun(undefined, run)).toEqual([`m${ids.A} is hidden by r${run} with no action`, `pin m${pin} left the orchestrator digest`]);
+    });
   });
 });
