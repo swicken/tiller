@@ -296,7 +296,7 @@ describe('replay.ts', () => {
     expect(s.find((x) => x.query.endsWith('r1-title') && x.ranker === 'F0')).toMatchObject({ recall: 1, rr: 1, miss: false, cluster: 'n-00000003' });
   });
 
-  it('pads with other repos\' commits, oldest first and deduplicated, never the own or a bloksec repo', () => {
+  it('pads with other repos\' commits, oldest first and deduplicated, never a gate tree\'s or a bloksec repo', () => {
     const ws = scratch('tl-bench-ws-');
     const git = (dir: string, ...a: string[]) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
     const repo = (path: string, commits: [string, number][]) => {
@@ -312,8 +312,13 @@ describe('replay.ts', () => {
     repo(join(ws, 'more'), [['First more', 1000], ['Shared subject', 4000]]);
     repo(join(ws, 'bloksec', 'api'), [['Secret work', 1500]]);
     repo(join(ws, 'own'), [['Own work', 500]]);
-    const d = distractors(ws, { ...tree, cwd: join(ws, 'own') });
-    expect(d.map((x) => x.text)).toEqual(['First more', 'Second other', 'Shared subject']);
+    // The other gate tree's repo, and a second clone of it found by name.
+    repo(join(ws, 'peer'), [['Peer work', 600]]);
+    repo(join(ws, 'clones', 'peer'), [['Peer clone work', 700]]);
+    const own = { cwd: join(ws, 'own'), repo: 'own' }, peer = { cwd: join(ws, 'peer'), repo: 'peer' };
+    expect(distractors(ws, [own, peer]).map((x) => x.text)).toEqual(['First more', 'Second other', 'Shared subject']);
+    // The literal §2.2 rule, kept for the record: only the tree's own repo left out.
+    expect(distractors(ws, [own]).map((x) => x.text)).toEqual(['Peer work', 'Peer clone work', 'First more', 'Second other', 'Shared subject']);
 
     const dir = scratch('tl-bench-s-');
     const padding = Array.from({ length: 12 }, (_, i) => ({ at: i, text: `distractor ${i % 10}`, body: '' }));

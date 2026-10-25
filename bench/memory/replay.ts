@@ -108,10 +108,13 @@ export function findRepos(dir: string, depth = 4): string[] {
 
 const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
-/** Commit subjects and bodies, read-only, of every repo under workspace except excluded ones and the tree's own; oldest first, deduplicated. */
-export function distractors(workspace: string, tree: Tree): Distractor[] {
-  const own = real(tree.cwd);
-  const repos = findRepos(workspace).filter((r) => !isExcludedRepo(real(r)) && real(r) !== own && basename(r) !== tree.repo);
+/**
+ * Commit subjects and bodies, read-only, of every repo under workspace except excluded ones and the given trees' own
+ * (by path or name); oldest first, deduplicated.
+ */
+export function distractors(workspace: string, exclude: Pick<Tree, 'cwd' | 'repo'>[]): Distractor[] {
+  const paths = new Set(exclude.map((t) => real(t.cwd))), names = new Set(exclude.map((t) => t.repo));
+  const repos = findRepos(workspace).filter((r) => !isExcludedRepo(real(r)) && !paths.has(real(r)) && !names.has(basename(r)));
   const all: Distractor[] = [];
   for (const r of repos) {
     let log: string;
@@ -174,6 +177,17 @@ export const GATE_SETS: GateSet[] = ['r1', 'r2a', 'r2b', 's'];
 /** §2.2: 5k and 20k items, or the most available. */
 export const SCALE = [5000, 20_000];
 
+/**
+ * The orchestrator's reading of §2.2, recorded in the frozen configuration: the literal rule (pad with every repo but
+ * the tree's own) let a tree's irrelevant queries, the other gate tree's titles, match that tree's own commit messages,
+ * which breaks "zero relevance by construction" and inflated tau (0.805 against 0.586 in the 2026-10-25 dry run).
+ */
+export const PADDING_RULE = {
+  id: 'S-padding',
+  rule: "each tree's S padding leaves out its own repo and the repos its irrelevant queries come from (every gate tree's repo)",
+  reason: 'under the literal rule the other gate tree\'s titles match near-copies of themselves in that tree\'s commit log, so they are not irrelevant by construction',
+};
+
 export interface GateOptions {
   /** Checked with checkRoot by the caller. */
   root: string;
@@ -214,30 +228,45 @@ export async function gate(o: GateOptions): Promise<RetrievalResult> {
     const stores = new Map<string, ReturnType<typeof scaledStores>>();
     const irrelevant = new Map<string, string[]>();
     const taus = new Map<string, number[]>();
+    const literal: number[] = [];
+    /** Top-1 cosines of the tree's irrelevant queries on a store, per embedder, into `into(key)`. */
+    const topCosines = async (store: { file: string; repoKey: string }, texts: string[], es: Embedder[], into: (key: string) => number[]) => {
+      const view = new StoreView(store.file, store.repoKey);
+      try {
+        for (const e of es) {
+          const ix = await vectorIndex(view, e);
+          for (const text of texts) into(e.key).push(await topCosine(ix, e, text));
+        }
+      } finally {
+        view.close();
+      }
+    };
     if (want.has('s')) {
+      const workspace = o.workspace ?? join(homedir(), 'workspace');
+      // A tree's irrelevant queries are the other gate trees' titles, so its padding leaves out those trees' repos as
+      // well as its own (PADDING_RULE): every gate tree's repo.
+      const padding = distractors(workspace, trees);
       for (const t of trees) {
-        const padding = distractors(o.workspace ?? join(homedir(), 'workspace'), t);
         const s = scaledStores(t, padding, o.scale ?? SCALE, tmp);
         stores.set(t.rootId, s);
-        log(`S ${t.rootId}: ${padding.length} distractors available; stores of ${s.map((x) => x.items).join(', ')} items`);
+        log(`S ${t.rootId}: ${padding.length} distractors available; stores of ${s.map((x) => x.items).join(', ')} items (the most available up to ${(o.scale ?? SCALE).join(', ')})`);
         irrelevant.set(t.rootId, [...new Set([...trees.filter((x) => x !== t).flatMap((x) => x.nodes.map((n) => n.title)), ...zero])]);
-        const largest = s[s.length - 1];
-        const view = new StoreView(largest.file, largest.repoKey);
-        try {
-          for (const e of all) {
-            const ix = await vectorIndex(view, e);
-            const top = taus.get(e.key) ?? [];
-            taus.set(e.key, top);
-            for (const text of irrelevant.get(t.rootId)!) top.push(await topCosine(ix, e, text));
-          }
-        } finally {
-          view.close();
+        await topCosines(s[s.length - 1], irrelevant.get(t.rootId)!, all, (k) => (taus.get(k) ?? taus.set(k, []).get(k)!));
+        // The literal §2.2 padding (only the tree's own repo left out), for the record: its tau, never used.
+        const potion = all.filter((e) => `H:${e.key}` === CANDIDATE);
+        if (potion.length) {
+          const lit = scaledStores(t, distractors(workspace, [t]), [Math.max(...(o.scale ?? SCALE))], mkdtempSync(join(tmp, 'literal-')));
+          await topCosines(lit[lit.length - 1], irrelevant.get(t.rootId)!, potion, () => literal);
         }
       }
     }
     const tauOfKey = (k: string) => (taus.has(k) ? tauOf(taus.get(k)!) : NaN);
     const exploratoryTau = Object.fromEntries(explore.flatMap((k) => (taus.has(k) ? [[k, tauOfKey(k)]] : [])));
-    const { config, written, differs } = freeze(o.root, makeConfig(tauOfKey('potion'), fBest, Object.keys(exploratoryTau).length ? exploratoryTau : undefined));
+    const computed: GateConfig = {
+      ...makeConfig(tauOfKey('potion'), fBest, Object.keys(exploratoryTau).length ? exploratoryTau : undefined),
+      ...(want.has('s') ? { interpretations: [{ ...PADDING_RULE, tau: tauOfKey('potion'), tauLiteral: literal.length ? tauOf(literal) : NaN }] } : {}),
+    };
+    const { config, written, differs } = freeze(o.root, computed);
     log(written ? 'froze the configuration (§2.4)' : Number.isFinite(config.tau) ? 'using the frozen configuration' : 'no tau: not frozen, FTS only');
     if (differs.length) log(`this run computes different ${differs.join(', ')} than the frozen file; the frozen values stand (re-tuning is a new pre-registration)`);
     const es = all.filter((e) => Number.isFinite(tauFor(config, e.key)));

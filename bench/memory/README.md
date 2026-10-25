@@ -23,10 +23,15 @@ npm run bench:memory -- retrieval --eval [--sets r1,r2a,r2b,s] [--explore minilm
     [--deps ~/.tiller-bench/deps]                                                    # Layer R scoring ($0)
 npm run bench:memory -- retrieval --collect [--harness auto] [--model claude=ID,codex=ID] [--effort E] \
     [--budget-usd 18] [--limit N] [--parallel 2] [--node-timeout-min 10] [--keep] [--yes]   # R2b collection (agent time)
-npm run bench:memory:replay -- --retrieval [--scale 5000,20000]                     # R1 and S ($0, aggregates only)
+npm run bench:memory:replay -- --retrieval [--scale [5000,20000]] --root DIR [--deps ~/.tiller-bench/deps] \
+    [--explore minilm,bge,arctic] [--home ~/.tiller] [--workspace ~/workspace]      # R1, S, R2a and R3 ($0, aggregates only)
 ```
 
-Every command takes `--root DIR` (default `~/.tiller-bench`). `--collect` also takes `--home` (the tiller home whose sessions it reads, default `~/.tiller`).
+Every `bench:memory` command takes `--root DIR` (default `~/.tiller-bench`); `bench:memory:replay` requires it. `--collect` also takes `--home` (the tiller home whose sessions it reads, default `~/.tiller`). Both refuse a `--root` inside `~/.tiller`, the home they read, or this checkout.
+
+`--golden` writes `fixtures/retrieval/wordpiece-golden.json`: the reference tokenizer's ids, without special tokens and with `[UNK]` kept, for the edge cases in `retrieval/embedders.ts` and every R2a corpus text. W1's in-tree WordPiece must match it.
+
+Models are pinned by revision, size and sha256 in `retrieval/models.ts`. They download on first use into `<root>/models/<key>@<rev7>/` and are verified in memory before they are renamed into place; a file that fails verification is an error, never replaced.
 
 Without `--deps`, `--eval` scores the FTS variants only; that is what CI runs. The reference tokenizer and the exploratory ONNX models load from a scratch install outside the repo's dependencies, made once by the human:
 
@@ -77,6 +82,30 @@ Each node gets its own daemon and store, so one harness's report never reaches t
 ```
 
 The first query of each run is the scored R2b query (`r2bQueries` in `lib/queries.ts` turns the file into `RetrievalQuery`s); later queries are reformulations kept for reading. After collection, R2b rescoring reads only this file, so it is free and deterministic.
+
+## R1, R2a and S
+
+- **R1:** every gate-tree node with at least one file-overlap label is scored twice: by its title and by its brief (title plus prompt). Each is scored against the store replayed from what closed before the node was created. R2b queries are scored in the same store as their node's R1 queries.
+- **R2a:** `fixtures/retrieval/corpus.json` holds 81 hand-written targets for a fictional project, ten of them near-miss distractors. Every Layer A fixture's items are added to it, 357 items in all. `needs.json` holds 40 needs, ten of them with no relevant item. Each need has a lexical query, two paraphrases, a synonym swap and a Codex/Pi phrasing. `retrieval.test.ts` enforces two rules:
+  - paraphrases share no `ftsTerms` token with any relevant target, and F0 finds none of them;
+  - every other query keeps a shared token.
+
+  `floors.json` holds F0-F2's R2a scores as a ratchet.
+- **S:** each tree's final replayed store is padded with commit subjects and bodies (`git log`, read-only) from repos under `--workspace`, oldest first and deduplicated, into temp stores that are deleted afterwards. The padding leaves out bloksec repos and **every gate tree's repo**:
+  - Each tree's irrelevant queries are the other gate trees' titles, plus R2a's zero-relevance queries.
+  - The literal §2.2 rule left out only the tree's own repo. Those titles then matched near-copies of themselves in the other tree's commit log, so they were not irrelevant by construction.
+  - The orchestrator chose this reading, and the frozen configuration records it under `interpretations`, with both τ values.
+  - On this machine about 1k commits remain, so the S stores are the most available, about 1.1k-1.9k items, not 5k and 20k.
+
+## The configuration freeze
+
+The first run that has an embedder and `--scale` writes `<root>/results/retrieval-config.json`:
+- **τ:** the 95th percentile of potion's top-1 cosine for irrelevant queries on each tree's largest S store, pooled.
+- **F-best:** the F variant with the best R2a recall@8.
+- **Exploratory floors:** each exploratory model gets its own floor by the same rule, since cosine scales differ between models.
+- **The fixed constants.**
+
+Later runs use the file and report any value they would compute differently. Delete it only for a new, recorded pre-registration.
 
 ## The verdict
 

@@ -23,7 +23,11 @@ const SETS: QuerySet[] = ['r1-title', 'r1-brief', 'r2b', 'r2a', 's-irrelevant'];
  * The frozen configuration. Each exploratory embedder gets its own floor by tau's rule, because cosine scales differ
  * between models; those floors are reported, never deciding.
  */
-export type GateConfig = RetrievalConfig & { exploratoryTau?: Record<string, number> };
+export type GateConfig = RetrievalConfig & {
+  exploratoryTau?: Record<string, number>;
+  /** Readings of the plan fixed before scoring, with the values they change (replay.ts PADDING_RULE). */
+  interpretations?: { id: string; rule: string; reason: string; tau: number; tauLiteral: number }[];
+};
 
 /** The pre-registered constants; tau and fBest come from §2.4 step 1. */
 export function makeConfig(tau: number, fBest: FtsVariant, exploratoryTau?: Record<string, number>): GateConfig {
@@ -341,7 +345,7 @@ export function freeze(root: string, computed: GateConfig): { config: GateConfig
   if (existsSync(path)) {
     const config = JSON.parse(readFileSync(path, 'utf8')) as GateConfig;
     const differs = (Object.keys(computed) as (keyof GateConfig)[])
-      .filter((k) => !(k === 'tau' && !Number.isFinite(computed.tau)) && JSON.stringify(config[k]) !== JSON.stringify(computed[k]));
+      .filter((k) => !((k === 'tau' || k === 'interpretations') && !Number.isFinite(computed.tau)) && JSON.stringify(config[k]) !== JSON.stringify(computed[k]));
     return { config, written: false, differs };
   }
   if (!Number.isFinite(computed.tau)) return { config: computed, written: false, differs: [] };
@@ -597,7 +601,12 @@ export function printVerdict(r: RetrievalResult): string {
     `Frozen configuration: tau ${f3(cfg.tau)}, F-best ${cfg.fBest}, seed ${cfg.seed}, ${cfg.resamples} resamples, RRF k ${cfg.rrfK}, pool ${cfg.pool}, `
       + `vector-only ≤ ${cfg.vectorOnlyMax} of ${cfg.k}, weights R1-title ${cfg.weights['r1-title']} / R2b ${cfg.weights.r2b}`
       + `${floors ? `; exploratory floors ${floors}` : ''}`,
+    ...(cfg.interpretations ?? []).map((i) => `Interpretation ${i.id}: ${i.rule}; tau ${f3(i.tau)} (the literal rule gives ${f3(i.tauLiteral)}). Why: ${i.reason}`),
     `Sets: ${r.sets.join(', ')}; rankers: ${r.rankers.join(', ')}`,
+    ...(r.noise.length ? [`S stores (the most available, up to the targets): ${[...new Set(r.noise.map((n) => `${n.tree} ${n.items}`))].join(', ')} items`] : []),
+    ...(cfg.fBest === 'F0' ? [] : [`F-best ${cfg.fBest} (from R2a) against F0 on R1-title: ${r.comparisons
+      .filter((c) => c.set === 'r1-title' && !c.harness && c.ranker === cfg.fBest && c.baseline === 'F0')
+      .map((c) => `${c.tree ?? 'all'} ${signed(c.deltaRecallAtK.value)}${ciText(c.deltaRecallAtK)}`).join(', ') || 'not scored'}`]),
     '',
     'Slice                       Ranker     Queries  recall@8          MRR@20  miss@8',
   ];
