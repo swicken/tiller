@@ -458,11 +458,99 @@ describe('Gardener finish paths', () => {
     expect(lastRun()).toMatchObject({ state: 'reverted', note: 'post-run check: m4 hidden without an action row' });
   });
 
-  it('fails the run without charging when the node cannot spawn', async () => {
-    host.spawnGardener = async () => { throw new Error('no such account'); };
+  it('fails the run without charging only when the spawn refuses before launching anything', async () => {
+    host.spawnGardener = () => { throw new Error('no such account'); };
     store.targets = [target()];
     expect(await g.runNow({ repoPath: repo })).toEqual({ ok: false, reason: 'the gardener could not start: no such account' });
     expect(lastRun()).toMatchObject({ state: 'failed', note: 'spawn failed: no such account', costUsd: 0, costIncomplete: false });
+
+    host.spawnGardener = async () => { throw new Error('the pty died'); }; // a process may have run
+    expect(await g.runNow({ repoPath: repo })).toEqual({ ok: false, reason: 'the gardener could not start: the pty died' });
+    await flush();
+    expect(lastRun()).toMatchObject({ id: 2, state: 'failed', costUsd: 0.25, costIncomplete: true });
+  });
+
+  it('charges a run the daemon stops while it spawns, and stops the node once it is up', async () => {
+    let up!: (id: string) => void;
+    host.spawnGardener = () => new Promise((ok) => { up = ok; });
+    store.targets = [target()];
+    const started = g.runNow({ repoPath: repo });
+    await flush();
+    await g.stop();
+    expect(lastRun()).toMatchObject({ state: 'interrupted', costUsd: 0.25, costIncomplete: true });
+    up('g9');
+    expect(await started).toEqual({ ok: false, reason: 'the daemon stopped' });
+    expect(log).toContain('stop g9');
+  });
+
+  it('spawns nothing and charges nothing when the daemon stops while the previous node closes', async () => {
+    let closed!: () => void;
+    host.closePreviousGardener = () => new Promise((ok) => { closed = ok; });
+    store.targets = [target()];
+    const started = g.runNow({ repoPath: repo });
+    await flush();
+    await g.stop();
+    closed();
+    expect(await started).toEqual({ ok: false, reason: 'the daemon stopped' });
+    expect(host.spawns).toEqual([]);
+    expect(lastRun()).toMatchObject({ state: 'interrupted', costUsd: 0, costIncomplete: false });
+  });
+
+  it('waits for a priced measure at turn end, not one from earlier in the turn', async () => {
+    let id = await startScheduled();
+    host.records.get(id)!.spentUsd = 0.02;
+    g.measured(id, { cost: { usd: 0.02 } });
+    vi.setSystemTime(Date.now() + 2_000); // the turn went on: that measure misses its last request
+    g.turnDone(id);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flush();
+    expect(lastRun()).toMatchObject({ state: 'done', costUsd: 0.25, costIncomplete: true });
+
+    expect((await g.runNow({ repoPath: repo })).ok).toBe(true);
+    id = 'g2';
+    host.records.get(id)!.spentUsd = 0.03;
+    g.measured(id, { cost: { usd: 0.03 } });
+    vi.setSystemTime(Date.now() + 500); // the turn-end measure, just before the Stop hook
+    g.turnDone(id);
+    await flush();
+    expect(log).toContain(`stop ${id}`); // no wait
+    expect(lastRun()).toMatchObject({ id: 2, state: 'done', costUsd: 0.03, costIncomplete: false });
+  });
+
+  it('caps the run on garden calls alone when the hooks are silent', async () => {
+    const id = await startScheduled();
+    for (let i = 0; i < 20; i++) expect(g.toolCall(id, 'garden_get').ok).toBe(true);
+    expect(g.toolCall(id, 'garden_get')).toEqual({ ok: false, error: 'garden run r1 has ended: tool-call cap: 20' });
+    await flush();
+    expect(lastRun()).toMatchObject({ state: 'capped', note: 'tool-call cap: 20', costUsd: 0.25, stats: { calls: 21 } });
+  });
+
+  it('keeps the watchdog\'s stops when the store cannot be written', async () => {
+    await startScheduled();
+    vi.spyOn(store, 'heartbeat').mockImplementation(() => { throw new Error('database is locked'); });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await flush();
+    expect(lastRun()).toMatchObject({ state: 'timeout', costUsd: 0.25 });
+  });
+
+  it.each(['finishRun', 'verifyRun', 'run'] as const)('still undoes a tripped run and sets its outcome when %s throws', async (method) => {
+    const id = await startScheduled();
+    vi.spyOn(store, method).mockImplementation(() => { throw new Error('disk I/O error'); });
+    g.hook(id, pre('Bash'));
+    await flush();
+    expect(store.undos).toEqual([{ target: { run: 1 }, by: 'daemon' }]);
+    expect(host.outcomes).toEqual([{ id, outcome: 'failed', summary: method === 'run' ? 'failed: the record of r1 could not be read; see the daemon log' : expect.stringMatching(/^failed \(tripwire: Bash\)/) }]);
+    if (method !== 'finishRun') expect(lastRun()).toMatchObject({ costUsd: 0.25, costIncomplete: true });
+  });
+
+  it('reverts a done run whose post-run check cannot run (fail closed)', async () => {
+    const id = await startScheduled();
+    vi.spyOn(store, 'verifyRun').mockImplementation(() => { throw new Error('disk I/O error'); });
+    g.measured(id, { cost: { usd: 0.02 } });
+    g.turnDone(id);
+    await flush();
+    expect(lastRun()).toMatchObject({ state: 'reverted', note: 'post-run check: the post-run check could not run' });
+    expect(host.outcomes[0].outcome).toBe('failed');
   });
 });
 
@@ -491,6 +579,16 @@ describe('Gardener recovery', () => {
     expect(store.runsById.get(3)).toMatchObject({ state: 'interrupted', costUsd: 0.25, costIncomplete: true });
     expect(store.runsById.get(2)!.state).toBe('running');
     expect(host.outcomes.map((o) => o.id)).toEqual(['had']);
+  });
+
+  it('leaves a run whose lease already ended to its owner', async () => {
+    writeHome({});
+    store.runsById.set(5, runView({ id: 5, state: 'running', nodeId: 'old' }));
+    host.records.set('old', { id: 'old', parentId: null, kind: 'claude', title: 't', cwd: repo, gardener: { repoKey, runId: 5 } } as NodeRecord);
+    vi.spyOn(store, 'endRun').mockReturnValueOnce(false); // its owner ended it first
+    await g.tick();
+    expect(log).not.toContain('finishRun');
+    expect(host.outcomes).toEqual([]);
   });
 });
 
