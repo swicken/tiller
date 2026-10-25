@@ -34,9 +34,9 @@ export function checkDeps(m: Mgr, p: Pending, since: number): { met: string[]; u
 /** Working now, or launched with a prompt whose first turn has not begun. */
 export const working = (rt?: NodeRuntime) => !!rt && (!!rt.starting || (!!rt.session && rt.status?.state === 'working'));
 
-/** Claude nodes working now, or launched with a prompt whose first turn has not begun. */
+/** Claude nodes working now, or launched with a prompt whose first turn has not begun; never a memory gardener (D3). */
 function workingCount(m: NodeManager): number {
-  return m.registry.list().filter((n) => isAgentKind(n.kind) && working(m.runtimes.get(n.id))).length;
+  return m.registry.list().filter((n) => isAgentKind(n.kind) && !n.gardener && working(m.runtimes.get(n.id))).length;
 }
 
 /**
