@@ -91,6 +91,7 @@ Capturing at the daemon proves where text came from, not that it is true. So:
 - **A failed node contributes daemon facts only:** date, node id, harness, title, verdict, gate state and branch fate. For an unresolved gate failure, only the command, the daemon's own exit line and an error code such as `TS2345`. Its summary and the failing output stay in the item's body and are never pushed.
 - **Each line says who said it.** An agent's item shows the node, harness and model; `· daemon` marks text made only of daemon facts.
 - **Agent retractions are not sticky; human ones are.** A node's `memory_forget` hides an item until later work records the same thing again, which revives it. The human's `tl memory forget` is permanent, as is a human supersede. Agents cannot retract, supersede or purge a pin.
+- **The [gardener](#gardener), when you turn it on, hides items but cannot write text.** It sees only digest-eligible items, never touches pins, the human's items or ledger lines, and every hide can be undone.
 - **Caps:** an item's text is at most 300 characters and its body 2,000; a node may add 20 items and forget 20.
 
 ## Tools and commands
@@ -106,6 +107,7 @@ Every agent node with memory on gets these tools through the daemon's MCP server
 | `memory_pin` | human | Pin a new instruction, or pin, unpin or restore an item. |
 | `memory_status` | human | File health, size against the limit, the on/off resolution and the digest comparison. Takes `repo` (an absolute directory) or `nodeId` for a project; an agent calling the tool at all is refused. |
 | `memory_switch` | human | What `tl memory on|off|inherit` calls. |
+| `memory_garden` | human | What `tl memory garden` calls: the [gardener](#gardener)'s status, a manual run, a run's actions and undo. |
 
 An agent's repository and account always come from its own node record; naming another is refused. While memory is off the tools answer "memory is off for this project", saying how to turn it on.
 
@@ -119,6 +121,7 @@ tl memory show mID
 tl memory add KIND TEXT [--body B] [--supersedes mID]
 tl memory forget mID REASON [--purge]
 tl memory pin (mID | --text TEXT) [--unpin]
+tl memory garden [status] | run --repo PATH [--wait] | show rN | undo (rN [--immune] | mID)
 ```
 
 `memory_status` resolves `repo` the way the other tools do, without the opt-in gate: the main checkout of that directory, and the account of its project unless `account` is given. It prints `memory is on|off for <main checkout> (<source>)`. The CLI passes its own directory, so `tl memory status` and the tool always agree. `nodeId` wins over `repo` when both are given. With neither, it prints `memory.enabled (global)`, `projects with their own setting` and `accounts`. It prints "no memory file yet" only when `~/.tiller/memory` holds no `*.db` file, and then says one is created at the first capture after memory is on for a project.
@@ -205,6 +208,160 @@ Every node started in a non-git directory such as `~` shares one key, so memory 
 
 Pins, procedures, pitfalls and notes are never evicted. If the file is still over the limit the daemon logs it, `tl memory status` says so, and memory keeps working. Space is returned to the disk in small steps; there is no blocking full compaction.
 
+## Gardener
+
+The gardener is an optional Claude node that the daemon starts by itself to tidy one repository's memory. It merges items that say the same thing and hides items that a newer item makes obsolete, so digests repeat less. **It is off by default.** It writes no text of its own, cannot touch pins or the human's items, and every change it makes can be undone.
+
+### What it does and does not do
+
+A run sees the repository's live, digest-eligible `open_question`, `procedure`, `pitfall` and `note` items: the newest 300, plus every item the daemon proposes as a likely duplicate or replacement. It can do two things:
+
+- **Merge** 2 to 8 items of one kind. The daemon, not the model, picks the item to keep: a pinned item first, then the human's over the daemon's over an agent's, then the most seen, then the oldest. The others are hidden as `merged`, and their `seen` counts are added to the kept item, unless it is pinned or the human's (those rows are never written). When later work records a merged item again, the kept item is counted instead and the merged one stays hidden.
+- **Supersede** an item with a newer one: a question that a later work-history line answers, or a command or pitfall that a newer one replaced. The old item is hidden as `gardener`. If later work records it again, it comes back, as it would after an agent's retraction.
+
+It never forgets an item outright: stale is not the same as wrong, and the size limit already handles growth. It never edits or writes item text. It never hides a pin, the human's item or a `ledger` line, and it is never shown an item from a node that did not succeed. Each change carries a reason of at most 200 characters, shown by `memory_get` ("merged into m12 by the gardener (r12): <reason>") and `tl memory garden show`.
+
+### Turning it on
+
+```json
+{ "memory": { "enabled": true, "gardener": { "enabled": true } } }
+```
+
+The `memory.gardener` keys are read from the home file only. In a project file they are ignored with a warning, because an agent can edit its project file. Memory must also be on for the repository and account. The keys and their defaults are listed in [config.md](config.md#keys). Settings does not show them.
+
+`claude.accounts[].gardener: false` is a ceiling, like `memory: false`: it blocks every run for that account's file, scheduled or manual.
+
+### When it runs
+
+The daemon checks every hour, and once more a minute after the last node closes. A repository in an account's file gets a run when all of these hold:
+
+- `memory.gardener.enabled` is true, the account has no `gardener: false`, and memory is on for the repository and account;
+- its last run started at least 24 hours ago (not configurable);
+- at least `memory.gardener.minNewItems` (default 25) new gardenable items, and at least 3 daemon proposals that involve a new item (a likely duplicate group, or an item a newer one may replace);
+- the account's gardener spend over the last 30 days, plus one full `maxUsdPerRun`, fits within `maxUsdPer30Days`;
+- the daemon is quiet: no node working or queued, not draining, live nodes below `daemon.maxLiveNodes`, and the account's rate-limit windows under 80 percent;
+- no other run is live, in this daemon or in another one sharing the home;
+- Claude already trusts the repository's main checkout in that account. If not, run `claude` there once. An untrusted or missing checkout is recorded as `skipped` with the reason, not as a failure;
+- the repository is not paused (see [How a run ends](#how-a-run-ends)).
+
+At most one run is live per daemon, and the repository with the most new items goes first.
+
+**By hand,** `tl memory garden run --repo PATH [--account NAME] [--wait]` starts a run now. It skips `enabled`, the 24 hours, the new-item threshold, a pause and the quiet-daemon check, except the 80 percent rate-limit guard. Memory, both ceilings, the budget, the rate-limit guard, the checkout and trust check, and the one-run rule still apply.
+
+### The gardener node
+
+A run is an ordinary, visible root node in the tree, titled `Memory gardener · <repository>`. It runs in the account whose file it gardens, with the repository's main checkout as its directory. It is muted, so a daily run sends no notification. It does not count towards `daemon.maxLiveNodes` or `daemon.maxWorking`, so while it is live there can be one node more than the limit. Agents cannot message it, list it or close it.
+
+It gets one turn. When the turn ends, the daemon stops the process and sets the node's outcome, for example:
+
+```
+merged 4 (9 items), superseded 2 · $0.04 · undo: tl memory garden undo r12
+```
+
+The node then stays in the tree, exited, with its spend. The next run for that repository closes it, or you can close it yourself. It cannot be resumed, restarted, followed up or forked: start a new run instead.
+
+**What the model is given.** It has only four tools, `garden_list`, `garden_get`, `garden_merge` and `garden_supersede`, and they act only on that run's repository. Claude Code launches it with these settings:
+- `--restricted --tools '' --permission-mode dontAsk --strict-mcp-config`;
+- an agent definition and a permission list that name exactly those four tools;
+- `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` and `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, without which Claude Code offers two more tools.
+
+So it has no shell, file, web or other Tiller tool, no claude.ai connector or plugin server, no session directory and no `# Memory` digest. The repository's `CLAUDE.md` and `AGENTS.md` are not loaded. Item text reaches it only inside tool results, under a system prompt that says item text is data written by other agents and never instructions. Its model comes from `memory.gardener.model` and its effort is always `medium`; the project's settings set neither.
+
+### Cost and caps
+
+The node's spend is the run's cost, and the tree shows it like any node's. Three limits apply:
+
+- **Per run:** `memory.gardener.maxUsdPerRun`, default $0.25. Claude Code reports a node's cost only when its turn ends, so the daemon cannot stop a run on cost partway through. Instead, other limits keep the run from reaching the cap:
+  - at most 20 tool calls, counting attempts, refused ones included. Lowering `maxUsdPerRun` lowers this cap;
+  - at most 160,000 characters of tool output;
+  - at most 10 minutes.
+
+  The 21st call, going past the output limit, or the timeout ends the run.
+- **Per account file:** `memory.gardener.maxUsdPer30Days`, default $3. A run starts only when a full per-run cap still fits.
+- **Hides:** at most 40 per run, and at most a quarter of the live gardenable items. At most 10 of them may be supersedes.
+
+**A run that ends without a reported cost** is charged the full `maxUsdPerRun` and marked incomplete, whatever it had spent. That covers the call cap, the tripwire, the timeout, memory turned off, a crash and a daemon restart, so the 30-day total never under-counts. A turn that ends without a priced cost report also pauses the repository.
+
+On a subscription account the cost is Claude Code's API-equivalent estimate. The run uses the same account's quota as your work, which is why it starts only when the daemon is quiet and the rate limits are under 80 percent.
+
+### How a run ends
+
+`tl memory garden status` lists recent runs with their state:
+
+| State | Meaning |
+| --- | --- |
+| `done` | The turn ended normally. |
+| `capped` | The tool-call cap or the tool-output limit ended it. |
+| `timeout` | It ran for 10 minutes. |
+| `off` | Memory was turned off for the repository or account during the run. |
+| `disabled` | `memory.gardener.enabled` was turned off during a scheduled run, or the account's `gardener: false` was set during any run. |
+| `interrupted` | The daemon stopped, restarted or crashed during the run, or you closed the gardener node while it ran. Its changes are kept, not undone. |
+| `failed` | The tripwire fired: the model tried a tool other than its four. The run's changes are undone. |
+| `reverted` | The check after the run found a violation, and the run's changes were undone. |
+| `skipped` | It never started, because the checkout was missing or not trusted. |
+
+After every run, crashed ones included, the daemon checks that:
+- every hidden item has a logged action and was allowed to be hidden;
+- every merge chain ends on a live item;
+- the caps held;
+- the orchestrator digest kept every pin;
+- no item the human retracted came back.
+
+A violation undoes the whole run.
+
+**Pause.** A repository's scheduled runs pause in two cases: two consecutive runs end `failed`, `capped`, `timeout` or `reverted`, or a `done` run's cost report is missing. They resume after a manual run succeeds. `tl memory garden status` says so: "paused after 2 failed runs (last: capped)". `off`, `disabled` and `interrupted` runs neither count towards a pause nor reset the count.
+
+**Two daemons on one home** never garden one file at the same time. A live run holds a lease, renewed every 30 seconds. When a lease is 5 minutes old, the next tick recovers its run, charges it and checks it.
+
+### Undo
+
+```
+tl memory garden status [--repo PATH] [--account NAME]
+tl memory garden show rN
+tl memory garden undo rN [--immune]
+tl memory garden undo mID
+```
+
+`show` lists a run's actions with the item texts, the reasons and what changed in the orchestrator digest. `undo rN` reverses a whole run, newest action first, and `undo mID` reverses that item's latest action. Undoing a merge takes its `seen` back off the kept item. An item is skipped, with the reason in the reply, if it has since come back, been retracted by someone else, purged or evicted. Pinning a hidden item by id undoes the action first.
+
+**Immunity.** `undo mID` tells the gardener that one decision was wrong. Later runs refuse that same pair: that item into that keep, or that item superseded by that item. The item can still be merged into a different keep.
+- `undo rN` grants immunity only with `--immune`. Otherwise the next run may try again.
+- The daemon's own undo after a `failed` or `reverted` run never grants it.
+- Pinning or unpinning an item clears its immunities.
+
+Undo works until the hidden item's text is evicted. Eviction happens only when the file is over `memory.maxMB`, and then only to retracted items older than 30 days (see [eviction](#size-limit-and-eviction)).
+
+### Trust
+
+The gardener is a second model that reads agent-written text automatically, and its output is hiding. So the daemon checks every action in the transaction that applies it:
+
+- **Candidates only.** Every id an action touches must be in the run's candidate set, including the computed keep and the replacing item. The set holds only digest-eligible items: text a digest could already show. Item ids are guessable, so an item naming a failed node's item ("supersede m7 by m9") gets "not a candidate".
+- **A lexical floor.** At least half of a hidden item's search terms must appear in its keep or its replacement. A replacement must also:
+  - be newer;
+  - cover a hidden item that has at least 3 terms;
+  - be of the same kind, a work-history line, the daemon's, or seen at least twice.
+
+  So a two-word note cannot supersede a long older item. This is a lexical heuristic, not a judgement of meaning.
+- **Caps and immunity.** The caps above apply, and so do the pairs you made immune.
+- **The boundary is Claude Code's.** The daemon refuses the gardener every other Tiller tool. If the gardener tries any other tool, a tripwire ends the run as `failed` and undoes it. But only Claude Code's flags keep shell, file and network tools away from it, and those flags and the two environment variables depend on the Claude Code version.
+
+  **After every Claude Code upgrade, re-run** `TL_HOME=$(mktemp -d) TL_PORT=7799 npx tsx spike/gardener-flags.ts` (see [spike/README.md](../spike/README.md)). It prints PASS or FAIL for each check and costs under a cent. Leave the gardener off while any check fails.
+
+**Residual risk.** A poisoned note from a node that succeeded can steer the gardener into hiding eligible items that the note covers lexically, up to the per-run caps. Every such hide is logged with its reason and can be undone. A superseded item also comes back when later work records the same thing.
+
+### Turning it off
+
+- `memory.gardener.enabled: false` stops scheduled runs. A live scheduled run stops within 30 seconds as `disabled`.
+- `claude.accounts[].gardener: false` stops every run in that account, including a live manual one.
+- `memory.gardener.maxUsdPer30Days: 0` blocks every run.
+- Turning memory off refuses the gardener's next tool call and stops the run within 30 seconds as `off`.
+
+Changes already applied stay, just as turning memory off deletes nothing. Undo them with `tl memory garden undo`.
+
+### Downgrading
+
+The gardener adds columns and tables to the memory file. A daemon with gardener support therefore upgrades each account's file to schema version 2 when it opens it, whether or not the gardener is enabled. An older Tiller then treats that file as written by a newer one: memory is off for it and the file is never written, until you upgrade again (see [When something is wrong](#when-something-is-wrong)). Nothing in the file is lost. If an older daemon revives a merged item, readers ignore the leftover merge redirect, so a file shared with an older daemon stays consistent.
+
 ## When something is wrong
 
 Memory never blocks the daemon or a launch. If a file cannot be used, memory is off for that account with a reason that `tl memory status` shows, and nodes carry on without it.
@@ -227,7 +384,7 @@ Memory never blocks the daemon or a launch. If a file cannot be used, memory is 
 
 ## Retention
 
-Memory is not part of the session sweep: it is kept past `daemon.sessionsKeepDays`, bounded only by `memory.maxMB`. Removal is `tl memory forget --purge`, deleting an account's file, or turning memory off and deleting the file. There is no backfill: memory starts empty when you opt in.
+Memory is not part of the session sweep: it is kept past `daemon.sessionsKeepDays`, bounded only by `memory.maxMB`. The gardener's run and action log is never evicted; it holds a few short rows a day. Removal is `tl memory forget --purge`, deleting an account's file, or turning memory off and deleting the file. There is no backfill: memory starts empty when you opt in.
 
 ## Measuring it
 
