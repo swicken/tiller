@@ -78,7 +78,50 @@ CREATE INDEX injections_session ON injections(session_id, ts);
 CREATE INDEX injections_node ON injections(node_id, ts);
 PRAGMA user_version = 1;
 `;
-export const SCHEMA_VERSION = 1;
+
+/**
+ * Forward migrations, in order: openFile runs each one whose version is above the file's user_version, after SCHEMA_V1 on
+ * a new file, each in its own BEGIN IMMEDIATE that re-checks user_version first. Each sql ends by setting its version.
+ * v3 (the gardener) owns 2; a later schema change takes the next number.
+ */
+export const MIGRATIONS: readonly { version: number; sql: string }[] = [{
+  version: 2,
+  sql: `
+ALTER TABLE items ADD COLUMN merged_into INTEGER REFERENCES items(id);   -- meaningful only while invalid_kind = 'merged'
+CREATE TABLE garden_runs (
+  id INTEGER PRIMARY KEY,                  -- r<id>
+  repo_id INTEGER NOT NULL REFERENCES repos(id),
+  node_id TEXT,                            -- the gardener node, once spawned
+  trigger TEXT NOT NULL,                   -- GARDEN_TRIGGERS
+  state TEXT NOT NULL,                     -- RUN_STATES
+  started_at INTEGER NOT NULL, ended_at INTEGER,
+  heartbeat_at INTEGER NOT NULL,           -- the owning daemon's watchdog; the lease goes stale by this, not by started_at
+  watermark INTEGER NOT NULL,              -- max(items.id) at start: the next threshold counts ids above it
+  model TEXT,
+  cost_usd REAL, cost_incomplete INTEGER NOT NULL DEFAULT 0,
+  stats TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(stats)),   -- GardenRunStats
+  note TEXT                                -- why it ended, daemon text
+) STRICT;
+CREATE TABLE garden_actions (
+  id INTEGER PRIMARY KEY,
+  run_id INTEGER NOT NULL REFERENCES garden_runs(id),
+  ts INTEGER NOT NULL,
+  action TEXT NOT NULL,                    -- GARDEN_ACTION_KINDS
+  item_id INTEGER NOT NULL REFERENCES items(id),   -- the hidden item
+  into_id INTEGER REFERENCES items(id),            -- merge keep, or supersede by
+  seen_delta INTEGER NOT NULL DEFAULT 0,           -- what a merge added to the keep's seen; 0 when the keep's row was not written
+  reason TEXT NOT NULL,                    -- redacted, oneLine, <= LIMITS.garden.reason; '' after a purge
+  undone_at INTEGER, undone_by TEXT,       -- GARDEN_UNDONE_BY
+  immune INTEGER NOT NULL DEFAULT 0        -- 1: the human undid this (item_id, into_id) decision; later runs refuse the pair
+) STRICT;
+CREATE INDEX garden_actions_item ON garden_actions(item_id);
+CREATE INDEX garden_actions_pair ON garden_actions(item_id, into_id) WHERE immune = 1;
+CREATE INDEX garden_runs_repo ON garden_runs(repo_id, started_at);
+PRAGMA user_version = 2;
+`,
+}];
+/** The newest schema this tiller reads and writes; a file above it is off and never written. */
+export const SCHEMA_VERSION = MIGRATIONS.at(-1)!.version;
 
 /**
  * A text pin (memory_pin { text }) is a human `note` with pinned = 1 and its own dedupe key (pinDedupe), so it never merges
@@ -96,6 +139,35 @@ export type Author = (typeof AUTHORS)[number];
 /** Why an item is hidden: an alias of MEMORY_INVALID_KINDS (protocol.ts), so v3 appends to one list. */
 export const INVALID_KINDS = MEMORY_INVALID_KINDS;
 export type InvalidKind = (typeof INVALID_KINDS)[number];
+/** The item kinds the gardener may hide (D4): a ledger line is one per closed node, never a duplicate, but may be a supersede's by. */
+export const GARDEN_KINDS = ['open_question', 'procedure', 'pitfall', 'note'] as const satisfies readonly ItemKind[];
+export const GARDEN_ACTION_KINDS = ['merge', 'supersede'] as const;
+export type GardenActionKind = (typeof GARDEN_ACTION_KINDS)[number];
+export const GARDEN_TRIGGERS = ['schedule', 'manual'] as const;
+export type GardenTrigger = (typeof GARDEN_TRIGGERS)[number];
+/**
+ * A garden run's state. running holds the lease; every other state is final, except that a finished run becomes reverted
+ * when its post-run check fails and the daemon undoes it. skipped: it never started (untrusted or missing checkout).
+ */
+export const RUN_STATES = ['running', 'done', 'capped', 'timeout', 'off', 'disabled', 'interrupted', 'failed', 'reverted', 'skipped'] as const;
+export type RunState = (typeof RUN_STATES)[number];
+/** Who undid an action: the human (tl memory garden undo, v2's restore) or the daemon's auto-undo, which never grants immunity. */
+export const GARDEN_UNDONE_BY = ['human', 'daemon'] as const;
+export type GardenUndoneBy = (typeof GARDEN_UNDONE_BY)[number];
+/**
+ * The rule a refused garden call broke, named in its message and counted in GardenRunStats.refused (D8).
+ * not running: the run's lease ended. not a candidate: the id is not in the run's frozen candidate set (another
+ * repository's id included). ineligible: it fails ELIGIBLE now. protected: a pinned, human-authored or ledger item as a
+ * hidden member. not live: retracted or tombstoned. kind: merge members of different kinds, or a supersede by of another
+ * kind that is not a ledger, daemon-authored or seen at least twice. containment: below minContained against the keep
+ * or by. terms: a superseded item with fewer than minSupersedeTerms terms. newer: by was not created after id.
+ * immune: the human undid this pair. hides, supersedes: the run's caps. duplicate: an id given twice, or id equal to by.
+ */
+export const GARDEN_RULES = [
+  'not running', 'not a candidate', 'ineligible', 'protected', 'not live', 'kind', 'containment', 'terms', 'newer', 'immune',
+  'hides', 'supersedes', 'duplicate',
+] as const;
+export type GardenRule = (typeof GARDEN_RULES)[number];
 /** The digest arm a launch applied, and why: memory.digest on/off, the ab split, or a resume reusing its frozen text. */
 export const ARMS = ['on', 'off'] as const;
 export type Arm = (typeof ARMS)[number];
@@ -166,6 +238,56 @@ export const LIMITS = {
     ftsMergePages: 200,
     /** The plan says "a few bounded steps"; tune in the store if merges prove slow. */
     ftsMergeSteps: 4,
+  },
+  /**
+   * The gardener (memory v3), fixed until the bench shows a need for a key. A tool call is an attempt seen by a PreToolUse
+   * or PermissionRequest hook (denied ones too). Claude's maxTurns does not stop an interactive turn (spike S0), so it is
+   * only defence in depth; the daemon's call cap and the wall clock bound a run.
+   */
+  garden: {
+    intervalHours: 24,
+    timeoutMinutes: 10,
+    leaseMs: 300_000,
+    watchdogMs: 30_000,
+    /** The hourly tick, and the debounced tick after the last node close. */
+    tickMs: 3_600_000,
+    afterCloseMs: 60_000,
+    /** Daemon proposals (clusters and supersede hints) involving a new item that a scheduled run needs. */
+    minProposals: 3,
+    /** Hides per run: min(maxHides, ceil(maxHideShare × live gardenable items)), at most maxSupersedes of them supersedes. */
+    maxHides: 40,
+    maxHideShare: 0.25,
+    maxSupersedes: 10,
+    minContained: 0.5,
+    minSupersedeTerms: 3,
+    /** The newest gardenable items frozen into a run's candidate set, and items per garden_list page. */
+    candidates: 300,
+    page: 150,
+    chainDepth: 8,
+    /** A garden action's reason, and a candidate's text in a page. */
+    reason: 200,
+    text: 300,
+    /** turnBound's ceiling; Claude's agent maxTurns gets the same number. */
+    maxToolCalls: 20,
+    maxTurns: 20,
+    maxOutputChars: 160_000,
+    maxPageChars: 60_000,
+    /**
+     * turnBound's worst case per model request: maxContextTokens of uncached input at inputUsdPerMTok, plus
+     * extraRequests beyond one per tool call (the first and the last), plus worstOutputTokens in all at outputUsdPerMTok.
+     * Prices are claude-haiku-5-5's below its 100K-token tier.
+     */
+    maxContextTokens: 90_000,
+    inputUsdPerMTok: 0.1,
+    outputUsdPerMTok: 0.5,
+    worstOutputTokens: 40_000,
+    extraRequests: 2,
+    /** Consecutive failed, capped, timeout or reverted runs that pause a target until a manual run succeeds. */
+    pauseAfterFailures: 2,
+    /** A run starts only while every rate-limit window of its account is below this percent. */
+    rateLimitPercent: 80,
+    /** GardenTarget.recent: the newest runs per target, skipped ones left out. */
+    recentRuns: 10,
   },
 } as const;
 
@@ -271,6 +393,8 @@ export interface ItemRow {
   supersedes: number | null;
   cites: number;
   gets: number;
+  /** Schema 2. The keep a merge redirected this item to; readers treat it as null unless invalid_kind is 'merged'. */
+  merged_into: number | null;
 }
 
 /** An item as tools, the digest and the panel see it (protocol.ts). body is present from get only. */
@@ -315,21 +439,204 @@ export interface DigestInput { role: DigestRole; brief?: string; now: number }
 /** text is '' when nothing was selected. */
 export interface DigestResult { text: string; itemIds: number[] }
 
-const REF = /^m([1-9]\d{0,15})$/;
-export const itemRef = (id: number): string => `m${id}`;
-/** The id an `m<id>` ref names; undefined for anything else, or an id past the safe integer range. */
-export function parseItemRef(ref: string): number | undefined {
-  const m = REF.exec(ref);
-  const id = m ? Number(m[1]) : NaN;
-  return Number.isSafeInteger(id) ? id : undefined;
+// ---- The gardener (memory v3): garden runs, their candidates and actions. Refs in JSON are m<id> and r<id>.
+
+/** One item of a garden_list page, as the gardener model sees it. text is oneLine'd and at most LIMITS.garden.text. */
+export interface GardenCandidate {
+  id: string;
+  kind: ItemKind;
+  text: string;
+  /** Since created_at and updated_at, as "12d", "5h" or "40m". */
+  age: string;
+  lastSeen: string;
+  seen: number;
+  author: Author;
+  /** Pinned, human-authored or a ledger line: it can be a merge's keep or a supersede's by, never hidden. */
+  protected: boolean;
+  /** Daemon facts only, such as "not seen for 45 days". */
+  hint?: string;
+}
+/** A daemon-proposed duplicate set of one kind; keep is the daemon's pick (keepRank), and ids include it. */
+export interface GardenCluster { kind: ItemKind; keep: string; ids: string[] }
+/** An item whose terms a newer same-kind item, or a newer ledger line, contains at minContained or more (D8 rule 5). */
+export interface GardenHint { id: string; by: string }
+/** One garden_list result. next is the cursor of the following page ("c2"); absent on the last. */
+export interface GardenPage {
+  run: string;
+  page: number;
+  pages: number;
+  next?: string;
+  now: number;
+  rules: { hidesLeft: number; supersedesLeft: number; callsLeft: number; minContained: number };
+  /** On page 1 only; later pages carry []. */
+  clusters: GardenCluster[];
+  supersedeHints: GardenHint[];
+  items: GardenCandidate[];
+}
+/** A refused garden call: the rule it broke and a message naming it, shown to the model as an error. */
+export interface GardenRefused { ok: false; rule: GardenRule; message: string }
+export type GardenActionInput =
+  | { action: 'merge'; ids: number[]; reason: string }
+  | { action: 'supersede'; id: number; by: number; reason: string };
+/** hidesLeft and supersedesLeft are after this action. */
+export type GardenApplyResult =
+  | { ok: true; action: 'merge'; kept: number; hidden: number[]; hidesLeft: number; supersedesLeft: number }
+  | { ok: true; action: 'supersede'; hidden: number; by: number; hidesLeft: number; supersedesLeft: number }
+  | GardenRefused;
+
+/** The orchestrator digest and live counts on one side of a run (D9). */
+export interface GardenSnapshot {
+  live: Partial<Record<ItemKind, number>>;
+  digest: { ids: number[]; chars: number };
+  /** Digest lines in the same proposed cluster as another digest line. */
+  redundancy: number;
+}
+/** garden_runs.stats. startRun writes candidates, maxHides and before; the rest is written as the run goes and ends. */
+export interface GardenRunStats {
+  /** The run's candidate set: every id a garden call may touch. */
+  candidates: number[];
+  /** The hide cap computed at start: min(maxHides, ceil(maxHideShare × live gardenable items)). */
+  maxHides: number;
+  before: GardenSnapshot;
+  after?: GardenSnapshot;
+  refused: Partial<Record<GardenRule, number>>;
+  /** Attempted tool calls, and tool-output characters returned to the model. */
+  calls: number;
+  outputChars: number;
+  /** verifyRun's findings, when it found any. */
+  violations?: string[];
+}
+export interface GardenActionView {
+  id: number;
+  runId: number;
+  ts: number;
+  action: GardenActionKind;
+  itemId: number;
+  /** The merge keep or the supersede by. */
+  intoId?: number;
+  seenDelta: number;
+  reason: string;
+  undoneAt?: number;
+  undoneBy?: GardenUndoneBy;
+  immune: boolean;
+  /** run() only: the texts as they are now ('' for a tombstone). */
+  itemText?: string;
+  intoText?: string;
+}
+export interface GardenRunView {
+  id: number;
+  repoKey: string;
+  nodeId?: string;
+  trigger: GardenTrigger;
+  state: RunState;
+  startedAt: number;
+  endedAt?: number;
+  heartbeatAt: number;
+  watermark: number;
+  model?: string;
+  costUsd?: number;
+  costIncomplete: boolean;
+  note?: string;
+  stats: GardenRunStats;
+  /** run() only, oldest first. */
+  actions?: GardenActionView[];
+}
+/** One repository in one existing account file, as the scheduler judges it (D4). */
+export interface GardenTarget {
+  /** The account file's key: an account name, or _default. */
+  key: string;
+  repoKey: string;
+  repoPath: string;
+  /** Live, unpinned, eligible items of GARDEN_KINDS above the newest started run's watermark (every one, before any run). */
+  newItems: number;
+  /** Daemon proposals (clusters and supersede hints) with at least one new item. */
+  proposals: number;
+  /** Newest first, at most LIMITS.garden.recentRuns, skipped runs left out. A running one holds or held the lease. */
+  recent: GardenRunView[];
+}
+export type GardenUndoTarget = { run: number; immune?: boolean } | { item: number };
+export interface GardenUndoResult {
+  undone: { actionId: number; runId: number; itemId: number; intoId?: number }[];
+  skipped: { actionId: number; itemId: number; reason: string }[];
 }
 
+/**
+ * What the gardener runtime, its tools and its CLI need from the store; MemoryStore implements it. account is the spawn
+ * account, as everywhere in the store, and run ids are per account file. The tool methods (gardenPage, gardenGet,
+ * gardenApply) refuse 'not running' once the lease has ended, and check every D8 rule inside the transaction that
+ * applies the call. No method creates a file.
+ */
+export interface GardenStore {
+  /** Every repository in every existing account file, with its scheduling facts. Reads only: it recovers nothing. */
+  gardenTargets(): GardenTarget[];
+  /**
+   * Take the file's lease and freeze the run (BEGIN IMMEDIATE): refused while another run of this file is running with a
+   * heartbeat younger than LIMITS.garden.leaseMs. watermark = max(items.id). stats.candidates is the newest
+   * LIMITS.garden.candidates live, eligible items of GARDEN_KINDS (pinned and human ones included, as protected), plus
+   * every item a daemon proposal names (a ledger line as a hint's by included).
+   */
+  startRun(scope: MemoryScope, input: { trigger: GardenTrigger; model: string }): { ok: true; run: GardenRunView } | { ok: false; reason: string };
+  /** Record a run that never started; no new row when the repo's newest run is already skipped with the same note. */
+  skipRun(scope: MemoryScope, input: { trigger: GardenTrigger; note: string }): void;
+  heartbeat(account: string | undefined, runId: number): void;
+  setRunNode(account: string | undefined, runId: number, nodeId: string): void;
+  /** A page of the frozen candidate set. cursor is a page's "c<n>"; callsLeft is the runtime's count, echoed in rules. */
+  gardenPage(account: string | undefined, runId: number, q: { cursor?: string; callsLeft: number }): GardenPage | GardenRefused;
+  /** One candidate with its body; it does not count as a read (gets). */
+  gardenGet(account: string | undefined, runId: number, id: number): { ok: true; item: GardenCandidate & { body: string } } | GardenRefused;
+  gardenApply(account: string | undefined, runId: number, input: GardenActionInput): GardenApplyResult;
+  /** Set stats.calls and stats.outputChars to the runtime's running totals. */
+  countCalls(account: string | undefined, runId: number, totals: { calls: number; outputChars: number }): void;
+  /**
+   * End the lease: running → state, so every later tool call is refused. The one other transition is a finished run →
+   * 'reverted' after auto-undo. Returns false, changing nothing, when neither applies.
+   */
+  endRun(account: string | undefined, runId: number, state: Exclude<RunState, 'running' | 'skipped'>, note?: string): boolean;
+  /**
+   * Record the run's cost, ended_at and stats.after, once: a later call returns the stored run unchanged. A run still
+   * running is first ended as 'interrupted'. usd is what the caller charges (D11).
+   */
+  finishRun(account: string | undefined, runId: number, cost: { usd: number; incomplete: boolean }): GardenRunView;
+  /** D9's post-run checks: [] when the run is sound. Records any findings in stats.violations. */
+  verifyRun(account: string | undefined, runId: number): string[];
+  /**
+   * Undo a run's actions, or an item's latest one, newest first (D7). The human's item undo, and a run undo with immune,
+   * mark the pairs immune; the daemon's never does. A run or item of another repository is "no such run" or "no such
+   * item" (MemoryError).
+   */
+  undo(scope: MemoryScope, target: GardenUndoTarget, by: GardenUndoneBy): GardenUndoResult;
+  /** Runs newest first, skipped ones included, without actions. */
+  runs(account: string | undefined, q?: { repoKey?: string; limit?: number }): GardenRunView[];
+  /** One run with its actions and their texts; MemoryError "no such run r<id>" otherwise. */
+  run(account: string | undefined, runId: number): GardenRunView;
+  /** cost_usd summed over the file's runs started in the 30 days before now. */
+  cost30d(account: string | undefined): number;
+}
+
+const REF = /^m([1-9]\d{0,15})$/;
+const RUN_REF = /^r([1-9]\d{0,15})$/;
+const refId = (re: RegExp, ref: string): number | undefined => {
+  const m = re.exec(ref);
+  const id = m ? Number(m[1]) : NaN;
+  return Number.isSafeInteger(id) ? id : undefined;
+};
+export const itemRef = (id: number): string => `m${id}`;
+/** The id an `m<id>` ref names; undefined for anything else, or an id past the safe integer range. */
+export const parseItemRef = (ref: string): number | undefined => refId(REF, ref);
+export const runRef = (id: number): string => `r${id}`;
+/** The id an `r<id>` ref names, as parseItemRef. */
+export const parseRunRef = (ref: string): number | undefined => refId(RUN_REF, ref);
+
 const ref = z.string().regex(REF, 'an item id like m12');
+const run = z.string().regex(RUN_REF, 'a run id like r12');
+const gardenReason = z.string().min(1).max(LIMITS.garden.reason);
 /** repo (a path) and account pick the scope; for the human only, as spawn's account is. */
 const humanScope = { repo: z.string().min(1).optional(), account: z.string().min(1).optional() };
 /**
- * Input shapes of the memory tools. memory_pin, memory_status and memory_switch are humanOnly. Rules a raw shape cannot
- * state are the handlers': memory_pin takes exactly one of id and text; memory_switch refuses account with project.
+ * Input shapes of the memory tools. memory_pin, memory_status, memory_switch and memory_garden are humanOnly; the garden_*
+ * tools are the gardener's only, and take their scope from its node record, never from arguments. Rules a raw shape
+ * cannot state are the handlers': memory_pin takes exactly one of id and text; memory_switch refuses account with
+ * project; memory_garden's run needs repo, show needs run, undo takes exactly one of run and id, and immune only with run.
  */
 export const MEMORY_TOOL_SHAPES = {
   memory_search: {
@@ -350,7 +657,16 @@ export const MEMORY_TOOL_SHAPES = {
   },
   /** on: null means inherit (remove the setting). No account or project sets the global memory.enabled. */
   memory_switch: { on: z.boolean().nullable(), account: z.string().min(1).optional(), project: z.string().min(1).optional() },
-} satisfies Record<`memory_${string}`, z.ZodRawShape>;
+  /** wait: run returns when the run ends. */
+  memory_garden: {
+    action: z.enum(['status', 'run', 'show', 'undo']), run: run.optional(), id: ref.optional(), wait: z.boolean().optional(),
+    immune: z.boolean().optional(), ...humanScope,
+  },
+  garden_list: { cursor: z.string().regex(/^c[1-9]\d{0,3}$/, 'a page cursor like c2').optional() },
+  garden_get: { id: ref },
+  garden_merge: { ids: z.array(ref).min(2).max(8), reason: gardenReason },
+  garden_supersede: { id: ref, by: ref, reason: gardenReason },
+} satisfies Record<`memory_${string}` | `garden_${string}`, z.ZodRawShape>;
 
 export const REDACTED = '[redacted]';
 // prune: known secret formats only; an unknown format is stored as written until the human purges it.
@@ -458,7 +774,7 @@ const PATH = /[\p{L}\p{N}_-]+(?:[/.][\p{L}\p{N}_-]+)+/gu;
  * term holds only letters, digits, _ and single spaces, so quoting each one (and joining with OR) keeps every FTS5
  * operator out of a MATCH.
  */
-export function ftsTerms(text: string): string[] {
+export function ftsTerms(text: string, max: number = LIMITS.digest.ftsTerms): string[] {
   const terms = new Set<string>();
   for (const [path] of text.toLowerCase().matchAll(PATH)) {
     const parts = path.match(TOKEN) ?? [];
@@ -467,7 +783,28 @@ export function ftsTerms(text: string): string[] {
   for (const [token] of text.toLowerCase().matchAll(TOKEN)) {
     if (token.length >= 2 && !STOPWORDS.has(token) && !CODE_STOPWORDS.has(token)) terms.add(token);
   }
-  return [...terms].slice(0, LIMITS.digest.ftsTerms);
+  return [...terms].slice(0, max);
+}
+
+/**
+ * The share of `hidden`'s terms (ftsTerms, uncapped) that `target` also has: |T(h) ∩ T(t)| / |T(h)|, 0 when hidden has
+ * none. Asymmetric on purpose: a short item never covers a long one (D8 rule 5).
+ */
+// prune: lexical similarity; v4's embeddings replace it if bench G1 refuses more than 10 % of labeled-correct actions.
+export function contained(hidden: string, target: string): number {
+  const h = ftsTerms(hidden, Infinity);
+  if (!h.length) return 0;
+  const t = new Set(ftsTerms(target, Infinity));
+  return h.filter((x) => t.has(x)).length / h.length;
+}
+
+const AUTHOR_RANK: Record<Author, number> = { human: 0, daemon: 1, agent: 2 };
+/**
+ * Orders merge members best first, so sort(keepRank)[0] is the keep: pinned, then human > daemon > agent, then seen
+ * descending, then created_at ascending, then id. The gardener's own order never counts.
+ */
+export function keepRank(a: Pick<ItemRow, 'id' | 'author' | 'seen' | 'pinned' | 'created_at'>, b: typeof a): number {
+  return b.pinned - a.pinned || AUTHOR_RANK[a.author] - AUTHOR_RANK[b.author] || b.seen - a.seen || a.created_at - b.created_at || a.id - b.id;
 }
 
 /** The memory file key of a node's account: the name, or _default for none or Claude's default home (no configDir). */

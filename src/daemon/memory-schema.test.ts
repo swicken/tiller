@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { MEMORY_INVALID_KINDS, MEMORY_ITEM_KINDS } from '../shared/protocol.js';
 import {
-  EPISODE_KINDS, INVALID_KINDS, ITEM_KINDS, LIMITS, MEMORY_TOOL_SHAPES, REDACTED, SCHEMA_V1, accountKey, firstErrorLine, ftsTerms, gateExit, itemRef, normalizeDedupe, normalizeRemote,
-  parseItemRef, pinDedupe, redact, structuralCode, type CaptureEvent,
+  EPISODE_KINDS, INVALID_KINDS, ITEM_KINDS, LIMITS, MEMORY_TOOL_SHAPES, MIGRATIONS, REDACTED, SCHEMA_V1, SCHEMA_VERSION, accountKey, contained, firstErrorLine, ftsTerms,
+  gateExit, itemRef, keepRank, normalizeDedupe, normalizeRemote, parseItemRef, parseRunRef, pinDedupe, redact, runRef, structuralCode, type CaptureEvent,
 } from './memory-schema.js';
 
 const dirs: string[] = [];
@@ -39,6 +39,25 @@ describe('SCHEMA_V1', () => {
     expect(db.prepare("SELECT rowid FROM items_fts WHERE items_fts MATCH 'worktree'").all()).toEqual([{ rowid: 1 }]); // porter stemming
     db.prepare("UPDATE items SET text = '' WHERE id = 1").run();
     expect(db.prepare("SELECT rowid FROM items_fts WHERE items_fts MATCH 'worktree'").all()).toEqual([]);
+    db.close();
+  });
+});
+
+describe('MIGRATIONS', () => {
+  it('takes a v1 file to schema 2 in one transaction, keeping its items, with merged_into enforced', () => {
+    const db = schemaDb();
+    db.prepare("INSERT INTO items (repo_id, kind, text, author, dedupe, created_at, updated_at) VALUES (1, 'note', 'kept', 'agent', 'kept', 1, 1)").run();
+    db.exec('PRAGMA foreign_keys = ON');
+    expect(MIGRATIONS.map((m) => m.version)).toEqual([2]);
+    expect(SCHEMA_VERSION).toBe(2);
+    db.exec('BEGIN IMMEDIATE');
+    db.exec(MIGRATIONS[0]!.sql);
+    db.exec('COMMIT');
+    expect([db.prepare('PRAGMA user_version').get(), db.prepare('PRAGMA auto_vacuum').get()]).toEqual([{ user_version: 2 }, { auto_vacuum: 2 }]);
+    expect(db.prepare('SELECT text, merged_into FROM items').all()).toEqual([{ text: 'kept', merged_into: null }]);
+    expect(() => db.prepare('UPDATE items SET merged_into = 99 WHERE id = 1').run()).toThrow(/FOREIGN KEY/);
+    db.prepare("INSERT INTO garden_runs (repo_id, trigger, state, started_at, heartbeat_at, watermark) VALUES (1, 'manual', 'running', 1, 1, 1)").run();
+    expect(() => db.prepare("UPDATE garden_runs SET stats = '{x' WHERE id = 1").run()).toThrow();
     db.close();
   });
 });
@@ -209,9 +228,12 @@ describe('item refs and tool shapes', () => {
     for (const bad of ['m0', 'm012', '12', 'M12', 'm12x', 'm99999999999999999', 'm9999999999999999']) expect(parseItemRef(bad)).toBeUndefined();
   });
 
-  it('validates the seven tools', () => {
+  it('validates the memory and garden tools', () => {
     const parse = (tool: keyof typeof MEMORY_TOOL_SHAPES, args: unknown) => z.object(MEMORY_TOOL_SHAPES[tool]).safeParse(args).success;
-    expect(Object.keys(MEMORY_TOOL_SHAPES)).toEqual(['memory_search', 'memory_get', 'memory_add', 'memory_forget', 'memory_pin', 'memory_status', 'memory_switch']);
+    expect(Object.keys(MEMORY_TOOL_SHAPES)).toEqual([
+      'memory_search', 'memory_get', 'memory_add', 'memory_forget', 'memory_pin', 'memory_status', 'memory_switch', 'memory_garden',
+      'garden_list', 'garden_get', 'garden_merge', 'garden_supersede',
+    ]);
     expect(parse('memory_search', { query: 'gate', limit: 20 })).toBe(true);
     expect(parse('memory_search', { query: '', limit: 21 })).toBe(false);
     expect(parse('memory_get', { id: 'm3' })).toBe(true);
@@ -226,6 +248,59 @@ describe('item refs and tool shapes', () => {
     expect(parse('memory_status', { repo: '' })).toBe(false);
     expect(parse('memory_switch', { on: null, project: '/p' })).toBe(true);
     expect(parse('memory_switch', {})).toBe(false);
+    expect(parse('memory_garden', { action: 'undo', run: 'r3', immune: true })).toBe(true);
+    expect(parse('memory_garden', { action: 'show', run: 'm3' })).toBe(false);
+    expect(parse('garden_list', { cursor: 'c2' })).toBe(true);
+    expect(parse('garden_list', { cursor: '2' })).toBe(false);
+    expect(parse('garden_merge', { ids: ['m1', 'm2'], reason: 'same lesson' })).toBe(true);
+    expect(parse('garden_merge', { ids: ['m1'], reason: 'x' })).toBe(false);
+    expect(parse('garden_merge', { ids: Array.from({ length: 9 }, (_, i) => `m${i + 1}`), reason: 'x' })).toBe(false);
+    expect(parse('garden_supersede', { id: 'm1', by: 'm2', reason: 'x'.repeat(200) })).toBe(true);
+    expect(parse('garden_supersede', { id: 'm1', by: 'm2', reason: 'x'.repeat(201) })).toBe(false);
+    // The gardener's scope is its record's: a repo or account argument is not part of its shapes.
+    for (const t of ['garden_list', 'garden_get', 'garden_merge', 'garden_supersede'] as const) expect(Object.keys(MEMORY_TOOL_SHAPES[t])).not.toContain('repo');
+  });
+
+  it('round-trips run refs', () => {
+    expect(runRef(12)).toBe('r12');
+    expect(parseRunRef('r12')).toBe(12);
+    for (const bad of ['r0', 'm12', '12', 'r12x']) expect(parseRunRef(bad)).toBeUndefined();
+  });
+});
+
+describe('contained', () => {
+  it('measures how much of the hidden item its target covers, never the reverse', () => {
+    const question = 'why does the worktree setup hook fail on fresh clones';
+    const ledger = 'W2 fixed: the worktree setup hook failed on fresh clones because npm ci ran before the copy';
+    expect(contained(question, ledger)).toBeGreaterThanOrEqual(LIMITS.garden.minContained);
+    // The short-subset path: a two-term note is fully inside a long item, but covers little of it.
+    expect(contained('npm test', 'run npm test with the gate config before merging a worker branch')).toBe(1);
+    expect(contained('run npm test with the gate config before merging a worker branch', 'npm test')).toBeLessThan(LIMITS.garden.minContained);
+    expect(contained('the and of', 'anything')).toBe(0);
+    expect(contained('', 'anything')).toBe(0);
+  });
+
+  it('counts every term, past the digest cap', () => {
+    const words = Array.from({ length: 40 }, (_, i) => `word${i}`);
+    expect(contained(words.join(' '), words.slice(20).join(' '))).toBe(0.5);
+  });
+});
+
+describe('keepRank', () => {
+  const member = (id: number, x: Partial<{ author: 'human' | 'daemon' | 'agent'; seen: number; pinned: 0 | 1; created_at: number }> = {}) =>
+    ({ id, author: 'agent' as const, seen: 1, pinned: 0 as const, created_at: 100, ...x });
+  const keep = (...items: ReturnType<typeof member>[]) => [...items].sort(keepRank)[0]!.id;
+
+  it('keeps the most trusted copy whatever order the gardener gave', () => {
+    expect(keep(member(1, { seen: 9 }), member(2, { author: 'daemon' }), member(3, { author: 'human' }))).toBe(3);
+    expect(keep(member(1, { seen: 9 }), member(2, { author: 'daemon' }))).toBe(2);
+    expect(keep(member(1, { seen: 2 }), member(2, { seen: 5 }))).toBe(2);
+    expect(keep(member(2, { created_at: 50 }), member(1, { created_at: 60 }))).toBe(2);
+    expect(keep(member(2), member(1))).toBe(1);
+  });
+
+  it('keeps a pin over any unpinned copy, so a pin is never a hidden member', () => {
+    expect(keep(member(1, { author: 'human', seen: 9 }), member(2, { pinned: 1 }))).toBe(2);
   });
 });
 
@@ -233,7 +308,7 @@ describe('the v2 contract', () => {
   it('aliases the item and invalid kinds to the protocol lists, so v3 appends to one', () => {
     expect(ITEM_KINDS).toBe(MEMORY_ITEM_KINDS);
     expect(INVALID_KINDS).toBe(MEMORY_INVALID_KINDS);
-    expect(INVALID_KINDS).toEqual(['agent', 'human', 'superseded', 'evicted']);
+    expect(INVALID_KINDS).toEqual(['agent', 'human', 'superseded', 'evicted', 'gardener', 'merged']);
   });
 
   it('records restore episodes', () => {

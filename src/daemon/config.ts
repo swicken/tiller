@@ -1,5 +1,5 @@
 // Per-project settings: <cwd>/.tiller/config.json, then <home>/config.json, then built-in defaults. Read fresh on every call.
-// The `daemon` group, `claude.accounts`, `claude.account`, `memory.projects` and `memory.maxMB` come from the home file only. A project file
+// The `daemon` group, `claude.accounts`, `claude.account`, `memory.projects`, `memory.maxMB` and `memory.gardener` come from the home file only. A project file
 // may only make `approvals` and `memory.digest` stricter, and may set `memory.enabled` only to false.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -41,6 +41,8 @@ const ClaudeAccounts = z.array(z.object({
   projects: z.array(AccountPath).optional(),
   /** Memory for nodes in this account: true opts in; false keeps it off whatever a memory.projects entry says. Unset: no say. */
   memory: z.boolean().optional(),
+  /** false: no memory gardener run, scheduled or manual, for this account's memory file. Unset or true: no say. */
+  gardener: z.boolean().optional(),
 }).strict()).superRefine((accounts, ctx) => {
   const names = new Set<string>(), dirs = new Set<string>();
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
@@ -147,12 +149,22 @@ export const ConfigFile = z.object({
    * only set it false. projects (home file only): per-project opt-in or opt-out, the longest containing path wins.
    * digest: whether a launch gets the # Memory section ("ab" splits nodes by id); a project may only make it stricter.
    * maxMB (home file only): the size past which each account's file evicts old entries.
+   * gardener (home file only): the memory gardener. enabled: its daily schedule (manual runs need no opt-in). model: its
+   * Claude model. minNewItems: new gardenable items a scheduled run needs. maxUsdPerRun: one run's cost cap.
+   * maxUsdPer30Days: one account file's budget over 30 days; 0 blocks every run, manual ones included.
    */
   memory: z.object({
     enabled: z.boolean().optional(),
     projects: z.array(z.object({ path: AccountPath, enabled: z.boolean() }).strict()).optional(),
     digest: z.enum(['on', 'ab', 'off']).optional(),
     maxMB: z.number().min(LIMITS.size.minMB).optional(),
+    gardener: z.object({
+      enabled: z.boolean().optional(),
+      model: z.string().min(1).optional(),
+      minNewItems: z.number().int().min(5).optional(),
+      maxUsdPerRun: z.number().min(0.01).max(5).optional(),
+      maxUsdPer30Days: z.number().nonnegative().optional(),
+    }).strict().optional(),
   }).strict().optional(),
 }).strict();
 type ConfigFile = z.infer<typeof ConfigFile>;
@@ -192,6 +204,8 @@ export const DEFAULTS = {
   'notifications.treeDoneSummary': true, 'notifications.quietHours': undefined,
   'limits.maxDepth': 3, 'limits.maxChildren': 8, 'limits.stallMinutes': 5, 'limits.maxMessagesPer10Min': 20,
   'memory.enabled': false, 'memory.projects': [], 'memory.digest': 'on', 'memory.maxMB': LIMITS.size.defaultMB,
+  'memory.gardener.enabled': false, 'memory.gardener.model': 'claude-haiku-5-5', 'memory.gardener.minNewItems': 25,
+  'memory.gardener.maxUsdPerRun': 0.25, 'memory.gardener.maxUsdPer30Days': 3,
 } satisfies Flat;
 
 type Defaulted = { [K in Key]: (typeof DEFAULTS)[K] extends undefined ? never : K }[Key];
@@ -226,7 +240,7 @@ function readLayer(path: string, isHome: boolean): ConfigFile | undefined {
   for (const key of ['accounts', 'account'] as const) {
     if (!isHome && data?.claude?.[key] !== undefined) { delete data.claude[key]; bad.push(`claude.${key}: read from the home file only`); }
   }
-  for (const key of ['projects', 'maxMB'] as const) {
+  for (const key of ['projects', 'maxMB', 'gardener'] as const) {
     if (!isHome && data?.memory?.[key] !== undefined) { delete data.memory[key]; bad.push(`memory.${key}: read from the home file only`); }
   }
   // Agents can edit a project file, so it may turn memory off but never on.

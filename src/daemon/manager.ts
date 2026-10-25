@@ -116,6 +116,8 @@ export interface SpawnRequest {
   followup?: ArchivedNode;
   /** A Claude account name (home config claude.accounts); the human's root spawns only. Absent: a child's parent's, else by project. */
   account?: string;
+  /** Internal: the Gardener's spawn of a memory gardener node (gardener.ts), recorded as NodeRecord.gardener. No spawn shape sets it. */
+  gardener?: NodeRecord['gardener'];
 }
 
 export interface ManagerOptions {
