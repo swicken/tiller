@@ -6,7 +6,7 @@
 // --collect is R2b (§2.2): each sampled archived node's real prompt goes, after a fixed elicitation, to fresh agent nodes
 // in a scratch daemon whose store is the as-of replay, and their memory_search queries are saved under <root>/results.
 // See bench/memory/README.md.
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -21,7 +21,11 @@ import { clusters, gateTrees, hotFiles, labels, replayAsOf, type Tree } from './
 import { Client } from './lib/client.js';
 import { CHECKOUT, startDaemon } from './lib/daemon.js';
 import { makeRepo } from './lib/repo.js';
-import { R2B_VERSION, transcriptQueries, type R2bFile, type R2bRun } from './lib/queries.js';
+import { R2B_VERSION, r2bQueries, transcriptQueries, type R2bFile, type R2bRun } from './lib/queries.js';
+import { gate, GATE_SETS, type GateOptions, type GateSet } from './replay.js';
+import { golden } from './retrieval/eval.js';
+import { EXPLORATORY } from './retrieval/models.js';
+import type { RetrievalQuery } from './retrieval/types.js';
 
 const SEED = 4104;
 const PER_TREE = 25;
@@ -73,18 +77,25 @@ function benchRoot(path: string): string {
 
 // --- --eval and --golden: G1's evaluator ---
 
-/**
- * Seam for G1 (retrieval/eval.ts), which is built in parallel: run.ts expects it to export
- * golden({ root, deps }) and evaluate({ root, sets, explore, deps }), both async. The orchestrator wires the real
- * names on integration.
- */
+/** --golden: G1's tokenizer golden. --eval: replay.ts's gate over the asked sets, R2b from the newest collection file. */
 async function evaluate(): Promise<void> {
-  const mod: Record<string, unknown> = await import(new URL('./retrieval/eval.ts', import.meta.url).href).catch(() => ({}));
-  const name = o.golden ? 'golden' : 'evaluate';
-  const fn = mod[name];
-  if (typeof fn !== 'function') throw new Error(`retrieval/eval.ts does not export ${name}() yet (G1 integration)`);
+  const deps = o.deps && resolve(o.deps);
+  if (o.golden) {
+    console.log(`wrote ${await golden({ root, ...(deps ? { deps } : {}) })}`);
+    return;
+  }
   const list = (s?: string) => s?.split(',').map((x) => x.trim()).filter(Boolean);
-  await fn({ root, deps: o.deps && resolve(o.deps), ...(o.eval ? { sets: list(o.sets), explore: list(o.explore) } : {}) });
+  const sets = (list(o.sets) ?? GATE_SETS) as GateSet[];
+  for (const s of sets) if (!GATE_SETS.includes(s)) throw new Error(`--sets takes ${GATE_SETS.join(', ')}, not ${s}`);
+  const explore = (list(o.explore) ?? []) as NonNullable<GateOptions['explore']>;
+  for (const k of explore) if (!EXPLORATORY.includes(k)) throw new Error(`--explore takes ${EXPLORATORY.join(', ')}, not ${k}`);
+  let r2b: RetrievalQuery[] = [];
+  const file = readdirSync(results).filter((f) => /^r2b-queries-.*\.json$/.test(f)).sort((a, b) => statSync(join(results, a)).mtimeMs - statSync(join(results, b)).mtimeMs).at(-1);
+  if (sets.includes('r2b') && file) {
+    r2b = r2bQueries(JSON.parse(readFileSync(join(results, file), 'utf8')) as R2bFile);
+    console.error(`[eval] R2b: ${r2b.length} queries from ${file}`);
+  }
+  await gate({ root, home: resolve(o.home!), sets, explore, r2b, name: 'retrieval', ...(deps ? { deps } : {}), log: (s) => console.error(`[eval] ${s}`) });
 }
 
 // --- --collect: R2b ---
