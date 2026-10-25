@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ftsTerms } from '../../../src/daemon/memory-schema.js';
 import { GATE_CUTOFF, GATE_TREES, HOT_FILE_SHARE } from '../lib/archive.js';
 import { Case, type Fixture } from '../lib/fixture.js';
+import { wordpieceGolden } from './embedders.js';
 import {
   RESULT_VERSION, type Comparison, type Criterion, type Embedder, type Estimate, type FtsVariant, type Need, type Noise, type QueryScore,
   type QuerySet, type RankerName, type RetrievalConfig, type RetrievalQuery, type RetrievalResult, type Slice, type SliceScore,
@@ -623,6 +624,27 @@ export function printVerdict(r: RetrievalResult): string {
     lines.push(`Exploratory H:${key}: P1 ${mark(c.pass)} (${c.detail}); recorded only, never deciding (§8 Q1)`);
   }
   return lines.join('\n');
+}
+
+export const GOLDEN = join(R2A, 'wordpiece-golden.json');
+
+/**
+ * run.ts retrieval --golden: the reference tokenizer's ids for the edge cases and every R2a corpus text (authored, so
+ * committable), written to fixtures/retrieval/wordpiece-golden.json for W1's in-tree WordPiece.
+ */
+export async function golden(o: { root: string; deps?: string }): Promise<string> {
+  if (!o.deps) throw new Error('--golden needs --deps (the reference tokenizer)');
+  const r = new R2a();
+  let texts: string[];
+  try {
+    texts = r.case.rows().filter((x) => x.text).map((x) => `${x.text}\n${x.body}`);
+  } finally {
+    r.close();
+  }
+  const { cases, ...head } = await wordpieceGolden(o.root, o.deps, texts);
+  // One case per line, so a diff shows which texts changed.
+  writeFileSync(GOLDEN, `${JSON.stringify(head).slice(0, -1)},"cases":[\n${cases.map((c) => JSON.stringify(c)).join(',\n')}\n]}\n`);
+  return GOLDEN;
 }
 
 /** <root>/results/<name>-<date>.json: ids and numbers only. */

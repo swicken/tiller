@@ -17,7 +17,7 @@ import {
 } from './retrieval/eval.js';
 import { verify } from './retrieval/models.js';
 import type { FtsVariant, Noise, QueryScore, RankerName } from './retrieval/types.js';
-import { checkRoot, distractors, scaledStores, scoreTree } from './replay.js';
+import { checkRoot, distractors, gate, scaledStores, scoreTree } from './replay.js';
 
 const cfg = makeConfig(NaN, 'F0');
 const cleanup: (() => void)[] = [];
@@ -321,6 +321,39 @@ describe('replay.ts', () => {
     // 15 ledger items natively; 10 distinct distractors (two repeats merge) reach 25, short of 40, so 25 is the largest.
     expect(stores.map((s) => s.items)).toEqual([15, 20, 25]);
     for (const s of stores) expect(existsSync(s.file)).toBe(true);
+  });
+});
+
+describe('gate (replay.ts and run.ts --eval)', () => {
+  it('scores R1, R2b and R2a on a synthetic home, R2b in its node\'s as-of store, and writes ids and numbers only', async () => {
+    const home = scratch('tl-bench-gate-home-');
+    const root = scratch('tl-bench-gate-root-');
+    const T = Date.parse('2026-10-01T00:00:00Z');
+    const nodes = (rootId: string, repo: string) => Array.from({ length: 22 }, (_, i): ArchivedNode => ({
+      // Pairs share a file (2 of 22 nodes, under the hot-file share); the second of each pair is labelled by the first.
+      id: `n-${rootId.slice(2, 6)}${String(i).padStart(4, '0')}`, rootId, parentId: rootId, title: `Fix module m${Math.floor(i / 2)} of ${repo}`,
+      cwd: `/w/${repo}`, harness: 'claude', model: 'bench', role: 'worker', prompt: `Fix module m${Math.floor(i / 2)}`,
+      createdAt: T + i * 3_600_000, closedAt: T + i * 3_600_000 + 60_000,
+      outcome: { outcome: 'succeeded', summary: `Fixed m${Math.floor(i / 2)}.`, changedFiles: [`m${Math.floor(i / 2)}.ts`], at: T + i * 3_600_000 + 30_000 },
+    }));
+    for (const [rootId, repo] of [['n-96530325', 'tiller'], ['n-76dead40', 'storyGame']]) {
+      const dir = join(home, 'sessions', rootId);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'meta.json'), JSON.stringify({ rootId, title: rootId, cwd: `/w/${repo}`, createdAt: T - 1 }));
+      writeFileSync(join(dir, 'archive.jsonl'), nodes(rootId, repo).map((n) => JSON.stringify(n)).join('\n'));
+    }
+    const node = 'n-96530003'; // m1's second node
+    const r = await gate({
+      root, home, sets: ['r1', 'r2a', 'r2b'], name: 'gate', log: () => {},
+      r2b: [{ id: `n-96530325/${node}/r2b/claude`, set: 'r2b', text: 'module m1', harness: 'claude', tree: 'n-96530325', cluster: node, node, asOf: 0, relevant: [] }],
+    });
+    expect(r.sets).toEqual(['r1-title', 'r1-brief', 'r2b', 'r2a']);
+    expect(r.queries.filter((q) => q.set === 'r1-title' && q.ranker === 'F0')).toHaveLength(22);
+    expect(r.queries.find((q) => q.set === 'r2b' && q.ranker === 'F0')).toMatchObject({ recall: 1, rr: 1, harness: 'claude' });
+    expect(r.slices.some((s) => s.set === 'primary')).toBe(true);
+    expect(r.verdict.criteria.find((c) => c.id === 'P1')!.pass).toBeNull(); // no embedder: H was not run
+    const written = readFileSync(join(root, 'results', `gate-${r.generatedAt.slice(0, 10)}.json`), 'utf8');
+    expect(written).not.toMatch(/Fix module|"text"/);
   });
 });
 

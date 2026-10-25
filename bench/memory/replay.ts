@@ -19,7 +19,7 @@ import {
   topCosine, vectorIndex, writeResult, type GateConfig,
 } from './retrieval/eval.js';
 import { EXPLORATORY, type CandidateKey } from './retrieval/models.js';
-import type { Embedder, Noise, QueryScore, RankerName, RetrievalQuery } from './retrieval/types.js';
+import type { Embedder, Noise, QueryScore, RankerName, RetrievalQuery, RetrievalResult } from './retrieval/types.js';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -167,42 +167,42 @@ export function scaledStores(tree: Tree, padding: Distractor[], targets: number[
   }
 }
 
-// --- The run ---
+// --- The gate run (replay.ts and run.ts retrieval --eval) ---
 
-interface Args { retrieval: boolean; scale?: number[]; root: string; home: string; deps?: string; explore: Exclude<CandidateKey, 'potion'>[]; workspace: string }
+export type GateSet = 'r1' | 'r2a' | 'r2b' | 's';
+export const GATE_SETS: GateSet[] = ['r1', 'r2a', 'r2b', 's'];
+/** §2.2: 5k and 20k items, or the most available. */
+export const SCALE = [5000, 20_000];
 
-function args(argv: string[]): Args {
-  // --scale may stand alone for the pre-registered sizes.
-  const at = argv.indexOf('--scale');
-  if (at >= 0 && (at + 1 === argv.length || argv[at + 1].startsWith('--'))) argv = [...argv.slice(0, at + 1), '5000,20000', ...argv.slice(at + 1)];
-  const { values } = parseArgs({
-    args: argv,
-    options: {
-      retrieval: { type: 'boolean', default: false }, scale: { type: 'string' }, root: { type: 'string' }, home: { type: 'string' },
-      deps: { type: 'string' }, explore: { type: 'string' }, workspace: { type: 'string' },
-    },
-  });
-  if (!values.root) throw new Error('--root DIR is required: a scratch directory outside the repo and ~/.tiller');
-  if (!values.retrieval && !values.scale) throw new Error('nothing to do: pass --retrieval and/or --scale');
-  const explore = (values.explore ? values.explore.split(',') : []) as Args['explore'];
-  for (const k of explore) if (!EXPLORATORY.includes(k)) throw new Error(`--explore takes ${EXPLORATORY.join(', ')}, not ${k}`);
-  if (explore.length && !values.deps) throw new Error('--explore needs --deps');
-  const scale = values.scale?.split(',').map(Number);
-  if (scale?.some((n) => !Number.isInteger(n) || n <= 0)) throw new Error(`--scale takes item counts, as 5000,20000`);
-  return {
-    retrieval: values.retrieval, ...(scale ? { scale } : {}), root: resolve(values.root), home: resolve(values.home ?? process.env.TL_HOME ?? join(homedir(), '.tiller')),
-    ...(values.deps ? { deps: resolve(values.deps) } : {}), explore, workspace: resolve(values.workspace ?? join(homedir(), 'workspace')),
-  };
+export interface GateOptions {
+  /** Checked with checkRoot by the caller. */
+  root: string;
+  home: string;
+  sets: GateSet[];
+  deps?: string;
+  explore?: Exclude<CandidateKey, 'potion'>[];
+  scale?: number[];
+  workspace?: string;
+  /** Scored R2b queries (lib/queries.ts r2bQueries); their relevant ids are recomputed from the same as-of replay as R1's. */
+  r2b?: RetrievalQuery[];
+  /** The result file's name: <root>/results/<name>-<date>.json. */
+  name: string;
+  log?: (s: string) => void;
 }
 
-async function main(): Promise<void> {
-  const a = args(process.argv.slice(2));
-  checkRoot(a.root, a.home);
-  const log = (s: string) => console.error(`[replay] ${s}`);
-  const trees = gateTrees(a.home);
+/**
+ * §2.4 and §2.5 end to end: F-best from R2a and the floors from the largest S stores (frozen in <root>/results on the
+ * first run with a tau), then R1, R2b, R2a, S noise and R3 scored with that configuration, the result written and the
+ * verdict printed. R2a always runs for F-best; it is reported only when asked for.
+ */
+export async function gate(o: GateOptions): Promise<RetrievalResult> {
+  const log = o.log ?? ((s: string) => console.error(`[gate] ${s}`));
+  const want = new Set(o.sets);
+  const explore = o.explore ?? [];
+  const trees = gateTrees(o.home);
   log(`trees: ${trees.map((t) => `${t.rootId} (${t.repo}, ${t.nodes.length} nodes)`).join(', ')}`);
-  const all = a.deps ? await embedders(a.root, a.deps, a.explore) : [];
-  if (!a.deps) log('no --deps: FTS variants only');
+  const all = o.deps ? await embedders(o.root, o.deps, explore) : [];
+  if (!o.deps) log('no --deps: FTS variants only');
   const tmp = mkdtempSync(join(tmpdir(), 'tl-bench-replay-'));
   const r2a = new R2a();
   const r2aView = r2a.view();
@@ -214,13 +214,13 @@ async function main(): Promise<void> {
     const stores = new Map<string, ReturnType<typeof scaledStores>>();
     const irrelevant = new Map<string, string[]>();
     const taus = new Map<string, number[]>();
-    if (a.scale) {
+    if (want.has('s')) {
       for (const t of trees) {
-        const padding = distractors(a.workspace, t);
-        const s = scaledStores(t, padding, a.scale, tmp);
+        const padding = distractors(o.workspace ?? join(homedir(), 'workspace'), t);
+        const s = scaledStores(t, padding, o.scale ?? SCALE, tmp);
         stores.set(t.rootId, s);
         log(`S ${t.rootId}: ${padding.length} distractors available; stores of ${s.map((x) => x.items).join(', ')} items`);
-        irrelevant.set(t.rootId, [...new Set([...trees.filter((o) => o !== t).flatMap((o) => o.nodes.map((n) => n.title)), ...zero])]);
+        irrelevant.set(t.rootId, [...new Set([...trees.filter((x) => x !== t).flatMap((x) => x.nodes.map((n) => n.title)), ...zero])]);
         const largest = s[s.length - 1];
         const view = new StoreView(largest.file, largest.repoKey);
         try {
@@ -236,8 +236,8 @@ async function main(): Promise<void> {
       }
     }
     const tauOfKey = (k: string) => (taus.has(k) ? tauOf(taus.get(k)!) : NaN);
-    const exploratoryTau = Object.fromEntries(a.explore.flatMap((k) => (taus.has(k) ? [[k, tauOfKey(k)]] : [])));
-    const { config, written, differs } = freeze(a.root, makeConfig(tauOfKey('potion'), fBest, Object.keys(exploratoryTau).length ? exploratoryTau : undefined));
+    const exploratoryTau = Object.fromEntries(explore.flatMap((k) => (taus.has(k) ? [[k, tauOfKey(k)]] : [])));
+    const { config, written, differs } = freeze(o.root, makeConfig(tauOfKey('potion'), fBest, Object.keys(exploratoryTau).length ? exploratoryTau : undefined));
     log(written ? 'froze the configuration (§2.4)' : Number.isFinite(config.tau) ? 'using the frozen configuration' : 'no tau: not frozen, FTS only');
     if (differs.length) log(`this run computes different ${differs.join(', ')} than the frozen file; the frozen values stand (re-tuning is a new pre-registration)`);
     const es = all.filter((e) => Number.isFinite(tauFor(config, e.key)));
@@ -249,8 +249,7 @@ async function main(): Promise<void> {
       for (const store of s) {
         const view = new StoreView(store.file, store.repoKey);
         try {
-          const ranks = await rankers(view, config, es);
-          for (const [ranker, rank] of ranks) {
+          for (const [ranker, rank] of await rankers(view, config, es)) {
             let returned = 0, vectorOnly = 0;
             const texts = irrelevant.get(tree)!;
             for (const text of texts) {
@@ -265,16 +264,22 @@ async function main(): Promise<void> {
         }
       }
     }
-    const scores = await scoreQueries(r2a.queries, await rankers(r2aView, config, es), config);
-    if (a.retrieval) for (const t of trees) {
-      const s = await scoreTree(t, config, es);
-      log(`R1 ${t.rootId}: ${new Set(s.map((x) => x.query.split('/')[1])).size} labelled nodes`);
-      scores.push(...s);
+    const scores = want.has('r2a') ? await scoreQueries(r2a.queries, await rankers(r2aView, config, es), config) : [];
+    if (want.has('r1') || want.has('r2b')) {
+      const extra = new Map<string, Extra[]>();
+      for (const q of want.has('r2b') ? o.r2b ?? [] : []) extra.set(q.node!, [...(extra.get(q.node!) ?? []), { id: q.id, set: q.set, text: q.text, ...(q.harness ? { harness: q.harness } : {}) }]);
+      for (const t of trees) {
+        const s = (await scoreTree(t, config, es, extra)).filter((x) => (x.set === 'r2b' ? want.has('r2b') : want.has('r1')));
+        log(`${t.rootId}: ${new Set(s.map((x) => x.query.split('/')[1])).size} labelled nodes scored, ${new Set(s.filter((x) => x.set === 'r2b').map((x) => x.query)).size} R2b queries`);
+        scores.push(...s);
+      }
+      if (want.has('r2b') && !o.r2b?.length) log('no R2b queries: the primary set (P1, P2) cannot be evaluated');
     }
     const regression = await r3((v) => rankers(v, config, es), config.k);
     const result = evaluate({ config, scores, noise, r3: regression, rankers: names, exploratory: es.map((e) => e.key).filter((k) => `H:${k}` !== CANDIDATE) });
-    log(`wrote ${writeResult(a.root, 'replay', result)}`);
+    log(`wrote ${writeResult(o.root, o.name, result)}`);
     console.log(printVerdict(result));
+    return result;
   } finally {
     r2aView.close();
     r2a.close();
@@ -282,8 +287,37 @@ async function main(): Promise<void> {
   }
 }
 
+// --- The CLI ---
+
+function main(argv: string[]): Promise<RetrievalResult> {
+  // --scale may stand alone for the pre-registered sizes.
+  const at = argv.indexOf('--scale');
+  if (at >= 0 && (at + 1 === argv.length || argv[at + 1].startsWith('--'))) argv = [...argv.slice(0, at + 1), SCALE.join(','), ...argv.slice(at + 1)];
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      retrieval: { type: 'boolean', default: false }, scale: { type: 'string' }, root: { type: 'string' }, home: { type: 'string' },
+      deps: { type: 'string' }, explore: { type: 'string' }, workspace: { type: 'string' },
+    },
+  });
+  if (!values.root) throw new Error('--root DIR is required: a scratch directory outside the repo and ~/.tiller');
+  if (!values.retrieval && !values.scale) throw new Error('nothing to do: pass --retrieval and/or --scale');
+  const explore = (values.explore ? values.explore.split(',') : []) as Exclude<CandidateKey, 'potion'>[];
+  for (const k of explore) if (!EXPLORATORY.includes(k)) throw new Error(`--explore takes ${EXPLORATORY.join(', ')}, not ${k}`);
+  if (explore.length && !values.deps) throw new Error('--explore needs --deps');
+  const scale = values.scale?.split(',').map(Number);
+  if (scale?.some((n) => !Number.isInteger(n) || n <= 0)) throw new Error('--scale takes item counts, as 5000,20000');
+  const home = resolve(values.home ?? process.env.TL_HOME ?? join(homedir(), '.tiller'));
+  const root = checkRoot(values.root, home);
+  return gate({
+    root, home, sets: ['r2a', ...(values.retrieval ? ['r1' as const] : []), ...(scale ? ['s' as const] : [])], explore, name: 'replay',
+    ...(scale ? { scale } : {}), ...(values.deps ? { deps: resolve(values.deps) } : {}), ...(values.workspace ? { workspace: resolve(values.workspace) } : {}),
+    log: (s) => console.error(`[replay] ${s}`),
+  });
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  main().catch((err: unknown) => {
+  main(process.argv.slice(2)).catch((err: unknown) => {
     console.error(err instanceof Error ? err.message : err);
     process.exit(1);
   });
