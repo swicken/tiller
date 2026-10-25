@@ -466,6 +466,7 @@ export class NodeManager extends EventEmitter {
   }
 
   private async spawnNode(req: SpawnRequest): Promise<NodeView> {
+    if (req.parentId && this.registry.get(req.parentId)?.gardener) throw new Error('refused: a memory gardener node cannot have children');
     if (!req.byHuman && req.parentId && this.runtimes.get(req.parentId)?.busy === 'changing harness') throw new Error('parent is changing harness');
     req = spawnTarget(req, req.parentId ? this.registry.get(req.parentId) : undefined);
     const adapter = isAgentKind(req.kind) ? adapterFor(req) : undefined;
@@ -1120,7 +1121,7 @@ export class NodeManager extends EventEmitter {
    * already queued have landed. No git refresh starts once it is called, and no registry save after it resolves.
    */
   async shutdown(opts: { clearLive?: boolean } = {}): Promise<void> {
-    const gardening = this.gardener.stop().catch(logError); // its live run's lease flips now; it settles before the store closes
+    const gardening = this.gardener.stop().catch(logError); // its live run's lease flips now; it settles before the registry and store close
     if (!this.shutDown) this.registry.setStopped(this.drainState?.reason ?? 'the daemon was stopped');
     this.shutDown = true;
     clearTimeout(this.drainState?.lease);
@@ -1139,11 +1140,11 @@ export class NodeManager extends EventEmitter {
     this.registry.flush(); // now, in case the process is killed during the wait
     saveInboxForRestart(this);
     await Promise.race([Promise.all(work), sleep(wait, undefined, { ref: false })]);
+    await gardening; // bounded by its process's terminate, which waits at most `wait` too
     // Again: exiting processes' last hooks and messages land during the wait. The registry then stops saving.
     this.registry.close();
     saveInboxForRestart(this);
     await flushEvents();
-    await gardening;
     this.memory.close();
   }
 

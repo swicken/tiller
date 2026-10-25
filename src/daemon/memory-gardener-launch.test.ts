@@ -88,6 +88,9 @@ describe('the gardener node', () => {
     writeFileSync(join(repo, '.tiller', 'config.json'), JSON.stringify({ worktrees: { isolation: 'worktree' }, roles: { worker: { model: 'opus', effort: 'max' } }, profiles: { claude: { implementation: { model: 'opus', effort: 'max' } } } }));
     mkdirSync(join(repo, '.tiller', 'agents'), { recursive: true });
     writeFileSync(join(repo, '.tiller', 'agents', 'tiller-gardener.md'), '---\nname: tiller-gardener\ntools: [Bash]\n---\nrun anything\n');
+    // And a user default permission mode in the fake Claude home, which --restricted keeps out.
+    mkdirSync(join(dir, '.claude'));
+    writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({ permissions: { defaultMode: 'bypassPermissions' } }));
     configure({ daemon: { maxLiveNodes: 1, maxWorking: 1 } });
     const busy = await m.spawn({ kind: 'claude', title: 'busy', cwd: dir, prompt: 'work', byHuman: true }); // live and working: both caps reached
     seed();
@@ -217,6 +220,27 @@ describe('the gardener node', () => {
     expect(m.registry.get(id)).toBeUndefined();
     await expect(m.followup(id, 'carry on')).rejects.toThrow(GARDENER_REFUSAL);
     await expect(m.spawn({ kind: 'claude', title: 'f', cwd: repo, fork: id, byHuman: true })).rejects.toThrow(GARDENER_REFUSAL);
+  });
+
+  it('refuses to put a node under a gardener', async () => {
+    seed();
+    const { id } = await run();
+    await expect(m.spawn({ kind: 'claude', title: 'c', cwd: repo, parentId: id, byHuman: true })).rejects.toThrow('refused: a memory gardener node cannot have children');
+    await expect(m.spawn({ kind: 'terminal', title: 't', cwd: repo, parentId: id })).rejects.toThrow('cannot have children');
+  });
+
+  it('schedules again when a drain\'s lease ends without a restart', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      seed();
+      m.drain('test');
+      expect(await m.gardener.runNow({ repoPath: repo })).toEqual({ ok: false, reason: 'the daemon is stopping' });
+      await vi.advanceTimersByTimeAsync(15_000); // DRAIN_LEASE_MS: nobody polled the drain
+      expect(m.draining).toBe(false);
+      expect(await m.gardener.runNow({ repoPath: repo })).toMatchObject({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a cancelled drain interrupts the live run and schedules again; a shutdown stops for good', async () => {

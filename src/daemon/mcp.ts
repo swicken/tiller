@@ -1018,6 +1018,8 @@ export function mountMcp(manager: NodeManager, confirm: Ctx['confirm'], focus: C
   async function api(req: http.IncomingMessage, res: http.ServerResponse, name: string, ctx: Ctx): Promise<void> {
     const reply = (code: number, body: unknown) => res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
     const t = (tools as Record<string, (typeof tools)[keyof typeof tools]>)[name];
+    // As over /mcp, a gardener's call to any name but its four trips the wire, a name no tool has included.
+    if (!t && req.method === 'POST' && isGardener(manager, ctx.caller)) manager.gardener.toolCall(ctx.caller, name);
     if (req.method !== 'POST' || !t) return void res.writeHead(404).end();
     const raw = await readBody(req, res);
     if (raw === undefined) return;
