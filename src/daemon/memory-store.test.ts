@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  LIMITS, normalizeDedupe, SCHEMA_V1, type Actor, type Derived, type DerivedItem, type EpisodeInput, type ItemKind, type MemoryScope,
+  LIMITS, normalizeDedupe, type Actor, type Derived, type DerivedItem, type EpisodeInput, type ItemKind, type MemoryScope,
 } from './memory-schema.js';
 import { DIGEST_SECTIONS, digestFor } from './memory-digest.js';
 import { ftsQuery, MemoryStore, readFailure } from './memory-store.js';
@@ -268,10 +268,77 @@ describe('create only on write', () => {
     db.close();
   });
 
+  /** The schema memory v2 shipped (SCHEMA_V1 at c5414ba), frozen here so a later edit to SCHEMA_V1 cannot hide a migration bug. */
+  const SHIPPED_V1 = `
+PRAGMA auto_vacuum = INCREMENTAL;     -- must precede the first CREATE TABLE (else silently 0)
+PRAGMA journal_mode = WAL;            -- on every open also: synchronous=NORMAL, foreign_keys=ON
+CREATE TABLE repos (
+  id INTEGER PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,           -- 'git:github.com/swicken/tiller' | 'path:/abs' | 'account:' (sentinel)
+  path TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+INSERT INTO repos (key, path, created_at) VALUES ('account:', '', 0);   -- reserved account-wide scope; v1 never uses it
+CREATE TABLE episodes (               -- append-only facts: derive() input, provenance, metrics
+  id INTEGER PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  repo_id INTEGER NOT NULL REFERENCES repos(id),
+  root_id TEXT NOT NULL, node_id TEXT NOT NULL,
+  kind TEXT NOT NULL,                 -- EPISODE_KINDS in TS
+  harness TEXT, model TEXT, role TEXT, profile TEXT,
+  data TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data))   -- redacted, capped
+) STRICT;
+CREATE INDEX episodes_repo_ts ON episodes(repo_id, ts);
+CREATE INDEX episodes_node ON episodes(node_id, ts);
+CREATE TABLE items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,   -- m<id>; never reused
+  repo_id INTEGER NOT NULL REFERENCES repos(id),
+  kind TEXT NOT NULL,                     -- ITEM_KINDS
+  text TEXT NOT NULL,                     -- '' only for tombstones
+  body TEXT NOT NULL DEFAULT '',
+  author TEXT NOT NULL,                   -- AUTHORS: daemon | agent | human
+  node_id TEXT, root_id TEXT, harness TEXT, model TEXT,
+  episode_id INTEGER REFERENCES episodes(id) ON DELETE SET NULL,
+  dedupe TEXT NOT NULL,
+  seen INTEGER NOT NULL DEFAULT 1,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  invalid_at INTEGER, invalid_kind TEXT,  -- agent (forget or supersede by an agent) | human | superseded (by the human only) | evicted
+  invalid_by TEXT, invalid_reason TEXT,
+  supersedes INTEGER REFERENCES items(id),
+  cites INTEGER NOT NULL DEFAULT 0, gets INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (repo_id, kind, dedupe)
+) STRICT;
+CREATE INDEX items_repo_kind ON items(repo_id, kind, updated_at) WHERE invalid_at IS NULL;
+CREATE INDEX items_root ON items(root_id, kind, updated_at) WHERE invalid_at IS NULL;
+CREATE VIRTUAL TABLE items_fts USING fts5(text, body, content='items', content_rowid='id', tokenize='porter unicode61');
+CREATE TRIGGER items_ai AFTER INSERT ON items BEGIN
+  INSERT INTO items_fts(rowid, text, body) VALUES (new.id, new.text, new.body); END;
+CREATE TRIGGER items_ad AFTER DELETE ON items BEGIN
+  INSERT INTO items_fts(items_fts, rowid, text, body) VALUES ('delete', old.id, old.text, old.body); END;
+CREATE TRIGGER items_au AFTER UPDATE OF text, body ON items BEGIN
+  INSERT INTO items_fts(items_fts, rowid, text, body) VALUES ('delete', old.id, old.text, old.body);
+  INSERT INTO items_fts(rowid, text, body) VALUES (new.id, new.text, new.body); END;
+CREATE TABLE injections (             -- one row per launch that applied a digest decision
+  id INTEGER PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  session_id TEXT NOT NULL, node_id TEXT NOT NULL, root_id TEXT NOT NULL,
+  repo_id INTEGER NOT NULL REFERENCES repos(id),
+  arm TEXT NOT NULL,                  -- on | off (applied)
+  cause TEXT NOT NULL,                -- config | ab | resume
+  role TEXT, profile TEXT, harness TEXT, model TEXT,
+  item_ids TEXT NOT NULL CHECK (json_valid(item_ids)),
+  text TEXT NOT NULL                  -- '' on resume rows, scrubbed or evicted rows
+) STRICT;
+CREATE INDEX injections_session ON injections(session_id, ts);
+CREATE INDEX injections_node ON injections(node_id, ts);
+PRAGMA user_version = 1;
+`;
+
   it('migrates a v1 file to schema 2 when it opens, keeping its items', () => {
     mkdirSync(join(home, 'memory'), { recursive: true });
     const v1 = new DatabaseSync(file());
-    v1.exec(SCHEMA_V1);
+    v1.exec(SHIPPED_V1);
     v1.prepare(`INSERT INTO repos (key, path, created_at) VALUES ('git:example.com/a/b', '/repo', 0)`).run();
     v1.prepare(`INSERT INTO items (repo_id, kind, text, author, dedupe, created_at, updated_at) VALUES (2, 'note', 'kept from v1', 'agent', 'kept from v1', 0, 0)`).run();
     v1.close();
@@ -1080,6 +1147,27 @@ describe('the gardener (v3)', () => {
     expect([row(2).seen, row(10).seen]).toEqual([2, 1]);
   });
 
+  it('refuses a merge that would make a redirect chain longer than eight hops', () => {
+    const s = open();
+    const ids = seed(s, {
+      K: item('pitfall', 'flaky widget gadget sprocket test'),
+      D: item('pitfall', 'flaky widget gadget sprocket test again'),
+      E: item('pitfall', 'flaky widget gadget sprocket test twice'),
+    });
+    filler(s);
+    const hops = Array.from({ length: 15 }, (_, i) => idOf(`filler${i}zz`));
+    query((db) => {
+      const into = db.prepare(`UPDATE items SET invalid_at = 1, invalid_kind = 'merged', invalid_by = 'gardener:r1', merged_into = ? WHERE id = ?`);
+      hops.slice(0, 8).forEach((id, i) => into.run(i < 7 ? hops[i + 1] : ids.D, id)); // eight hops down to D
+      hops.slice(8).forEach((id, i) => into.run(i < 6 ? hops[i + 9] : ids.E, id)); // seven down to E
+    });
+    const run = start(s);
+    expect(merge(s, run, [ids.K, ids.D])).toEqual(refused('chain'));
+    expect(merge(s, run, [ids.K, ids.E])).toMatchObject({ ok: true, kept: ids.K, hidden: [ids.E] });
+    expect(s.run(undefined, run).stats.refused).toEqual({ chain: 1 });
+    expect(row(ids.D).invalid_at).toBeNull();
+  });
+
   it('undoes a run newest first back to the rows it found, the second time doing nothing', () => {
     const s = open();
     const ids = fixture(s);
@@ -1285,15 +1373,32 @@ describe('the gardener (v3)', () => {
       expect([row(ids.B).invalid_at, row(ids.C).invalid_at, row(ids.C).seen]).toEqual([null, null, 3]);
     });
 
-    it('fails a row hidden with no action, and a pin that left the digest', () => {
+    it('passes a merge whose member stopped being eligible after the run hid it', () => {
       const s = open();
       const ids = fixture(s);
-      const pin = s.pin(scope(), human, { text: 'never force push shared branches' }).id;
+      filler(s);
+      s.apply(scope('n-ok'), derived([item('pitfall', `${P.A} again`)], outcome('succeeded')));
+      const late = idOf(`${P.A} again`);
       const run = start(s);
+      expect(merge(s, run, [ids.A, late])).toMatchObject({ ok: true, kept: ids.A, hidden: [late] });
+      s.apply(scope('n-ok'), derived([], outcome('failed')));
+      s.endRun(undefined, run, 'done');
+      s.finishRun(undefined, run, { usd: 0.01, incomplete: false });
+      expect(s.verifyRun(undefined, run)).toEqual([]);
+    });
+
+    it('fails a row hidden with no action, and a pin the run kept that left the digest, but not a pin it never touched', () => {
+      const s = open();
+      const ids = fixture(s);
+      filler(s);
+      const other = s.pin(scope(), human, { text: 'never force push shared branches' }).id;
+      const pin = s.pin(scope(), human, { id: ids.C }).id;
+      const run = start(s);
+      expect(merge(s, run, [ids.B, pin])).toMatchObject({ ok: true, kept: pin });
       query((db) => db.prepare(`UPDATE items SET invalid_at = 1, invalid_kind = 'gardener', invalid_by = ? WHERE id = ?`).run(`gardener:r${run}`, ids.A));
       s.endRun(undefined, run, 'done');
       const stats = s.finishRun(undefined, run, { usd: 0, incomplete: false }).stats;
-      expect(stats.before.digest.ids).toContain(pin);
+      expect(stats.before.digest.ids).toEqual(expect.arrayContaining([pin, other]));
       const after = { ...stats, after: { ...stats.after!, digest: { ids: [], chars: 0 } } };
       query((db) => db.prepare('UPDATE garden_runs SET stats = ? WHERE id = ?').run(JSON.stringify(after), run));
       expect(s.verifyRun(undefined, run)).toEqual([`m${ids.A} is hidden by r${run} with no action`, `pin m${pin} left the orchestrator digest`]);

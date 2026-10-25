@@ -900,7 +900,8 @@ export class MemoryStore implements DigestSource, GardenStore {
         // The daemon picks the keep; the gardener's order never counts (D8 rule 4).
         const [keep, ...members] = [...rows].sort(keepRank);
         for (const m of members) {
-          const refused = shield(m) || immune(m, keep) || cover(m, keep);
+          const refused = shield(m) || immune(m, keep) || cover(m, keep)
+            || (this.hopsBelow(db, m.id) >= g.chainDepth && refuse('chain', `merging ${ref(m)} into ${ref(keep)} makes a merge chain longer than ${g.chainDepth}`));
           if (refused) return refused;
         }
         if (members.length > done.hidesLeft) return refuse('hides', `this run may hide ${done.hidesLeft} more items`);
@@ -961,11 +962,12 @@ export class MemoryStore implements DigestSource, GardenStore {
         const run = this.runRow(db, runId), stats = JSON.parse(run.stats) as GardenRunStats, by = gardenBy(runId), r = runRef(runId);
         const found: string[] = [];
         const actions = (db.prepare('SELECT * FROM garden_actions WHERE run_id = ? AND undone_at IS NULL ORDER BY id').all(runId) as unknown as ActionRow[]);
-        // 1. Every row the run hides has its action, was a candidate, is eligible and is not protected.
-        for (const h of db.prepare(`SELECT i.*, ${ELIGIBLE} AS eligible FROM items i WHERE i.invalid_by = ?`).all(by) as unknown as EligibleRow[]) {
+        // 1. Every row the run hides has its action, was a candidate and is not protected. Eligibility can lapse after the
+        // hide (a failed outcome), so gardenApply checks it inside the hide's own transaction instead.
+        for (const h of db.prepare('SELECT * FROM items WHERE invalid_by = ?').all(by) as unknown as ItemRow[]) {
           if (!actions.some((a) => a.item_id === h.id)) found.push(`m${h.id} is hidden by ${r} with no action`);
           if (protectedWhy(h)) found.push(`m${h.id} is ${protectedWhy(h)} but hidden by ${r}`);
-          if (!h.eligible || !stats.candidates.includes(h.id)) found.push(`m${h.id} was not an eligible candidate of ${r}`);
+          if (!stats.candidates.includes(h.id)) found.push(`m${h.id} was not a candidate of ${r}`);
         }
         // 2. Every merge chain the run made ends on a live item, or on one someone else retracted after the merge.
         for (const a of actions.filter((x) => x.action === 'merge')) {
@@ -981,17 +983,19 @@ export class MemoryStore implements DigestSource, GardenStore {
         const supersedes = actions.filter((a) => a.action === 'supersede').length;
         if (actions.length > stats.maxHides) found.push(`${r} hid ${actions.length} items, over its cap of ${stats.maxHides}`);
         if (supersedes > LIMITS.garden.maxSupersedes) found.push(`${r} superseded ${supersedes} items, over the cap of ${LIMITS.garden.maxSupersedes}`);
-        // 4. The orchestrator digest keeps every pin it had before the run.
+        // 4. The orchestrator digest keeps every pin it had before the run that the run hid or kept. The rules already
+        // shield pins; this is the backstop. Untouched pins can leave it by the human's hand or the digest's own budget.
+        const touched = new Set(actions.flatMap((a) => [a.item_id, a.into_id ?? a.item_id]));
         const after = new Set(stats.after?.digest.ids ?? digestFor(this, { account, repoKey: run.repo_key, repoPath: '' }, { role: 'orchestrator', now: this.now() }).itemIds);
-        const pinned = db.prepare('SELECT pinned FROM items WHERE id = ? AND invalid_at IS NULL');
-        for (const id of stats.before.digest.ids) {
-          if ((pinned.get(id) as { pinned: number } | undefined)?.pinned && !after.has(id)) found.push(`pin m${id} left the orchestrator digest`);
+        const pin = db.prepare('SELECT pinned, invalid_at, invalid_by FROM items WHERE id = ?');
+        for (const id of stats.before.digest.ids.filter((x) => touched.has(x) && !after.has(x))) {
+          const p = pin.get(id) as { pinned: number; invalid_at: number | null; invalid_by: string | null } | undefined;
+          if (p?.pinned && (p.invalid_at === null || p.invalid_by === by)) found.push(`pin m${id} left the orchestrator digest`);
         }
         // 5. No item the run touched is live while its newest retraction or restore was the human's forget.
-        const touched = JSON.stringify([...new Set(actions.flatMap((a) => [a.item_id, a.into_id ?? a.item_id]))]);
         for (const { id } of db.prepare(`SELECT i.id FROM items i WHERE i.id IN (SELECT value FROM json_each(?)) AND i.invalid_at IS NULL
           AND (SELECT e.kind = 'forget' AND json_extract(e.data, '$.actor') = 'human' FROM episodes e
-            WHERE e.kind IN ('forget', 'pin', 'restore') AND json_extract(e.data, '$.itemId') = i.id ORDER BY e.id DESC LIMIT 1)`).all(touched) as { id: number }[]) {
+            WHERE e.kind IN ('forget', 'pin', 'restore') AND json_extract(e.data, '$.itemId') = i.id ORDER BY e.id DESC LIMIT 1)`).all(JSON.stringify([...touched])) as { id: number }[]) {
           found.push(`m${id} is live after the human forgot it`);
         }
         if (found.length) db.prepare('UPDATE garden_runs SET stats = ? WHERE id = ?').run(JSON.stringify({ ...stats, violations: found }), runId);
@@ -1358,6 +1362,17 @@ export class MemoryStore implements DigestSource, GardenStore {
       r = db.prepare('SELECT * FROM items WHERE id = ?').get(r.merged_into) as unknown as ItemRow;
     }
     return r;
+  }
+
+  /** The most hops any merged row takes to redirect to this one, counted no further than LIMITS.garden.chainDepth. */
+  private hopsBelow(db: DatabaseSync, id: number): number {
+    const members = db.prepare(`SELECT id FROM items WHERE invalid_kind = 'merged' AND merged_into IN (SELECT value FROM json_each(?))`);
+    let level = [id], hops = 0;
+    for (; hops < LIMITS.garden.chainDepth; hops++) {
+      level = (members.all(JSON.stringify(level)) as { id: number }[]).map((r) => Number(r.id));
+      if (!level.length) break;
+    }
+    return hops;
   }
 
   private latestAction(db: DatabaseSync, itemId: number): ActionRow | undefined {
