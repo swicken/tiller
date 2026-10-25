@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { NodeRecord } from '../shared/protocol.js';
 import { CompletionGate } from './completion-gate.js';
-import { lifecycleRefusal, type LifecycleOp } from './lifecycle-guards.js';
+import { GARDENER_REFUSAL, lifecycleRefusal, type LifecycleOp } from './lifecycle-guards.js';
 import { NodeManager, type NodeRuntime } from './manager.js';
 import type { PtySession } from './pty.js';
 
@@ -13,6 +13,7 @@ describe('lifecycleRefusal', () => {
   const gate = new CompletionGate(); // a new gate is running
   const session = {} as PtySession, setup = { abort: new AbortController(), done: Promise.resolve() };
   const pending = 'node is armed or queued: it launches by itself; close it to drop it';
+  const gardener = { gardener: { repoKey: 'k', runId: 1 } };
   it.each<[LifecycleOp, Partial<NodeRecord>, NodeRuntime, string | undefined]>([
     ['resume', {}, {}, undefined],
     ['resume', { pending: { afterOutcome: [] } as any }, { busy: 'closing' }, pending],
@@ -35,6 +36,10 @@ describe('lifecycleRefusal', () => {
     ['changeHarness', {}, { gate }, 'completion gate is running'],
     ['close', { pending: { afterOutcome: [] } as any }, { setup, needsSetup: { prompt: undefined }, gate }, undefined],
     ['close', {}, { busy: 'merging' }, 'n is already merging'],
+    ['resume', gardener, {}, GARDENER_REFUSAL],
+    ['restart', gardener, { busy: 'closing' }, GARDENER_REFUSAL],
+    ['changeHarness', gardener, {}, GARDENER_REFUSAL],
+    ['close', gardener, {}, undefined],
   ])('%s %j %j -> %s', (op, fields, rt, want) => {
     expect(lifecycleRefusal(op, 'n', { ...rec, ...fields }, rt)).toBe(want);
   });

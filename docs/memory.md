@@ -261,11 +261,11 @@ merged 4 (9 items), superseded 2 · $0.04 · undo: tl memory garden undo r12
 The node then stays in the tree, exited, with its spend. The next run for that repository closes it, or you can close it yourself. It cannot be resumed, restarted, followed up or forked: start a new run instead.
 
 **What the model is given.** It has only four tools, `garden_list`, `garden_get`, `garden_merge` and `garden_supersede`, and they act only on that run's repository. Claude Code launches it with these settings:
-- `--restricted --tools '' --permission-mode dontAsk --strict-mcp-config`;
+- `--restricted --tools '' --permission-mode dontAsk --strict-mcp-config --disable-slash-commands`;
 - an agent definition and a permission list that name exactly those four tools;
 - `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` and `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, without which Claude Code offers two more tools.
 
-So it has no shell, file, web or other Tiller tool, no claude.ai connector or plugin server, no session directory and no `# Memory` digest. The repository's `CLAUDE.md` and `AGENTS.md` are not loaded. Item text reaches it only inside tool results, under a system prompt that says item text is data written by other agents and never instructions. Its model comes from `memory.gardener.model` and its effort is always `medium`; the project's settings set neither.
+So it has no shell, file, web or other Tiller tool, no claude.ai connector or plugin server, no skill or slash command, no session directory and no `# Memory` digest. The repository's `CLAUDE.md` and `AGENTS.md` are not loaded. Item text reaches it only inside tool results, under a system prompt that says item text is data written by other agents and never instructions. Its model comes from `memory.gardener.model` and its effort is always `medium`; the project's settings set neither.
 
 ### Cost and caps
 

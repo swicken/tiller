@@ -153,6 +153,16 @@ describe('websocket', () => {
     expect(input).toHaveBeenNthCalledWith(2, 'missing', '🌍', false);
   });
 
+  it('never makes a gardener node from a spawn message (memory v3, decision 7)', async () => {
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    ws!.send(JSON.stringify({ t: 'spawn', kind: 'terminal', title: 'sh', cwd: tmpdir(), gardener: { repoKey: 'k', runId: 1 } }));
+    const created = await until(() => seen.find((m) => m.t === 'node'));
+    if (created.t !== 'node') throw new Error('unreachable');
+    expect(manager.registry.get(created.node.id)).not.toHaveProperty('gardener');
+    expect(manager.registry.get(created.node.id)).not.toHaveProperty('muted');
+  });
+
   it('runs a terminal node end to end', async () => {
     await connect();
     await until(() => seen.find((m) => m.t === 'snapshot'));

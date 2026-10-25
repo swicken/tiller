@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { stripVTControlCharacters } from 'node:util';
 import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { type Profile, harnessFor, isAgentKind, NEEDS_YOU_STATES, type Harness, type ArchivedNode, type Diff, type DigestItem, type Drain, type Transcript, type GitState, type ModEvent, type NodeKind, type NodeRecord, type NodeStatus, type NodeView, type Outcome, type Effort, type Isolation, type Role, type Usage, type Worktree } from '../shared/protocol.js';
 import { loadConfig, type Config, type MergeStyle } from './config.js';
@@ -20,7 +20,8 @@ import { arm, scheduleSoon, working } from './scheduling.js';
 import { CompletionGate, gateFor } from './completion-gate.js';
 import type { CompletionWatches } from './completion-watches.js';
 import { NodeTokens } from './node-tokens.js';
-import { lifecycleRefusal } from './lifecycle-guards.js';
+import { GARDENER_REFUSAL, lifecycleRefusal } from './lifecycle-guards.js';
+import { GARDENER_AGENT_TOOLS, type GardenHost, Gardener, turnBound } from './gardener.js';
 import { nodeDefaults, resolveSpawn, restartSelection, spawnTarget } from './spawn-policy.js';
 
 import { DAEMON, deliver, handoverInbox, holdDeliveries, HUMAN, inScope, saveInboxForRestart, submitting, waitForDeliveries } from './messaging.js';
@@ -216,6 +217,8 @@ export class NodeManager extends EventEmitter {
   private repoKeys = new Map<string, string>();
   /** Memory's store. It opens nothing until memory is used, and memory is off unless the human opts in. */
   readonly memory: MemoryStore;
+  /** The memory gardener's scheduler and run lifecycle; it starts nothing while memory.gardener.enabled is off. */
+  readonly gardener: Gardener;
 
   constructor(opts: ManagerOptions = {}) {
     super();
@@ -250,6 +253,9 @@ export class NodeManager extends EventEmitter {
     this.sweepTimer.unref();
     this.on('node', () => scheduleSoon(this));
     this.on('removed', () => scheduleSoon(this));
+    this.gardener = new Gardener(this.gardenHost());
+    this.gardener.start(); // its timers are unref'd
+    this.on('removed', () => this.gardener.nodeRemoved());
   }
 
   // ---- tokens ----
@@ -332,12 +338,12 @@ export class NodeManager extends EventEmitter {
   }
 
   /**
-   * Agent node `id`'s memory scope when memory is on for its project and account (memoryOn), else undefined. The opt-in
-   * is checked first, so memory that is off never computes a repo key.
+   * Agent node `id`'s memory scope when memory is on for its project and account (memoryOn), else undefined; never for a
+   * memory gardener, whose work is not captured. The opt-in is checked first, so memory that is off never computes a repo key.
    */
   private memoryOnFor(id: string): MemoryScope | undefined {
     const rec = this.registry.get(id);
-    if (!rec || !isAgentKind(rec.kind) || !memoryOn(this.home, this.projectDir(rec), rec.account).on) return undefined;
+    if (!rec || !isAgentKind(rec.kind) || rec.gardener || !memoryOn(this.home, this.projectDir(rec), rec.account).on) return undefined;
     return this.memoryScope(id);
   }
 
@@ -425,9 +431,12 @@ export class NodeManager extends EventEmitter {
     return repoKey;
   }
 
-  /** Throw when an agent's spawn would pass limits.maxDepth or maxChildren (from the node's project config) or daemon.maxLiveNodes (home config). */
+  /**
+   * Throw when an agent's spawn would pass limits.maxDepth or maxChildren (from the node's project config) or
+   * daemon.maxLiveNodes (home config). The human's spawns and the memory gardener's skip them, and no gardener counts (D3).
+   */
   private checkLimits(req: SpawnRequest, limits: Config['limits']): void {
-    if (req.byHuman) return;
+    if (req.byHuman || req.gardener) return;
     const parentId = req.parentId ?? null;
     const { maxDepth, maxChildren } = limits;
     const { maxLiveNodes } = loadConfig(null, this.home).daemon;
@@ -438,7 +447,7 @@ export class NodeManager extends EventEmitter {
     if (depth > maxDepth) refuse('limits.maxDepth', maxDepth, `the new node would be ${depth} levels below the root`);
     const children = this.registry.list().filter((n) => n.parentId === parentId && this.session(n.id)).length;
     if (parentId !== null && children >= maxChildren) refuse('limits.maxChildren', maxChildren, `${parentId} has ${children} live children`);
-    const live = this.liveIds().length;
+    const live = this.liveCount();
     if (live >= maxLiveNodes) refuse('daemon.maxLiveNodes', maxLiveNodes, `${live} nodes are live`);
   }
 
@@ -448,9 +457,15 @@ export class NodeManager extends EventEmitter {
    * mode unless that is bypassPermissions; isolation from the config for a claude node whose role is worker or none.
    * Isolation "worktree" gives the node <main checkout>/.claude/worktrees/<id> on branch <prefix><id>, branched from its
    * base (see wt.pickBase: req.base, else the cwd's HEAD branch, else a new task branch); the repo must have a commit
-   * and be trusted by Claude. Any failure removes the worktree and branch and discards the record.
+   * and be trusted by Claude. Any failure removes the worktree and branch and discards the record. A request's gardener
+   * field is dropped: only the memory gardener's own spawn (spawnGardener) makes a gardener node.
    */
-  async spawn(req: SpawnRequest): Promise<NodeView> {
+  spawn(req: SpawnRequest): Promise<NodeView> {
+    const { gardener: _, ...rest } = req;
+    return this.spawnNode(rest);
+  }
+
+  private async spawnNode(req: SpawnRequest): Promise<NodeView> {
     if (!req.byHuman && req.parentId && this.runtimes.get(req.parentId)?.busy === 'changing harness') throw new Error('parent is changing harness');
     req = spawnTarget(req, req.parentId ? this.registry.get(req.parentId) : undefined);
     const adapter = isAgentKind(req.kind) ? adapterFor(req) : undefined;
@@ -480,6 +495,7 @@ export class NodeManager extends EventEmitter {
     const rec = this.registry.create({ // the resolved fields, so restart keeps them
       parentId, kind: req.kind, ...(req.harness ? { harness: req.harness } : {}), title: req.title, cwd: req.cwd,
       model, effort, ...(adapter ? { explicit } : {}), ...(account ? { account } : {}), permissionMode, role, profile, preset: req.preset,
+      ...(req.gardener ? { gardener: req.gardener, muted: true } : {}),
       sessionId: adapter ? req.followup?.sessionId ?? randomUUID() : undefined,
       ...(adapter && adapter.id !== 'claude' && req.followup?.transcriptPath ? { transcriptPath: req.followup.transcriptPath } : {}),
       ...(adapter && adapter.id !== 'claude' && req.followup?.previousSessions ? { previousSessions: req.followup.previousSessions } : {}),
@@ -514,6 +530,7 @@ export class NodeManager extends EventEmitter {
    * Claude finds a session only in its own account's home, and conversations must not move between accounts.
    */
   private spawnAccount(req: SpawnRequest, parent: NodeRecord | undefined, from: { account?: string } | undefined): string | undefined {
+    if (req.gardener) return req.account; // gardenAccount's, checked by spawnGardener: none is Claude's default home, never claude.account
     if (req.account !== undefined && !req.byHuman) throw new Error('refused: only the human may choose a Claude account; a node you spawn runs in yours');
     const name = (a?: string) => a ?? 'default';
     // Compared by Claude home, so no account and the named default (no configDir) are the same; throws for an unconfigured name.
@@ -540,6 +557,7 @@ export class NodeManager extends EventEmitter {
     if (!adapterFor(req).capabilities.fork) throw new Error('this harness does not support session forking');
     const src = this.registry.get(req.fork!) ?? await findArchived(this.home, req.fork!, req.parentId ? this.rootIdOf(req.parentId) : undefined);
     if (!src) throw new Error(`no such node to fork: ${req.fork}`);
+    if ('gardener' in src && src.gardener) throw new Error(GARDENER_REFUSAL);
     if ((src.harness ?? 'claude') !== harnessFor(req)) throw new Error('cannot fork a session across harnesses');
     // transcriptPath comes with SessionStart: without it the session has not started and there is nothing to fork.
     if (!src.sessionId || !src.transcriptPath) throw new Error(`refused: ${req.fork} has no session yet to fork`);
@@ -794,6 +812,7 @@ export class NodeManager extends EventEmitter {
     const rt = this.runtimes.get(id);
     const refusal = rec && rt && lifecycleRefusal('close', id, rec, rt);
     if (refusal) throw new Error(refusal);
+    if (rec?.gardener) await this.gardener.closing(id); // its live run ends first, as interrupted
     if (rec?.worktree) return closeWorktreeNode(this, id, rec.title, rec.worktree, worktree);
     this.kill(id);
     if (!this.registry.get(id)) return undefined;
@@ -923,6 +942,7 @@ export class NodeManager extends EventEmitter {
       rt.starting = false;
     }
     this.emit('hook', nodeId, event);
+    if (rec.gardener) this.gardener.hook(nodeId, event);
     const next = reduce(prev, event, now);
     if (next.state !== prev.state) this.registry.update(nodeId, { lastActiveAt: now });
     if (event.hook_event_name === 'SessionStart') {
@@ -941,6 +961,7 @@ export class NodeManager extends EventEmitter {
     }
     this.setStatus(nodeId, next);
     const e = event.hook_event_name;
+    if ((e === 'Stop' || e === 'StopFailure') && rec.gardener) this.gardener.turnDone(nodeId);
     if (e === 'Stop' || e === 'StopFailure') refreshGit(this, nodeId).catch(logError);
     else if (e === 'PostToolUse' && GIT_EDIT_TOOLS.includes(String(event.tool_name)) && rec.worktree) refreshGitSoon(this, nodeId);
   }
@@ -970,6 +991,7 @@ export class NodeManager extends EventEmitter {
         if (typeof ev.payload.answer === 'string') base = { ...base, lastAssistantMessage: ev.payload.answer };
       }
       this.setStatus(nodeId, turnComplete(base, now, ev.payload));
+      if (rec?.gardener) this.gardener.turnDone(nodeId);
       refreshGit(this, nodeId).catch(logError);
     } else if (ev.event === 'session.measure') {
       const { context, cost, rateLimits } = ev.payload;
@@ -990,6 +1012,7 @@ export class NodeManager extends EventEmitter {
         this.emit('usage', this.usage);
       }
       if (cost) this.addSpend(nodeId, cost.usd, cost.incomplete === true, cost.unpricedAdded === true, now);
+      if (rec?.gardener) this.gardener.measured(nodeId, ev.payload);
       if (cost && now - (rt.lastCostEvent ?? 0) >= COST_EVENT_MS) {
         rt.lastCostEvent = now;
         this.logEvent(nodeId, 'cost', { usd: cost.usd, ...(context ? { contextPct: context.percent } : {}) });
@@ -1052,6 +1075,7 @@ export class NodeManager extends EventEmitter {
     if (!d) {
       console.log(`drain: holding messages and spawns for a restart (${reason})`);
       holdDeliveries(this);
+      this.gardener.stop().catch(logError); // a restart never waits for a garden run
       this.emit('drain', this.drainView());
     }
     return this.drainView()!;
@@ -1094,6 +1118,7 @@ export class NodeManager extends EventEmitter {
    * already queued have landed. No git refresh starts once it is called, and no registry save after it resolves.
    */
   async shutdown(opts: { clearLive?: boolean } = {}): Promise<void> {
+    const gardening = this.gardener.stop().catch(logError); // its live run's lease flips now; it settles before the store closes
     if (!this.shutDown) this.registry.setStopped(this.drainState?.reason ?? 'the daemon was stopped');
     this.shutDown = true;
     clearTimeout(this.drainState?.lease);
@@ -1116,6 +1141,7 @@ export class NodeManager extends EventEmitter {
     this.registry.close();
     saveInboxForRestart(this);
     await flushEvents();
+    await gardening;
     this.memory.close();
   }
 
@@ -1126,6 +1152,43 @@ export class NodeManager extends EventEmitter {
 
   nodeDir(id: string): string { return join(this.home, 'nodes', id); }
 
+  /** What the Gardener needs from the daemon (GardenHost's doc comments are the contract). */
+  private gardenHost(): GardenHost {
+    const others = () => this.registry.list().filter((n) => isAgentKind(n.kind) && !n.gardener);
+    return {
+      home: this.home,
+      store: this.memory,
+      spawnGardener: (r) => {
+        // Refusals throw here, before anything launches. spawnNode awaits nothing on a gardener's way to its launch, so
+        // the id resolves in this task's microtasks, before any hook or measure (both arrive over HTTP) can be handled.
+        if (this.shutDown || this.draining) throw new Error('the daemon is stopping or draining for a restart');
+        requireHarnessExecutable('claude', this.path);
+        if (r.account) claudeConfigDir(this.home, r.account); // throws for an account no longer configured
+        return this.spawnNode({
+          kind: 'claude', title: `Memory gardener · ${basename(r.repoPath)}`, cwd: r.repoPath, prompt: r.prompt, parentId: null,
+          role: 'none', isolation: 'none', effort: 'medium', model: r.model, permissionMode: 'dontAsk', now: true,
+          ...(r.account ? { account: r.account } : {}), gardener: { repoKey: r.repoKey, runId: r.runId },
+        }).then((v) => v.id);
+      },
+      stopGardener: async (id) => { await this.session(id)?.terminate(this.terminateTimeoutMs); },
+      closePreviousGardener: async (repoKey, account) => {
+        for (const n of this.registry.list()) if (n.gardener?.repoKey === repoKey && n.account === account) await this.close(n.id, true);
+      },
+      quiet: () => !this.draining && !this.shutDown
+        && !others().some((n) => { const rt = this.runtimes.get(n.id); return working(rt) || rt?.status?.state === 'queued'; })
+        && this.liveCount() < loadConfig(null, this.home).daemon.maxLiveNodes,
+      usageFor: (keys) => {
+        const used = keys.flatMap((k) => this.usageByAccount.get(k)?.rateLimits.map((r) => r.percentUsed) ?? []);
+        return used.length ? Math.max(...used) : undefined;
+      },
+      trusted: (path, account) => trustPolicy(path, readClaudeJson(account && claudeConfigDir(this.home, account))) === 'auto',
+      live: (id) => !!this.session(id),
+      record: (id) => this.registry.get(id),
+      gardenerRecords: () => this.registry.list().filter((n) => n.gardener),
+      setOutcome: (id, outcome, summary) => this.setOutcome(id, { outcome, summary, at: Date.now() }),
+    };
+  }
+
   /** Old processes retain their old token paths; a new generation cannot be read through those paths. */
   private launchDir(id: string): string {
     const generation = this.registry.get(id)?.credentialGeneration;
@@ -1135,6 +1198,11 @@ export class NodeManager extends EventEmitter {
   /** Ids of the nodes with a live process. */
   private liveIds(): string[] {
     return [...this.runtimes].flatMap(([id, rt]) => (rt.session ? [id] : []));
+  }
+
+  /** How many nodes have a live process, memory gardeners left out (D3). */
+  private liveCount(): number {
+    return this.liveIds().filter((id) => !this.registry.get(id)?.gardener).length;
   }
 
   /** Save the ids with a live process (plus any not yet resumed) with the registry. Call after every change to a session. */
@@ -1151,7 +1219,9 @@ export class NodeManager extends EventEmitter {
     // Inheriting brings in the user's and plugins' MCP servers, not the project's .mcp.json ones, which would stop the node on an approval prompt.
     const inherit = rec && loadConfig(this.projectDir(rec), this.home).claude.inheritMcpServers;
     const disabledMcpServers = rec && inherit ? projectMcpServerNames([rec.worktree?.path, rec.worktree?.repo, rec.cwd].filter((d): d is string => !!d)) : undefined;
-    writeNodeFiles(dir, { nodeId: id, endpoint: this.endpoint, token, worktree: !!rec?.worktree, sessionDir: this.sessionDirOf(id), disabledMcpServers });
+    // A memory gardener may call only the four garden tools, and has no session directory to write.
+    const files = rec?.gardener ? { allow: GARDENER_AGENT_TOOLS } : { sessionDir: this.sessionDirOf(id), disabledMcpServers };
+    writeNodeFiles(dir, { nodeId: id, endpoint: this.endpoint, token, worktree: !!rec?.worktree, ...files });
   }
 
   setOutcome(id: string, o: Outcome): void {
@@ -1232,7 +1302,8 @@ export class NodeManager extends EventEmitter {
     const input: LaunchInput = {
       nodeId: id, nodeDir: this.launchDir(id), endpoint: this.endpoint, path: this.path, harness: adapter?.id,
       title: rec.title, parentId: rec.parentId, home: this.home, cwd: this.projectDir(rec), role: rec.role, profile: rec.profile, sessionId: rec.sessionId ?? '',
-      resume, forkSession, transcriptPath: rec.transcriptPath, prompt, model: rec.model, effort: rec.effort, permissionMode: rec.permissionMode, worktree: rec.worktree, sharesWorktreeOf: owner?.id, sessionDir,
+      resume, forkSession, transcriptPath: rec.transcriptPath, prompt, model: rec.model, effort: rec.effort, permissionMode: rec.permissionMode, worktree: rec.worktree, sharesWorktreeOf: owner?.id,
+      sessionDir: rec.gardener ? undefined : sessionDir, ...(rec.gardener ? { gardener: { maxTurns: turnBound(config.memory.gardener.maxUsdPerRun) } } : {}),
       preset: rec.preset ? loadPreset(rec.preset, this.projectDir(rec), this.home) : undefined,
       inheritMcpServers: config.claude.inheritMcpServers, piExtensions: config.pi.extensions,
       claudeConfigDir: adapter?.id === 'claude' ? this.claudeDirOf(rec) : undefined, memory: memory?.text,
@@ -1279,6 +1350,7 @@ export class NodeManager extends EventEmitter {
         } else status = { ...status, activity: undefined };
       }
       this.setStatus(id, status, false);
+      if (rec.gardener) this.gardener.exited(id);
       this.emit('notify', { id, kind: 'exited', title: rec.title } satisfies NotifyEvent);
       refreshGit(this, id).catch(logError);
     });

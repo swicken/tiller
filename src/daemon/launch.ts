@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { GARDENER_AGENT, GARDENER_AGENT_TOOLS, GARDENER_ENV, gardenerSystemPrompt } from './gardener.js';
 import { buildChildEnv } from './pty.js';
 import { profileFor, type Harness, type Profile, type Role, type Worktree } from '../shared/protocol.js';
 import type { Preset } from './presets.js';
@@ -34,14 +35,14 @@ export function projectMcpServerNames(dirs: string[]): string[] {
 /**
  * Writes settings.json and mcp.json (0600, it carries the token) into the node's directory. A worktree node gets
  * worktree.baseRef "head" so Claude never resets the worktree it adopts to the default branch. disabledMcpServers go in as
- * disabledMcpjsonServers.
+ * disabledMcpjsonServers. allow replaces the default allow list (the tiller tools and the session directory).
  */
-export function writeNodeFiles(nodeDir: string, o: { nodeId: string; endpoint: string; token: string; worktree?: boolean; sessionDir?: string; disabledMcpServers?: string[] }): void {
+export function writeNodeFiles(nodeDir: string, o: { nodeId: string; endpoint: string; token: string; worktree?: boolean; sessionDir?: string; disabledMcpServers?: string[]; allow?: readonly string[] }): void {
   const hook = [{ hooks: [{ type: 'command', command: `sh '${HOOK_SCRIPT}'` }] }];
   writeFileSync(join(nodeDir, 'settings.json'), JSON.stringify({
     hooks: Object.fromEntries(HOOK_EVENTS.map((e) => [e, hook])),
     // `//` marks an absolute path in a permission rule; Edit rules cover Write too.
-    permissions: { allow: ['mcp__tiller', ...(o.sessionDir ? [`Edit(/${o.sessionDir}/**)`] : [])] },
+    permissions: { allow: o.allow ?? ['mcp__tiller', ...(o.sessionDir ? [`Edit(/${o.sessionDir}/**)`] : [])] },
     ...(o.worktree ? { worktree: { baseRef: 'head' } } : {}),
     ...(o.disabledMcpServers?.length ? { disabledMcpjsonServers: o.disabledMcpServers } : {}),
   }, null, 2));
@@ -172,6 +173,8 @@ export interface LaunchInput {
   piExtensions?: 'all' | 'none' | string[];
   /** The node's # Memory digest (NodeManager.memoryDigest), appended last to the system prompt; unset or '' adds nothing. */
   memory?: string;
+  /** A memory gardener node (NodeRecord.gardener): gardenerLaunchArgs replaces the whole command line. */
+  gardener?: { maxTurns: number };
 }
 
 export interface LaunchSpec { file: string; args: string[]; env: Record<string, string> }
@@ -179,10 +182,11 @@ export interface LaunchSpec { file: string; args: string[]; env: Record<string, 
 /** Command line and environment for a Claude node. Run directly as the PTY program, not through a shell. */
 export function claudeLaunch(i: LaunchInput): LaunchSpec {
   // Here, not in nodeEnv: Pi, Codex and terminal nodes never get it (buildChildEnv strips the daemon's own CLAUDE* variables).
-  return { file: 'claude', args: launchArgs(i), env: { ...nodeEnv(i), ...(i.claudeConfigDir ? { CLAUDE_CONFIG_DIR: i.claudeConfigDir } : {}) } };
+  return { file: 'claude', args: launchArgs(i), env: { ...nodeEnv(i), ...(i.claudeConfigDir ? { CLAUDE_CONFIG_DIR: i.claudeConfigDir } : {}), ...(i.gardener ? GARDENER_ENV : {}) } };
 }
 
 export function launchArgs(i: LaunchInput): string[] {
+  if (i.gardener) return gardenerLaunchArgs(i, i.gardener.maxTurns);
   const args = i.forkSession ? ['--resume', i.forkSession, '--fork-session', '--session-id', i.sessionId]
     : i.resume ? ['--resume', i.sessionId] : ['--session-id', i.sessionId];
   args.push('--name', i.title);
@@ -210,6 +214,22 @@ export function presetAgentArgs(p: Preset): string[] {
   const tools = p.tools && (p.tools.includes('mcp__tiller') ? p.tools : [...p.tools, 'mcp__tiller']);
   const agent = { description: p.description ?? `tiller preset ${p.name}`, prompt: '', tools, disallowedTools: p.disallowedTools, maxTurns: p.maxTurns };
   return ['--agents', JSON.stringify({ [p.name]: agent }), '--agent', p.name];
+}
+
+/**
+ * The memory gardener's command line (docs/memory.md, spike S0): only the four garden tools, with no user, project or
+ * local settings, no other MCP server, no skill or slash command, no session directory, no preset and none of the node preamble.
+ */
+function gardenerLaunchArgs(i: LaunchInput, maxTurns: number): string[] {
+  const agent = { description: 'tiller memory gardener', prompt: '', tools: GARDENER_AGENT_TOOLS, maxTurns };
+  return [
+    '--session-id', i.sessionId, '--name', i.title, ...(i.model ? ['--model', i.model] : []), ...(i.effort ? ['--effort', i.effort] : []),
+    '--permission-mode', 'dontAsk', '--restricted', '--tools', '', '--strict-mcp-config', '--disable-slash-commands',
+    ...modDirs().filter((dir) => existsSync(dir)).flatMap((dir) => ['--plugin-dir', dir]),
+    '--agents', JSON.stringify({ [GARDENER_AGENT]: agent }), '--agent', GARDENER_AGENT,
+    '--settings', join(i.nodeDir, 'settings.json'), '--mcp-config', join(i.nodeDir, 'mcp.json'),
+    '--append-system-prompt', gardenerSystemPrompt(i.nodeId), ...(i.prompt ? ['--', i.prompt] : []),
+  ];
 }
 
 export function terminalLaunch(i: LaunchInput, shell: string): LaunchSpec {
