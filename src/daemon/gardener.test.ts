@@ -171,9 +171,10 @@ describe('due', () => {
     expect(due(target(t), { ...gardener, ...cfg }, facts(f))).toMatch(reason);
   });
 
-  it('lets a manual run skip only enabled, the interval, the threshold and the pause', () => {
+  it('lets a manual run skip only enabled, the interval, the threshold, the pause and quiet', () => {
     const t = target({ newItems: 0, proposals: 0, recent: [runView({ id: 3, state: 'timeout', startedAt: Date.now() - HOUR }), failed(2)] });
-    expect(due(t, { ...gardener, enabled: false }, facts({ manual: true }))).toBeUndefined();
+    expect(due(t, { ...gardener, enabled: false }, facts({ manual: true, quiet: false }))).toBeUndefined();
+    expect(due(t, gardener, facts({ manual: true, usage: 80 }))).toMatch(/rate limit is at 80%/);
     expect(due(t, gardener, facts({ manual: true, memory: { on: false, source: 'default' } }))).toMatch(/memory is off/);
     expect(due(t, gardener, facts({ manual: true, account: { usageKeys: [], ceiling: { setting: 'gardener', reason: 'x' } } }))).toMatch(/disabled/);
     expect(due(t, { ...gardener, maxUsdPer30Days: 0 }, facts({ manual: true }))).toMatch(/over budget/);
@@ -399,6 +400,19 @@ describe('Gardener finish paths', () => {
     expect(lastRun()).toMatchObject({ state: 'interrupted', costUsd: 0.25, costIncomplete: true });
     await g.tick();
     expect(host.spawns).toHaveLength(1);
+  });
+
+  it('ends a run as interrupted when the human closes its node, without undo', async () => {
+    const id = await startScheduled();
+    host.records.get(id)!.spentUsd = 0.3;
+    await g.closing(id);
+    g.exited(id);
+    await flush();
+    expect(lastRun()).toMatchObject({ state: 'interrupted', note: 'the human closed the gardener node', costUsd: 0.3, costIncomplete: true });
+    expect(log).toContain(`stop ${id}`);
+    expect(store.undos).toEqual([]);
+    expect(pausedBy([lastRun(), runView({ state: 'failed' })])).toBeUndefined();
+    await g.closing('not-live'); // no run: nothing to do
   });
 
   it('fails a run whose process exits before its turn ends, and finishes it once', async () => {

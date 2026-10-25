@@ -169,8 +169,8 @@ export class Gardener {
   }
 
   /**
-   * The human's run (tl memory garden run --repo P): every check except enabled, the interval, the threshold and the
-   * pause. account defaults to the repository's, as for a spawn. wait: resolve once the run has ended.
+   * The human's run (tl memory garden run --repo P): every check except enabled, the interval, the threshold, the pause
+   * and quiet; the rate-limit guard still applies. account defaults to the repository's, as for a spawn. wait: resolve once the run has ended.
    */
   async runNow(target: { repoPath: string; account?: string }, opts: { wait?: boolean } = {}): Promise<{ ok: true; run: GardenRunView } | { ok: false; reason: string }> {
     if (this.stopped) return { ok: false, reason: 'the daemon is stopping' };
@@ -224,6 +224,15 @@ export class Gardener {
   turnDone(nodeId: string): void {
     const run = this.runOf(nodeId);
     if (run && !run.ending) void this.finish(run, 'done');
+  }
+
+  /**
+   * The human is closing a gardener node: call before the close. A live run ends as interrupted (no pause, no undo,
+   * charged at least the cap); resolves once it has ended and its process is stopped.
+   */
+  closing(nodeId: string): Promise<void> {
+    const run = this.runOf(nodeId);
+    return run ? this.finish(run, 'interrupted', 'the human closed the gardener node') : Promise.resolve();
   }
 
   /** A gardener node's process exited. Before its turn ended, the run failed. */
@@ -512,7 +521,7 @@ function ceilingOf(accounts: readonly { name: string; memory?: boolean; gardener
 /** The facts due() judges a target by, gathered by the Gardener. */
 export interface DueFacts {
   now: number;
-  /** tl memory garden run: enabled, the interval, the threshold and the pause do not apply. */
+  /** tl memory garden run: enabled, the interval, the threshold, the pause and quiet do not apply. */
   manual: boolean;
   account: GardenAccount;
   /** memoryOn(home, repoPath, account.account). */
@@ -546,7 +555,7 @@ export function due(target: GardenTarget, gardener: Config['memory']['gardener']
     const paused = pausedBy(target.recent);
     if (paused) return paused;
   }
-  if (!f.quiet) return 'the daemon is busy: an agent node is working or queued, or live nodes are at daemon.maxLiveNodes';
+  if (!f.manual && !f.quiet) return 'the daemon is busy: an agent node is working or queued, or live nodes are at daemon.maxLiveNodes';
   if (f.usage !== undefined && f.usage >= g.rateLimitPercent) return `the account's rate limit is at ${f.usage}%`;
   return undefined;
 }
