@@ -15,6 +15,7 @@
     "daemon": "node --import tsx src/daemon/index.ts",
     "tl": "tsx src/daemon/cli.ts",
     "test": "vitest run",
+    "bench:gardener": "tsx bench/memory/gardener/live.ts",
     "typecheck": "tsc --noEmit && tsc -p adapters/pi/tsconfig.json",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true",
     "ui:dev": "vite --config ui/vite.config.ts",
