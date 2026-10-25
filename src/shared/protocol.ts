@@ -201,6 +201,8 @@ export interface NodeRecord {
   forkSession?: string;
   /** The archived node whose session this one continues (followup). */
   followupOf?: string;
+  /** Set on a memory gardener node, which the daemon spawns (docs/memory.md): the repository and garden run it serves. */
+  gardener?: { repoKey: string; runId: number };
 }
 
 /** Do not disturb: while on (and before `until`, when set) the daemon sends no OS notifications. Not persisted. */
@@ -358,10 +360,11 @@ export const MEMORY_ITEM_KINDS = ['ledger', 'open_question', 'procedure', 'pitfa
 export type MemoryItemKind = (typeof MEMORY_ITEM_KINDS)[number];
 /**
  * Why an item is hidden. agent: an agent's forget or supersede, undone when later work derives it again. human and
- * superseded (the human's supersede): sticky. evicted: tombstoned by the size limit. v3 appends its kinds here; the UI
- * shows a kind it has no label for generically.
+ * superseded (the human's supersede): sticky. evicted: tombstoned by the size limit. gardener: the memory gardener's
+ * supersede, undone like agent. merged: the gardener merged it into mergedInto, which later work recording it again
+ * bumps instead. The UI shows a kind it has no label for generically.
  */
-export const MEMORY_INVALID_KINDS = ['agent', 'human', 'superseded', 'evicted'] as const;
+export const MEMORY_INVALID_KINDS = ['agent', 'human', 'superseded', 'evicted', 'gardener', 'merged'] as const;
 export type MemoryInvalidKind = (typeof MEMORY_INVALID_KINDS)[number];
 
 /**
@@ -375,6 +378,8 @@ export interface MemoryItemView {
   seen: number; pinned: boolean; cites?: number; gets?: number; createdAt: number; updatedAt: number;
   supersedes?: number;
   invalid?: { at: number; kind: MemoryInvalidKind; by?: string; reason?: string };
+  /** The keep a gardener merge redirected this item to; set only while invalid.kind is 'merged'. */
+  mergedInto?: number;
   /** Set when text is '': evicted by the size limit, or purged by the human. */
   tombstone?: 'evicted' | 'purged';
   /** A human text pin: editable with editPin; set only when true. */

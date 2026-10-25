@@ -11,8 +11,10 @@ import { loadConfig } from './config.js';
 import {
   accountKey, ADD_KINDS, firstErrorLine, ftsTerms, ITEM_KINDS, itemRef, LIMITS, normalizeDedupe, pinDedupe, redact, SCHEMA_V1, SCHEMA_VERSION,
   type Actor, type Arm, type Cause, type Derived, type DigestCandidates, type DigestRole, type DigestSource, type EpisodeInput,
-  type EpisodeKind, type EpisodeSkeleton, type HistoryEntry, type InjectionRow, type InjectionView, type ItemKind, type ItemRow,
-  type ItemView, type MemoryScope,
+  type EpisodeKind, type EpisodeSkeleton, type GardenActionInput, type GardenApplyResult, type GardenCandidate, type GardenPage,
+  type GardenRefused, type GardenRunView, type GardenStore, type GardenTarget, type GardenTrigger, type GardenUndoneBy,
+  type GardenUndoResult, type GardenUndoTarget, type HistoryEntry, type InjectionRow, type InjectionView, type ItemKind,
+  type ItemRow, type ItemView, type MemoryScope, type RunState,
 } from './memory-schema.js';
 import { logError } from './util.js';
 
@@ -182,7 +184,7 @@ function rewrite(db: DatabaseSync, table: 'items' | 'episodes' | 'injections', r
   }
 }
 
-export class MemoryStore implements DigestSource {
+export class MemoryStore implements DigestSource, GardenStore {
   private readonly now: () => number;
   private readonly log: (err: unknown) => void;
   private sqlite?: typeof import('node:sqlite');
@@ -634,6 +636,33 @@ export class MemoryStore implements DigestSource {
       db.prepare('VACUUM INTO ?').run(path);
     });
   }
+
+  // --- The gardener (GardenStore, memory-schema.ts): stubs until memory v3's store work lands ---
+
+  gardenTargets(): GardenTarget[] { throw new Error('not implemented'); }
+  startRun(_scope: MemoryScope, _input: { trigger: GardenTrigger; model: string }): { ok: true; run: GardenRunView } | { ok: false; reason: string } {
+    throw new Error('not implemented');
+  }
+  skipRun(_scope: MemoryScope, _input: { trigger: GardenTrigger; note: string }): void { throw new Error('not implemented'); }
+  heartbeat(_account: string | undefined, _runId: number): void { throw new Error('not implemented'); }
+  setRunNode(_account: string | undefined, _runId: number, _nodeId: string): void { throw new Error('not implemented'); }
+  gardenPage(_account: string | undefined, _runId: number, _q: { cursor?: string; callsLeft: number }): GardenPage | GardenRefused {
+    throw new Error('not implemented');
+  }
+  gardenGet(_account: string | undefined, _runId: number, _id: number): { ok: true; item: GardenCandidate & { body: string } } | GardenRefused {
+    throw new Error('not implemented');
+  }
+  gardenApply(_account: string | undefined, _runId: number, _input: GardenActionInput): GardenApplyResult { throw new Error('not implemented'); }
+  countCalls(_account: string | undefined, _runId: number, _totals: { calls: number; outputChars: number }): void { throw new Error('not implemented'); }
+  endRun(_account: string | undefined, _runId: number, _state: Exclude<RunState, 'running' | 'skipped'>, _note?: string): boolean {
+    throw new Error('not implemented');
+  }
+  finishRun(_account: string | undefined, _runId: number, _cost: { usd: number; incomplete: boolean }): GardenRunView { throw new Error('not implemented'); }
+  verifyRun(_account: string | undefined, _runId: number): string[] { throw new Error('not implemented'); }
+  undo(_scope: MemoryScope, _target: GardenUndoTarget, _by: GardenUndoneBy): GardenUndoResult { throw new Error('not implemented'); }
+  runs(_account: string | undefined, _q?: { repoKey?: string; limit?: number }): GardenRunView[] { throw new Error('not implemented'); }
+  run(_account: string | undefined, _runId: number): GardenRunView { throw new Error('not implemented'); }
+  cost30d(_account: string | undefined): number { throw new Error('not implemented'); }
 
   close(): void {
     for (const t of this.checks.values()) if (t) clearImmediate(t);
