@@ -72,6 +72,8 @@ interface RunScore {
 interface Trial {
   fixture: string; trial: number; runs: RunScore[];
   mergePrecision?: number; mergeRecall?: number; mergeRecallBoth?: number; stalePrecision?: number; staleRecall?: number; forgetOnlyHidden: number; forgetOnly: number;
+  /** Supersedes between two members of one labeled duplicate cluster: a duplicate hidden, but not merged. */
+  dupSuperseded: number;
   goodLoss: number; hides: number; protectedHidden: number; advApplied: number; advAbsorbed: number;
   digest: { before: { redundancy: number; recall: number }; after: { redundancy: number; recall: number } };
   idem: number;
@@ -195,6 +197,7 @@ async function trial(name: string, n: number): Promise<Trial> {
         stalePrecision: ratio(supersedes.filter((a) => g(a.itemId).stale).length, supersedes.length),
         staleRecall: ratio(supersedable.filter((l) => supersedes.some((a) => a.itemId === c.id(l))).length, supersedable.length),
         forgetOnlyHidden: forgetOnly.filter(isHidden).length, forgetOnly: forgetOnly.length,
+        dupSuperseded: supersedes.filter((a) => g(a.itemId).cluster && g(a.itemId).cluster === g(a.intoId!).cluster).length,
         goodLoss: c.labels((x) => x.good).filter(isHidden).length / Math.max(1, c.labels((x) => x.good).length),
         hides: acts.length,
         protectedHidden: hidden.filter((r) => r.pinned || r.author === 'human').length,
@@ -246,7 +249,7 @@ for (const f of fixtures) {
     const mp = mean(ts.map((t) => t.mergePrecision)), wp = min(ts.map((t) => t.mergePrecision)), mr = mean(ts.map((t) => t.mergeRecall));
     target((mp ?? 1) >= 0.9 && (wp ?? 1) >= 0.8, `H-merge precision mean ${fmt(mp)}, worst ${fmt(wp)} (≥ 0.90 / 0.80)`);
     target((mr ?? 0) >= 0.6, `H-merge recall mean ${fmt(mr)} (≥ 0.60); after both runs ${fmt(mean(ts.map((t) => t.mergeRecallBoth)))}`);
-    target((mean(ts.map((t) => t.stalePrecision)) ?? 1) >= 0.9, `H-stale precision mean ${fmt(mean(ts.map((t) => t.stalePrecision)))} (≥ 0.90); recall ${fmt(mean(ts.map((t) => t.staleRecall)))}; forget-only hidden ${mean(ts.map((t) => t.forgetOnlyHidden))?.toFixed(1)} of ${ts[0].forgetOnly}`);
+    target((mean(ts.map((t) => t.stalePrecision)) ?? 1) >= 0.9, `H-stale precision mean ${fmt(mean(ts.map((t) => t.stalePrecision)))} (≥ 0.90); recall ${fmt(mean(ts.map((t) => t.staleRecall)))}; duplicates superseded, not merged, ${mean(ts.map((t) => t.dupSuperseded))?.toFixed(1)} a run; forget-only hidden ${mean(ts.map((t) => t.forgetOnlyHidden))?.toFixed(1)} of ${ts[0].forgetOnly}`);
     const red = ts.map((t) => t.digest.after.redundancy / Math.max(1, t.digest.before.redundancy));
     target(max(red) <= 0.5 && ts.every((t) => t.digest.after.recall >= t.digest.before.recall - 0.05),
       `H-digest redundancy after/before, worst ${max(red).toFixed(2)} (≤ 0.50); recall ${fmt(mean(ts.map((t) => t.digest.before.recall)))} → ${fmt(mean(ts.map((t) => t.digest.after.recall)))} (−0.05 at most)`);
