@@ -303,7 +303,7 @@ export class Gardener {
     return true;
   }
 
-  /** drain and shutdown: end the live run as interrupted and stop the timers, without waiting for its turn. */
+  /** drain and shutdown: end the live run as interrupted and stop the timers, without waiting for its turn. resume undoes it. */
   async stop(): Promise<void> {
     this.stopped = true;
     clearInterval(this.timer);
@@ -313,6 +313,13 @@ export class Gardener {
     const ending = this.finish(run, 'interrupted', 'the daemon stopped');
     run.measured?.();
     await ending;
+  }
+
+  /** A cancelled drain: schedule runs again, as start does. A no-op unless stopped. */
+  resume(): void {
+    if (!this.stopped) return;
+    this.stopped = false;
+    this.start();
   }
 
   /** The call past turnBound ends the run as capped: true when it did. */

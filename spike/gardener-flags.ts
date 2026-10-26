@@ -85,7 +85,7 @@ async function runClaude(name: string, o: { nodeId: string; endpoint: string; st
   writeFileSync(join(dir, 'mcp.json'), JSON.stringify({ mcpServers: { tiller: { type: 'http', url: o.stubUrl } } }));
   const agents = { 'tiller-gardener': { description: 'tiller memory gardener', prompt: '', tools: o.tools, maxTurns: o.maxTurns } };
   const system = `You are tiller's memory gardener (node ${o.nodeId}). Your only tools are the four garden tools.`;
-  const args = ['--restricted', '--tools', '', '--permission-mode', 'dontAsk', '--strict-mcp-config', ...(o.extraArgs ?? []),
+  const args = ['--restricted', '--tools', '', '--permission-mode', 'dontAsk', '--strict-mcp-config', '--disable-slash-commands', ...(o.extraArgs ?? []),
     '--agents', JSON.stringify(agents), '--agent', 'tiller-gardener',
     '--mcp-config', join(dir, 'mcp.json'), '--settings', join(dir, 'settings.json'),
     '--plugin-dir', join(REPO, 'mod'), '--plugin-dir', join(REPO, 'mod-rows'),

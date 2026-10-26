@@ -24,7 +24,7 @@ import {
   accountKey, itemRef, LIMITS, MEMORY_TOOL_SHAPES, parseItemRef, parseRunRef, runRef, type Actor, type GardenRefused, type GardenRunView, type GardenTarget,
   type ItemView, type MemoryScope,
 } from './memory-schema.js';
-import { gardenAccount, GARDENER_TOOLS, pausedBy, runSummary, type GardenCall, type Gardener, type GardenerTool } from './gardener.js';
+import { gardenAccount, GARDENER_TOOLS, pausedBy, runSummary, type GardenCall, type GardenerTool } from './gardener.js';
 import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS } from './spawnfields.js';
 import { readMessages, renderMessage, sessionMessages } from './transcript.js';
@@ -295,8 +295,6 @@ function tool<S extends z.ZodRawShape>(title: string, description: string, shape
 
 // ---- the gardener ----
 
-/** The daemon's memory Gardener (gardener.ts), which NodeManager constructs; undefined where it has none. */
-const gardenerOf = (m: NodeManager): Gardener | undefined => (m as NodeManager & { gardener?: Gardener }).gardener;
 /** A memory gardener node: it is listed and accepted the garden tools only, and nobody else is. */
 const isGardener = (m: NodeManager, caller: string) => caller !== HUMAN && !!m.registry.get(caller)?.gardener;
 
@@ -307,7 +305,7 @@ const isGardener = (m: NodeManager, caller: string) => caller !== HUMAN && !!m.r
 function refusal(m: NodeManager, caller: string, name: string, t: { humanOnly: boolean; gardenerOnly: boolean }): string | undefined {
   if (isGardener(m, caller)) {
     if (t.gardenerOnly) return undefined;
-    gardenerOf(m)?.toolCall(caller, name);
+    m.gardener.toolCall(caller, name);
     return `refused: ${name} is not a gardener tool; the gardener may call only ${GARDENER_TOOLS.join(', ')}`;
   }
   if (t.gardenerOnly) return `${name} is only for the memory gardener`;
@@ -323,8 +321,7 @@ function refusal(m: NodeManager, caller: string, name: string, t: { humanOnly: b
 function gardenTool<S extends z.ZodRawShape>(name: GardenerTool, title: string, description: string, shape: S,
   act: (call: Extract<GardenCall, { ok: true }>, a: z.infer<z.ZodObject<S>>, c: Ctx) => Out | GardenRefused) {
   const run = async (c: Ctx, a: z.infer<z.ZodObject<S>>): Promise<Out> => {
-    const g = gardenerOf(c.manager);
-    if (!g) throw new Error('the gardener is not running in this daemon');
+    const g = c.manager.gardener;
     const call = g.toolCall(c.caller, name);
     if (!call.ok) throw new Error(call.error);
     const out = act(call, a, c);
@@ -912,9 +909,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         case 'run': {
           if (a.run !== undefined) throw new Error('run starts a new run; it takes no run id');
           if (repoPath === undefined) throw new Error('run needs repo: a directory of the repository to garden (tl memory garden run --repo PATH)');
-          const g = gardenerOf(m);
-          if (!g) throw new Error('the gardener is not running in this daemon');
-          const r = await g.runNow({ repoPath, ...(a.account === undefined ? {} : { account: a.account }) }, { wait: a.wait });
+          const r = await m.gardener.runNow({ repoPath, ...(a.account === undefined ? {} : { account: a.account }) }, { wait: a.wait });
           if (!r.ok) throw new Error(`refused: ${r.reason}`);
           const text = a.wait && r.run.state !== 'running'
             ? runText(r.run, now)
@@ -1023,6 +1018,8 @@ export function mountMcp(manager: NodeManager, confirm: Ctx['confirm'], focus: C
   async function api(req: http.IncomingMessage, res: http.ServerResponse, name: string, ctx: Ctx): Promise<void> {
     const reply = (code: number, body: unknown) => res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
     const t = (tools as Record<string, (typeof tools)[keyof typeof tools]>)[name];
+    // As over /mcp, a gardener's call to any name but its four trips the wire, a name no tool has included.
+    if (!t && req.method === 'POST' && isGardener(manager, ctx.caller)) manager.gardener.toolCall(ctx.caller, name);
     if (req.method !== 'POST' || !t) return void res.writeHead(404).end();
     const raw = await readBody(req, res);
     if (raw === undefined) return;
@@ -1054,7 +1051,7 @@ export function mountMcp(manager: NodeManager, confirm: Ctx['confirm'], focus: C
       try { body = JSON.parse(raw); } catch { return void res.writeHead(400).end(); }
       for (const msg of [body].flat() as { method?: unknown; params?: { name?: unknown } }[]) {
         const name = msg?.method === 'tools/call' ? String(msg.params?.name) : undefined;
-        if (name !== undefined && !(GARDENER_TOOLS as readonly string[]).includes(name)) gardenerOf(manager)?.toolCall(caller, name);
+        if (name !== undefined && !(GARDENER_TOOLS as readonly string[]).includes(name)) manager.gardener.toolCall(caller, name);
       }
     }
 
