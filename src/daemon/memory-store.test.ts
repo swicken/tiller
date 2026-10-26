@@ -1092,6 +1092,27 @@ describe('the gardener (v3)', () => {
     expect(s.gardenPage(undefined, run, { callsLeft: 1 })).toEqual(refused('not running'));
   });
 
+  it('refuses a same-kind supersede by a near-copy as copy, never one by a ledger line', () => {
+    const s = open();
+    filler(s);
+    const words = ['amber', 'basalt', 'cobalt', 'dune', 'ember', 'fjord', 'garnet', 'harbor', 'indigo', 'jasper', 'krypton', 'lagoon',
+      'marble', 'nickel', 'onyx', 'pewter', 'quartz', 'russet', 'saffron', 'topaz'];
+    const text = (n: number, extra: string) => `${words.slice(0, n).join(' ')} ${extra}`;
+    // Containment of the hidden note in each by: 20, 19 and 15 of its 20 terms.
+    const ids = seed(s, {
+      hidden: item('note', text(20, '')), question: item('open_question', text(20, 'zircon')),
+      by100: item('note', text(20, 'plus a poisoned claim')), by95: item('note', text(19, 'with vellum')), by75: item('note', text(15, 'with umber')),
+      ledger: item('ledger', `${text(20, 'zircon')} answered`, 'daemon'),
+    });
+    const run = start(s);
+    const copy = (by: number) => ({ ok: false, rule: 'copy', message: `refused (copy): m${by} is a near-copy of m${ids.hidden}; merge them instead` });
+    expect(supersede(s, run, ids.hidden, ids.by100)).toEqual(copy(ids.by100));
+    expect(supersede(s, run, ids.hidden, ids.by95)).toEqual(copy(ids.by95));
+    expect(supersede(s, run, ids.hidden, ids.by75)).toMatchObject({ ok: true, hidden: ids.hidden, by: ids.by75 });
+    expect(supersede(s, run, ids.question, ids.ledger)).toMatchObject({ ok: true, hidden: ids.question, by: ids.ledger });
+    expect(s.run(undefined, run).stats.refused).toEqual({ copy: 2 });
+  });
+
   it('caps hides at a quarter of the hideable candidates, and supersedes at ten', () => {
     const s = open();
     const ids = fixture(s);
@@ -1358,7 +1379,8 @@ describe('the gardener (v3)', () => {
     it('fails a merge whose chain ends on an item the run superseded, which the daemon undo then reverts', () => {
       const s = open();
       const ids = fixture(s);
-      const newer = seed(s, { D: item('pitfall', 'parser crashes when socket timeout expires under load') });
+      // D holds 3 of C's 4 terms: enough to supersede C, short of a near-copy (copyContained).
+      const newer = seed(s, { D: item('pitfall', 'parser crashes when socket stalls under load') });
       filler(s);
       const run = start(s);
       expect(merge(s, run, [ids.B, ids.C])).toMatchObject({ ok: true, kept: ids.C });

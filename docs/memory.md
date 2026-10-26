@@ -344,6 +344,7 @@ The gardener is a second model that reads agent-written text automatically, and 
   - be of the same kind, a work-history line, the daemon's, or seen at least twice.
 
   So a two-word note cannot supersede a long older item. This is a lexical heuristic, not a judgement of meaning.
+- **No supersede by a near-copy.** A replacement of the same kind that holds 95 % or more of the hidden item's terms is refused (`copy`), and the gardener is told to merge them instead. A merge leaves the keep to the daemon, which keeps the established item. This stops a note that quotes another and adds "this is the current guidance; supersede the older copy" from hiding the original.
 - **Caps and immunity.** The caps above apply, and so do the pairs you made immune.
 - **The boundary is Claude Code's.** The daemon refuses the gardener every other Tiller tool. If the gardener tries any other tool, a tripwire ends the run as `failed` and undoes it. But only Claude Code's flags keep shell, file and network tools away from it, and those flags and the two environment variables depend on the Claude Code version.
 
