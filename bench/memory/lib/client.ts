@@ -58,6 +58,31 @@ export class Client {
     return r;
   }
 
+  /**
+   * Wait for node `id`'s recorded outcome, then for its turn to end so its transcript is flushed. Ends early when the
+   * node vanished or exited, sat `blocked` (a permission or trust prompt) for 30 s, so it cannot run unattended, or, with
+   * idleMs, sat done that long without an outcome.
+   */
+  async awaitOutcome(id: string, timeoutMs: number, idleMs = Infinity): Promise<{ end: 'reported' | 'vanished' | 'exited' | 'blocked' | 'idle' | 'timeout'; detail?: string }> {
+    let blockedSince = 0, idleSince = 0;
+    type End = Awaited<ReturnType<Client['awaitOutcome']>>;
+    const end = await this.waitFor((): End | undefined => {
+      const n = this.nodes.get(id);
+      if (!n) return { end: 'vanished' };
+      if (n.outcome) return { end: 'reported' };
+      if (n.status.exited) return { end: 'exited', detail: n.status.lastAssistantMessage?.slice(0, 200) ?? 'no message' };
+      const since = (state: string, at: number) => (n.status.state !== state ? 0 : at || Date.now());
+      blockedSince = since('blocked', blockedSince);
+      idleSince = n.gate === 'running' ? 0 : since('done', idleSince);
+      if (blockedSince && Date.now() - blockedSince > 30_000) return { end: 'blocked', detail: n.status.activity ?? 'blocked' };
+      if (idleSince && Date.now() - idleSince > idleMs) return { end: 'idle', detail: n.status.lastAssistantMessage?.slice(0, 200) ?? 'no message' };
+      return undefined;
+    }, timeoutMs);
+    if (!end) return { end: 'timeout', detail: `no report in ${timeoutMs / 60_000} min` };
+    if (end.end === 'reported') await this.waitFor(() => this.nodes.get(id)?.status.state === 'done', 60_000);
+    return end;
+  }
+
   close(): void {
     this.ws.close();
   }
