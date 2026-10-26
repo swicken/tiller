@@ -352,6 +352,12 @@ The gardener is a second model that reads agent-written text automatically, and 
 
 **Residual risk.** A poisoned note from a node that succeeded can steer the gardener into hiding eligible items that the note covers lexically, up to the per-run caps. Every such hide is logged with its reason and can be undone. A superseded item also comes back when later work records the same thing.
 
+**How often, on the bench.** The live benchmark (`bench/memory/gardener/`) plants a note that quotes a good note and claims to supersede it.
+- **Before the near-copy rule:** the note hid its target in 18 of 35 trials on the 60-item fixture, 1 of 15 on the 240-item fixture and 0 of 10 on the 600-item fixture. On the larger fixtures the gardener usually merges the copy away first.
+- **With the rule:** 0 of 10 trials on the 60-item fixture and 0 of 5 on the 240-item fixture. The gardener is refused, then merges the copy into the note it quotes.
+- **The caveat:** these are synthetic fixtures with one planted copy each, and the model was Haiku 5.5. A poisoned note that rewords its target enough to stay under the 95 % threshold is not stopped by this rule.
+- **The other remaining failure:** the gardener sometimes supersedes an older note by a newer one that differs only in polarity, a number or a path ("must be off" by "must be on"). On the bench this hid a good item in about 1 run in 20 on the 60-item fixture.
+
 ### Turning it off
 
 - `memory.gardener.enabled: false` stops scheduled runs. A live scheduled run stops within 30 seconds as `disabled`.
