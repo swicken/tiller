@@ -72,12 +72,13 @@ const S1_TITLE = 'parseCents';
 const formatCentsTask = phase1({
   at: '-2d', node: 'n-5eed0001', title: 'formatCents',
   prompt: 'Add `formatCents(n)` to src/format.js returning a string like `12.34`, with tests.',
-  gates: [changelogTail('src/format.js'), true],
-  summary: 'Added formatCents(n) to src/format.js with tests in test/format.test.js. The first gate run failed on the changelog check; '
-    + 'added a "- src/format.js:" line under ## Unreleased in CHANGELOG.md and the gate passed.',
+  gates: [`$ ${GATE}\nrelease verify: ## Unreleased has no entry for src/format.js (scripts/release.mjs)\n${exitLine}`, true],
+  summary: 'Added formatCents(n) to src/format.js with tests in test/format.test.js. The first gate run failed on the release notes check; '
+    + 'added a "- src/format.js: ..." line under ## Unreleased in CHANGELOG.md and the gate passed.',
   verified: '`node --test` 4 passed; the completion gate passed on the second attempt',
   changedFiles: ['src/format.js', 'test/format.test.js', 'CHANGELOG.md'],
 });
+const releasePitfall: Matcher = { kind: 'pitfall', textIncludes: ['release verify: ## Unreleased has no entry'] };
 const changelogPitfall: Matcher = { kind: 'pitfall', textIncludes: ['changelog check: ## Unreleased has no entry'] };
 
 const PARSE_CENTS = `
@@ -100,19 +101,20 @@ const parseCentsSolution = (changelog?: string): Files => ({
   'test/parse.test.js': PARSE_TEST,
   ...(changelog === undefined ? {} : { 'CHANGELOG.md': changelog }),
 });
-const withEntry = ledgerlib({ changelog: 'check' })['CHANGELOG.md'].replace('## Unreleased\n', '## Unreleased\n\n- src/money.js: add parseCents(s).\n');
+const withEntry = (line: string) => ledgerlib({ changelog: 'check' })['CHANGELOG.md'].replace('## Unreleased\n', `## Unreleased\n\n${line}\n`);
 
 const gateTrap: Scenario = {
   name: 'gate-trap', id: 'S1', claim: 1, repo: 'ledgerlib',
   files: () => ledgerlib({ changelog: 'check' }),
   title: S1_TITLE, brief: S1_BRIEF,
   seed: formatCentsTask,
-  targets: [changelogPitfall],
+  targets: [releasePitfall],
   primary: { key: 'firstPassGate', kind: 'binary', better: 'higher' },
   trapHit: (a) => !a.firstPassGate,
   r1Gate: 'pass',
-  solved: parseCentsSolution(withEntry),
-  trapped: parseCentsSolution(),
+  solved: parseCentsSolution(withEntry('- src/money.js: add parseCents(s).')),
+  // The habit trap: an entry in the history's prose style, without the module prefix verify requires.
+  trapped: parseCentsSolution(withEntry('- Add parseCents(s), the inverse of formatCents.')),
 };
 
 /** S1 with the plan's literal brief: B0 records whether the pitfall reaches it (it does not: D-1). Not run live. */
@@ -174,7 +176,9 @@ const sameFiles: Scenario = {
   name: 'same-files', id: 'S4', claim: 4, repo: 'ratesvc',
   files: cachedRatesvc,
   hidden: { 'rates-batch.test.mjs': HIDDEN_RATES_TEST },
-  title: 'setRates', brief: 'Add `setRates(map)` to src/rates.js: it updates several rates at once and records them as a single audit entry.',
+  // "setRates(map)" alone read as a JS Map to one smoke-run agent, which the acceptance test does not pass: the brief names the shape.
+  title: 'setRates',
+  brief: "Add `setRates(rates)` to src/rates.js, taking an object like `{ 'USD->EUR': 0.9 }`: it updates several rates at once and records them as a single audit entry.",
   seed: phase1({
     at: '-1d', node: 'n-5eed0004', title: 'memoize convert',
     prompt: 'Batch conversions call convert() thousands of times: memoize convert in src/rates.js.',

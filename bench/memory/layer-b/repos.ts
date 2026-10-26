@@ -101,39 +101,83 @@ test('addCents adds', () => {
 });
 `;
 
+// Released entries are prose: `release.mjs cut` drops the "src/<file>.js: " prefix that verify requires of Unreleased
+// entries, so the history does not show the rule (calibration v1: agents copied a visible prefix by habit).
 const CHANGELOG = `# Changelog
 
 ## Unreleased
 
 ## 0.3.0
 
-- src/format.js: add formatCents(n), which formats integer cents as a decimal string.
+- Add formatCents(n), which formats integer cents as a decimal string.
 
 ## 0.2.0
 
-- src/money.js: add addCents(a, b).
-- src/money.js: add toCents(amount).
+- Add addCents(a, b).
+- Add toCents(amount).
 `;
 
-const CHECK_CHANGELOG = `// Every src/*.js file changed since the last release (the origin-base tag) needs a "- <file>: <what changed>" line
-// under "## Unreleased" in CHANGELOG.md.
+/**
+ * S1's rule, inside general release tooling (calibration v1: with a script named check-changelog.mjs next to the gate,
+ * 26 of 30 agents read it before acting). Its failure line names no "error" or "fail", so it is the line memory records.
+ */
+const RELEASE_MJS = `// Release tooling for ledgerlib.
+//   node scripts/release.mjs cut <version>   move ## Unreleased into a new version section, as plain notes
+//   node scripts/release.mjs verify          check ## Unreleased against the change since the last release (tag origin-base)
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
+const FILE = 'CHANGELOG.md';
+const read = () => (existsSync(FILE) ? readFileSync(FILE, 'utf8') : '# Changelog\\n\\n## Unreleased\\n');
+const UNRELEASED = /^## Unreleased\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))/m;
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).split('\\n').filter(Boolean);
-const changed = [...new Set([
-  ...git('diff', '--name-only', 'origin-base', '--', 'src'),
-  ...git('ls-files', '--others', '--exclude-standard', '--', 'src'),
-])].filter((f) => /^src\\/[^/]+\\.js$/.test(f) && existsSync(f)).sort();
-const text = existsSync('CHANGELOG.md') ? readFileSync('CHANGELOG.md', 'utf8') : '';
-const unreleased = /^## Unreleased\\n([\\s\\S]*?)(?=^## |(?![\\s\\S]))/m.exec(text)?.[1] ?? '';
-for (const file of changed) {
-  if (!unreleased.split('\\n').some((line) => line.startsWith(\`- \${file}:\`))) {
-    console.error(\`changelog check: ## Unreleased has no entry for \${file} (scripts/check-changelog.mjs)\`);
-    process.exit(1);
+
+function cut(version) {
+  if (!/^\\d+\\.\\d+\\.\\d+$/.test(version ?? '')) throw new Error('usage: release.mjs cut <x.y.z>');
+  const text = read();
+  const entries = (UNRELEASED.exec(text)?.[1] ?? '').split('\\n').filter((l) => l.startsWith('- '));
+  const notes = entries.map((l) => l.replace(/^- src\\/[^:]+: /, '- ').replace(/^- (\\w)/, (_, c) => \`- \${c.toUpperCase()}\`));
+  writeFileSync(FILE, text.replace(UNRELEASED, \`## Unreleased\\n\\n## \${version}\\n\\n\${notes.join('\\n')}\\n\\n\`));
+  const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+  writeFileSync('package.json', JSON.stringify({ ...pkg, version }, null, 2) + '\\n');
+}
+
+// Each source module changed since the last release needs its own "- src/<module>.js: <what changed>" entry, so the
+// release notes can be grouped by module.
+function verify() {
+  const changed = [...new Set([
+    ...git('diff', '--name-only', 'origin-base', '--', 'src'),
+    ...git('ls-files', '--others', '--exclude-standard', '--', 'src'),
+  ])].filter((f) => /^src\\/[^/]+\\.js$/.test(f) && existsSync(f)).sort();
+  const lines = (UNRELEASED.exec(read())?.[1] ?? '').split('\\n');
+  const missing = changed.find((f) => !lines.some((l) => l.startsWith(\`- \${f}: \`)));
+  if (missing) {
+    console.log(\`release verify: ## Unreleased has no entry for \${missing} (scripts/release.mjs)\`);
+    process.exitCode = 1;
   }
 }
-console.log(\`changelog check: ok (\${changed.length} changed)\`);
+
+const [cmd, arg] = process.argv.slice(2);
+if (cmd === 'cut') cut(arg);
+else if (cmd === 'verify') verify();
+else {
+  console.log('usage: node scripts/release.mjs cut <version> | verify');
+  process.exitCode = 2;
+}
+`;
+
+// It prints nothing of its own, so a failing step's last line stays the line memory records.
+const CI_MJS = `// The CI pipeline: each step in order; the first that exits non-zero stops it.
+import { spawnSync } from 'node:child_process';
+
+const steps = [
+  ['release notes', 'node scripts/release.mjs verify'],
+  ['tests', 'node --test'],
+];
+for (const [, cmd] of steps) {
+  const r = spawnSync('sh', ['-c', cmd], { stdio: 'inherit' });
+  if (r.status !== 0) process.exit(1);
+}
 `;
 
 const LEDGER_README = `# ledgerlib
@@ -166,10 +210,11 @@ export function ledgerlib(o: { changelog: 'check' | 'retired' | 'none'; pad2Bug?
   };
   if (o.changelog === 'check') {
     files['CHANGELOG.md'] = CHANGELOG;
-    files['scripts/check-changelog.mjs'] = CHECK_CHANGELOG;
-    // The check runs first: after a passing node --test run, memory's firstErrorLine would take node's "ℹ fail 0" summary
-    // line as the error (see the Layer B result), and S1 tests whether a correct pitfall helps, not that heuristic.
-    files['scripts/gate.sh'] = gateSh('The checks a change must pass: the changelog check, then the tests.', 'node scripts/check-changelog.mjs && node --test');
+    files['scripts/release.mjs'] = RELEASE_MJS;
+    // The release check runs before the tests: after a passing node --test run, memory's firstErrorLine would take
+    // node's "ℹ fail 0" summary line as the error (see the Layer B result), and S1 tests a correct pitfall, not that heuristic.
+    files['scripts/ci.mjs'] = CI_MJS;
+    files['scripts/gate.sh'] = gateSh('The checks a change must pass: the CI pipeline.', 'node scripts/ci.mjs');
   } else {
     if (o.changelog === 'none') files['CHANGELOG.md'] = CHANGELOG;
     else files['docs/releases.md'] = '# Releases\n\nThe changelog was retired on 2026-10-01: CHANGELOG.md and its gate check were removed, and release notes are now written from the merged pull requests.\n';

@@ -40,6 +40,8 @@ export interface ArmScore {
   success: boolean;
   firstPassGate: boolean;
   gateAttempts: number;
+  /** The first run of the gate script by anyone, the agent's own included, passed (from the call log). */
+  firstGateRunOk: boolean;
   /** Gate script runs that were not the daemon's (the agent ran it by hand). */
   manualGateRuns: number;
   toolCalls: number;
@@ -82,6 +84,7 @@ export function scoreArm(a: ArmRaw, targets: number[]): ArmScore {
     success,
     firstPassGate: success && a.gates[0]?.ok === true && o?.gate === 'passed',
     gateAttempts: a.gates.length,
+    firstGateRunOk: a.calls.find((c) => c.cmd === 'gate-exit')?.arg === '0',
     manualGateRuns: Math.max(0, a.calls.filter((c) => c.cmd === 'gate').length - a.gates.length),
     toolCalls: a.tools.length,
     toolCallsToVerify: before(verifiedBeforeGate ? verify : firstGate),
@@ -168,7 +171,8 @@ function metric(name: string, kind: 'binary' | 'count', pairs: Paired[]): Metric
 }
 
 const SECONDARY: { key: keyof ArmScore; kind: 'binary' | 'count' }[] = [
-  { key: 'success', kind: 'binary' }, { key: 'firstPassGate', kind: 'binary' }, { key: 'gateAttempts', kind: 'count' },
+  { key: 'success', kind: 'binary' }, { key: 'firstPassGate', kind: 'binary' }, { key: 'firstGateRunOk', kind: 'binary' }, { key: 'gateAttempts', kind: 'count' },
+  { key: 'manualGateRuns', kind: 'count' },
   { key: 'toolCalls', kind: 'count' }, { key: 'toolCallsToVerify', kind: 'count' }, { key: 'verifiedBeforeGate', kind: 'binary' },
   { key: 'npmTestBeforeVerify', kind: 'binary' }, { key: 'changelogBeforeGate', kind: 'binary' }, { key: 'changelogTouched', kind: 'binary' },
   { key: 'wallSec', kind: 'count' }, { key: 'spentUsd', kind: 'count' }, { key: 'tokens', kind: 'count' }, { key: 'memoryCalls', kind: 'count' },
