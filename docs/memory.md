@@ -221,6 +221,8 @@ A run sees the repository's live, digest-eligible `open_question`, `procedure`, 
 
 It never forgets an item outright: stale is not the same as wrong, and the size limit already handles growth. It never edits or writes item text. It never hides a pin, the human's item or a `ledger` line, and it is never shown an item from a node that did not succeed. Each change carries a reason of at most 200 characters, shown by `memory_get` ("merged into m12 by the gardener (r12): <reason>") and `tl memory garden show`.
 
+The daemon does not yet propose a replaced procedure for supersede: a command that a near-copy replaced, such as `npx jest …` for `npx vitest run …`. Such a pair is offered only as a merge, which the gardener rightly declines. Retract the old one with `memory_forget` (`tl memory forget`), or pin the new one.
+
 ### Turning it on
 
 ```json
