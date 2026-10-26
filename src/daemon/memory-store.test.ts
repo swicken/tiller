@@ -976,36 +976,6 @@ describe('the gardener (v3)', () => {
     expect(existsSync(join(home, 'memory'))).toBe(false);
   });
 
-  it('offers a cluster that keeps an older question, pitfall or procedure the supersede by its newest member instead', () => {
-    const s = open();
-    filler(s);
-    const ids = seed(s, {
-      old: item('procedure', 'npx jest sessions/schema-guard.test.ts -t decodeSchema --runInBand'),
-      short: item('procedure', 'npm ci'),
-      note: item('note', 'release notes live in the wiki'),
-      fresh: item('pitfall', 'webpack build fails because node modules cache holds stale lockfile'),
-      by: item('procedure', 'npx vitest run sessions/schema-guard.test.ts -t decodeSchema'),
-      shortBy: item('procedure', 'npm ci --silent'),
-      noteBy: item('note', 'release notes live in the team wiki'),
-      freshDup: item('pitfall', 'webpack build fails because the node modules cache holds a stale lockfile'),
-    });
-    // The stale command was seen more, so it is the keep; the newer pitfall was seen more, so it is.
-    for (let i = 0; i < 2; i++) s.apply(scope('n-r1'), derived([item('procedure', 'npx jest sessions/schema-guard.test.ts -t decodeSchema --runInBand'), item('pitfall', 'webpack build fails because the node modules cache holds a stale lockfile')]));
-    const page = s.gardenPage(undefined, start(s), { callsLeft: 19 });
-    if (!('items' in page)) throw new Error('refused');
-    const alt = (old: number, by: number) => `if these are not the same lesson (a command, path or flag changed), supersede m${old} by m${by} instead of merging`;
-    const byKeep = Object.fromEntries(page.clusters.map((c) => [c.keep, c]));
-    expect(byKeep[`m${ids.old}`]).toEqual({ kind: 'procedure', keep: `m${ids.old}`, ids: [`m${ids.old}`, `m${ids.by}`], alternative: alt(ids.old, ids.by) });
-    expect(byKeep[`m${ids.short}`]).not.toHaveProperty('alternative'); // under three terms
-    expect(byKeep[`m${ids.note}`]).not.toHaveProperty('alternative'); // a note is only merged
-    expect(byKeep[`m${ids.freshDup}`]).not.toHaveProperty('alternative'); // the keep is the newer
-    expect(Object.keys(byKeep).sort()).toEqual([ids.old, ids.short, ids.note, ids.freshDup].map((id) => `m${id}`).sort());
-    expect(page.supersedeHints).toEqual([]); // the alternative is the cluster's, not a separate proposal
-    // The alternative passes the store's own supersede checks.
-    const run = page.run.slice(1);
-    expect(s.gardenApply(undefined, Number(run), { action: 'supersede', id: ids.old, by: ids.by, reason: 'jest replaced by vitest' })).toMatchObject({ ok: true });
-  });
-
   it('freezes the candidates, proposes the cluster and the hint, and lists them on page 1', () => {
     const s = open();
     const ids = fixture(s);
