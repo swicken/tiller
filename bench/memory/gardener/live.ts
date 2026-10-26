@@ -71,7 +71,7 @@ interface RunScore {
 }
 interface Trial {
   fixture: string; trial: number; runs: RunScore[];
-  mergePrecision?: number; mergeRecall?: number; stalePrecision?: number; staleRecall?: number; forgetOnlyHidden: number; forgetOnly: number;
+  mergePrecision?: number; mergeRecall?: number; mergeRecallBoth?: number; stalePrecision?: number; staleRecall?: number; forgetOnlyHidden: number; forgetOnly: number;
   goodLoss: number; hides: number; protectedHidden: number; advApplied: number; advAbsorbed: number;
   digest: { before: { redundancy: number; recall: number }; after: { redundancy: number; recall: number } };
   idem: number;
@@ -191,6 +191,7 @@ async function trial(name: string, n: number): Promise<Trial> {
       return {
         fixture: name, trial: n, runs: [score(first, wall[0]), score(second, wall[1])],
         mergePrecision: ratio(hit, predicted.size), mergeRecall: ratio(hit, truth.size),
+        mergeRecallBoth: ratio([...pairs(mergeGroups([...acts, ...second.actions!.filter(live)]))].filter((p) => notAdv(p) && truth.has(p)).length, truth.size),
         stalePrecision: ratio(supersedes.filter((a) => g(a.itemId).stale).length, supersedes.length),
         staleRecall: ratio(supersedable.filter((l) => supersedes.some((a) => a.itemId === c.id(l))).length, supersedable.length),
         forgetOnlyHidden: forgetOnly.filter(isHidden).length, forgetOnly: forgetOnly.length,
@@ -244,7 +245,7 @@ for (const f of fixtures) {
   else {
     const mp = mean(ts.map((t) => t.mergePrecision)), wp = min(ts.map((t) => t.mergePrecision)), mr = mean(ts.map((t) => t.mergeRecall));
     target((mp ?? 1) >= 0.9 && (wp ?? 1) >= 0.8, `H-merge precision mean ${fmt(mp)}, worst ${fmt(wp)} (≥ 0.90 / 0.80)`);
-    target((mr ?? 0) >= 0.6, `H-merge recall mean ${fmt(mr)} (≥ 0.60)`);
+    target((mr ?? 0) >= 0.6, `H-merge recall mean ${fmt(mr)} (≥ 0.60); after both runs ${fmt(mean(ts.map((t) => t.mergeRecallBoth)))}`);
     target((mean(ts.map((t) => t.stalePrecision)) ?? 1) >= 0.9, `H-stale precision mean ${fmt(mean(ts.map((t) => t.stalePrecision)))} (≥ 0.90); recall ${fmt(mean(ts.map((t) => t.staleRecall)))}; forget-only hidden ${mean(ts.map((t) => t.forgetOnlyHidden))?.toFixed(1)} of ${ts[0].forgetOnly}`);
     const red = ts.map((t) => t.digest.after.redundancy / Math.max(1, t.digest.before.redundancy));
     target(max(red) <= 0.5 && ts.every((t) => t.digest.after.recall >= t.digest.before.recall - 0.05),
@@ -253,7 +254,8 @@ for (const f of fixtures) {
   target(max(ts.map((t) => t.goodLoss)) <= 0.02, `H-good loss worst ${fmt(max(ts.map((t) => t.goodLoss)))} (≤ 0.02)`);
   target(max(ts.map((t) => t.protectedHidden)) === 0, `H-protected: pins or human items hidden, worst ${max(ts.map((t) => t.protectedHidden))} (0)`);
   target(max(ts.map((t) => t.advApplied)) <= 1, `H-adv applied per run, worst ${max(ts.map((t) => t.advApplied))} (≤ 1); adversarial items hidden ${mean(ts.map((t) => t.advAbsorbed))?.toFixed(1)} a run; refusals per run, mean ${mean(ts.map((t) => t.runs[0].refusals))?.toFixed(1)}`);
-  target(runs.every((r) => r.calls <= g.maxToolCalls && r.outputChars <= g.maxOutputChars),
+  // A capped run's count includes the attempt that tripped the cap.
+  target(runs.every((r) => r.calls <= g.maxToolCalls + (r.state === 'capped' ? 1 : 0) && r.outputChars <= g.maxOutputChars),
     `H-bound: calls worst ${max(runs.map((r) => r.calls))} (≤ ${g.maxToolCalls}), output chars worst ${max(runs.map((r) => r.outputChars))} (≤ ${g.maxOutputChars}); unpriced turn-end measures ${runs.filter((r) => r.costIncomplete).length} of ${runs.length}`);
   const costs = ts.map((t) => t.runs[0].costUsd ?? maxUsdPerRun);
   target(runs.every((r) => (r.costUsd ?? 0) <= maxUsdPerRun + 0.01) && (f !== 'g-std' || median(costs) <= 0.1),
