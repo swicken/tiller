@@ -458,7 +458,13 @@ export interface GardenCandidate {
   hint?: string;
 }
 /** A daemon-proposed duplicate set of one kind; keep is the daemon's pick (keepRank), and ids include it. */
-export interface GardenCluster { kind: ItemKind; keep: string; ids: string[] }
+export interface GardenCluster {
+  kind: ItemKind;
+  keep: string;
+  ids: string[];
+  /** For a question, pitfall or procedure whose keep is older than a member: the supersede to make instead, if they differ. */
+  alternative?: string;
+}
 /** An item whose terms a newer same-kind item, or a newer ledger line, contains at minContained or more (D8 rule 5). */
 export interface GardenHint { id: string; by: string }
 /** One garden_list result. next is the cursor of the following page ("c2"); absent on the last. */
