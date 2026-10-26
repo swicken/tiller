@@ -316,7 +316,7 @@ function refusal(m: NodeManager, caller: string, name: string, t: { humanOnly: b
 /**
  * A garden tool: the Gardener lets each call through (counting it) and gives its run and scope, from the node record and
  * never from arguments. The reply, a refusal's included, counts towards the run's tool-output cap; a refusal is an error
- * naming the rule it broke.
+ * naming the rule it broke. Every reply, a refusal's included, says how many calls the run has left (callsLeft).
  */
 function gardenTool<S extends z.ZodRawShape>(name: GardenerTool, title: string, description: string, shape: S,
   act: (call: Extract<GardenCall, { ok: true }>, a: z.infer<z.ZodObject<S>>, c: Ctx) => Out | GardenRefused) {
@@ -326,7 +326,7 @@ function gardenTool<S extends z.ZodRawShape>(name: GardenerTool, title: string, 
     if (!call.ok) throw new Error(call.error);
     const out = act(call, a, c);
     const refused = 'ok' in out && out.ok === false;
-    const text = refused ? out.message : (out as Out).text ?? JSON.stringify((out as Out).data);
+    const text = refused ? `${out.message} (callsLeft: ${call.callsLeft})` : (out as Out).text ?? JSON.stringify((out as Out).data);
     if (!g.toolOutput(c.caller, text.length)) throw new Error(`garden run ${runRef(call.runId)} has ended; end your turn`);
     if (refused) throw new Error(text);
     return { text, data: (out as Out).data };
@@ -953,7 +953,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     MEMORY_TOOL_SHAPES.garden_get,
     (call, a, c) => {
       const r = c.manager.memory.gardenGet(call.scope.account, call.runId, idOf(a.id));
-      return r.ok ? { data: r.item } : r;
+      return r.ok ? { data: { ...r.item, callsLeft: call.callsLeft } } : r;
     }),
 
   garden_merge: gardenTool('garden_merge',
@@ -963,7 +963,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     (call, a, c) => {
       const r = c.manager.memory.gardenApply(call.scope.account, call.runId, { action: 'merge', ids: a.ids.map(idOf), reason: a.reason });
       if (!r.ok || r.action !== 'merge') return r as GardenRefused;
-      const data = { kept: itemRef(r.kept), hidden: r.hidden.map(itemRef), hidesLeft: r.hidesLeft, supersedesLeft: r.supersedesLeft };
+      const data = { kept: itemRef(r.kept), hidden: r.hidden.map(itemRef), hidesLeft: r.hidesLeft, supersedesLeft: r.supersedesLeft, callsLeft: call.callsLeft };
       return { text: `merged ${refs(r.hidden)} into ${itemRef(r.kept)} ${JSON.stringify(data)}`, data };
     }),
 
@@ -974,7 +974,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     (call, a, c) => {
       const r = c.manager.memory.gardenApply(call.scope.account, call.runId, { action: 'supersede', id: idOf(a.id), by: idOf(a.by), reason: a.reason });
       if (!r.ok || r.action !== 'supersede') return r as GardenRefused;
-      const data = { hidden: itemRef(r.hidden), by: itemRef(r.by), hidesLeft: r.hidesLeft, supersedesLeft: r.supersedesLeft };
+      const data = { hidden: itemRef(r.hidden), by: itemRef(r.by), hidesLeft: r.hidesLeft, supersedesLeft: r.supersedesLeft, callsLeft: call.callsLeft };
       return { text: `superseded ${itemRef(r.hidden)} by ${itemRef(r.by)} ${JSON.stringify(data)}`, data };
     }),
 };
