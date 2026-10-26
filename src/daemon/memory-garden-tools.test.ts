@@ -115,7 +115,7 @@ describe('garden tools', () => {
     const { a, b } = await seed();
     const first = await run();
     const merged = await api('garden_merge', { ids: [b, a], reason: 'same crash' }, first.node);
-    expect(merged.data).toEqual({ kept: a, hidden: [b], hidesLeft: 1, supersedesLeft: 1 });
+    expect(merged.data).toEqual({ kept: a, hidden: [b], hidesLeft: 1, supersedesLeft: 1, callsLeft: 19 });
     expect(merged.text).toBe(`merged ${b} into ${a} ${JSON.stringify(merged.data)}`);
     expect((await api('memory_get', { id: b, repo })).text).toContain(`merged into ${a} by the gardener (r1): same crash`);
 
@@ -144,7 +144,7 @@ describe('garden tools', () => {
     const { a, b, author } = await seed();
     const { runId, node } = await run();
     const later = `m${(await api('memory_add', { kind: 'pitfall', text: 'added after the run started' }, author)).data.id}`;
-    expect((await api('garden_get', { id: later }, node)).error).toBe(`refused (not a candidate): ${later} is not in this run's candidate set`);
+    expect((await api('garden_get', { id: later }, node)).error).toBe(`refused (not a candidate): ${later} is not in this run's candidate set (callsLeft: 19)`);
     expect((await api('garden_get', { id: a }, node)).data).toMatchObject({ id: a, text: A, body: '' });
 
     switchMemory(home, {}, 'off');
@@ -185,6 +185,16 @@ describe('garden tools', () => {
     expect((await api('memory_garden', { action: 'undo', run: 'r2', immune: true, repo })).text).toBe('nothing to undo');
     expect((await api('memory_garden', { action: 'undo', id: b, immune: true, repo })).error).toMatch(/^immune is for undoing a run/);
     expect((await api('memory_garden', { action: 'undo', run: 'r1', id: b, repo })).error).toBe('undo takes exactly one of run and id');
+  });
+
+  it('tells the gardener its calls left in every result, a refusal\'s included', async () => {
+    const { a, b, author } = await seed();
+    const later = `m${(await api('memory_add', { kind: 'pitfall', text: 'a third parser crash, added later' }, author)).data.id}`;
+    const { node } = await run();
+    expect((await api('garden_list', {}, node)).data.rules.callsLeft).toBe(19);
+    expect((await api('garden_get', { id: a }, node)).data).toMatchObject({ id: a, callsLeft: 18 });
+    expect((await api('garden_merge', { ids: [a, b], reason: 'same crash' }, node)).data).toMatchObject({ callsLeft: 17 });
+    expect((await api('garden_supersede', { id: a, by: later, reason: 'newer' }, node)).error).toMatch(/^refused \(.*\(callsLeft: 16\)$/);
   });
 
   it('undo works with memory off, which keeps applied changes', async () => {

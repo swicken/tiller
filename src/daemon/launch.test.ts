@@ -50,7 +50,7 @@ describe('the memory gardener\'s launch (spike S0, decision 1)', () => {
   it('is exactly the S0 command line, whatever else the input carries', () => {
     const plugins = launchArgs({ ...i, gardener: undefined }).flatMap((a, k, all) => (a === '--plugin-dir' ? ['--plugin-dir', all[k + 1]] : []));
     expect(plugins).toHaveLength(4);
-    const system = "You are tiller's memory gardener (node n-g). Your only tools are the four garden tools.";
+    const system = "You are tiller's memory gardener (node n-g). Your only tools are the four garden tools. Each result reports callsLeft: end your turn before it reaches 0.";
     const args = launchArgs(i);
     expect(args.indexOf('--append-system-prompt')).toBe(args.length - 4);
     expect(args.at(-3)!.startsWith(`${system}\n\n# Memory gardener\n`)).toBe(true);
