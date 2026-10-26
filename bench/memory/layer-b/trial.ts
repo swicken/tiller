@@ -58,7 +58,10 @@ export function writeHidden(s: Scenario, trialDir: string): void {
 
 export interface Seeded {
   case: Case;
-  /** The B0 target ids, and the worker digest's ids and text for the brief (the off arm's shadow, H1). */
+  /**
+   * The ids of the B0 targets found in the digest (the on arm's injection must hold them; a b0Report scenario's are
+   * recorded only), and the worker digest's ids and text for the brief (the off arm's shadow, H1).
+   */
   targets: number[];
   missing: string[];
   shadow: number[];
@@ -76,7 +79,7 @@ export function seed(s: Scenario, repoKey: string, now = Date.now()): Seeded {
     const found = c.matching(m);
     if (found.length !== 1) missing.push(`${JSON.stringify(m)} matches ${found.length} items`);
     else if (!itemIds.includes(found[0].id)) missing.push(`m${found[0].id} (${found[0].text.slice(0, 80)}) is not in the digest`);
-    targets.push(...found.map((r) => r.id));
+    else targets.push(found[0].id);
   }
   return { case: c, targets, missing, shadow: itemIds, text };
 }
@@ -203,7 +206,7 @@ export async function runTrial(t: TrialInput): Promise<Trial> {
   const order = [...t.arms].sort(() => next() - 0.5);
   const arms = await Promise.all(order.map((a, i) => runArm(t, a, spawn, i * 2_000)));
   return {
-    trial: t.trial, attempt: t.attempt, startOrder: order.map((a) => a.label), inputsHash, targets: seeded.targets, shadow: seeded.shadow,
+    trial: t.trial, attempt: t.attempt, startOrder: order.map((a) => a.label), inputsHash, targets: s.b0Report ? [] : seeded.targets, shadow: seeded.shadow,
     arms: t.arms.map((a) => arms[order.indexOf(a)]),
   };
 }

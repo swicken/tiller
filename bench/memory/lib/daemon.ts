@@ -1,7 +1,7 @@
 // Isolated benchmark daemons (bench plan §1, pattern from spike/restart-check.ts): a temp TL_HOME and an ephemeral port,
 // started as `node --import tsx src/daemon/index.ts` from a checkout. Never the live ~/.tiller or port 7788.
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -77,6 +77,8 @@ export async function startDaemon(home: string, timeoutMs = 30_000): Promise<Dae
   const p = spawn(process.execPath, ['--import', 'tsx', 'src/daemon/index.ts'], {
     cwd: CHECKOUT, env: { ...env, TL_HOME: home, TL_PORT: String(port) }, stdio: ['ignore', out, out],
   });
+  closeSync(out); // the child holds its own copy
+
   let exited: number | null | undefined;
   const gone = new Promise<void>((r) => p.once('exit', (code) => { exited = code; r(); }));
   const stop = async () => {

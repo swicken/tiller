@@ -142,7 +142,7 @@ Options: `--model` (default `claude-haiku-5-5`), `--effort`, `--node-timeout-min
 
 | Id | Name | Primary | Notes |
 | --- | --- | --- | --- |
-| S1 | `gate-trap` | first-pass gate | The brief names `src/format.js`, the pitfall's file: with the plan's brief the pitfall shares no search term (S1p). |
+| S1 | `gate-trap` | first-pass gate | The rule (one `- src/<module>.js: ` entry per changed module) sits in `scripts/release.mjs` behind `scripts/ci.mjs`, and released history is prose; a plainly named check script bit 0 of 30 haiku nodes. The brief names `src/format.js`, the pitfall's file: with the plan's brief the pitfall shares no search term (S1p). |
 | S1p | `gate-trap-plan-brief` | (B0 only) | The plan's literal brief; B0 records that the pitfall is not in its digest (D-1). |
 | S2 | `verify-rediscovery` | tool calls before the first own verify run | The procedure is `node tools/verify.mjs contract`: memory's allowlist refuses the plan's `./tools/verify`. |
 | S4 | `same-files` | first-pass gate | The gate runs a hidden acceptance test at `<trial>/hidden`. |
