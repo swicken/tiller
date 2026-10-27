@@ -14,6 +14,7 @@ spawn processes.
    bridge.ts     inbox poll / claim / submit / ack / steer state machine
    config.ts     TL_* environment parsing
    lifecycle.ts  pure Pi-event -> Tiller /hook and /mod-event mappers
+   queue.ts      serial queue that keeps lifecycle HTTP posts in order
    types.ts      structural subset of the Pi API (host supplies Pi)
    *.test.ts     vitest coverage for the pure helpers and the bridge
 ```

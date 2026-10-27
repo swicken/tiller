@@ -27,39 +27,7 @@ const submit = (tree: ReactNode) => find(tree, (el) => el.type === 'form').props
 beforeEach(() => {
   hooks.title = undefined;
   vi.clearAllMocks();
-  update(() => ({ nodes: { root: mk('root', null, 0, { exited: true }) }, dialog: { kind: 'renameSession', id: 'root' } }));
-});
-
-it('renames the root using the existing rename message with a trimmed nonempty title', () => {
-  let tree = render();
-  expect(tree.props.title).toBe('Rename session');
-  expect(tree.props.restoreFocus).toBe(true);
-  expect(tree.props.blockGlobalShortcuts).toBe(true);
-  const input = find(tree, (el) => el.type === 'input');
-  expect(input.props.value).toBe('root');
-  expect(input.props.autoFocus).toBe(true);
-  input.props.onChange({ target: { value: '  New session name  ' } });
-  tree = render();
-  submit(tree);
-  expect(send).toHaveBeenCalledExactlyOnceWith({ t: 'rename', id: 'root', title: 'New session name' });
-  expect(getState().dialog).toBeNull();
-});
-
-it('rejects blank names and treats unchanged names or Cancel as no mutation', () => {
-  hooks.title = '   ';
-  let tree = render();
-  expect(button(tree, 'Save').props.disabled).toBe(true);
-  submit(tree);
-  expect(getState().dialog).not.toBeNull();
-  hooks.title = ' root ';
-  submit(render());
-  expect(getState().dialog).toBeNull();
-  openDialog({ kind: 'renameSession', id: 'root' });
-  hooks.title = 'Discard me';
-  tree = render();
-  button(tree, 'Cancel').props.onClick();
-  expect(getState().dialog).toBeNull();
-  expect(send).not.toHaveBeenCalled();
+  update(() => ({ nodes: { root: mk('root', null, 0, { exited: true }) }, dialog: { kind: 'restart', id: 'root' } }));
 });
 
 it('closes an exited root from Restart without restarting it', () => {

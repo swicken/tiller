@@ -119,4 +119,5 @@ Vitest runs up to one test file per two CPU cores at once (at least two) to boun
 - [docs/worktrees.md](docs/worktrees.md): running workers in their own git worktrees and merging their work.
 - [docs/sessions.md](docs/sessions.md): session directories, the event log, restart and resume.
 - [docs/frontends.md](docs/frontends.md): the app, the browser UI, the in-session band and notifications.
+- [docs/releases.md](docs/releases.md): how releases are published and what the updater relies on.
 - [PLAN.md](PLAN.md): the original design rationale; [docs/design/](docs/design/) holds the design documents for later features.

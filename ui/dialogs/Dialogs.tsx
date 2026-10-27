@@ -191,23 +191,6 @@ function RestartDialog({ id }: { id: string }) {
   );
 }
 
-function RenameSessionDialog({ id }: { id: string }) {
-  const node = useStore((s) => s.nodes[id]);
-  const [title, setTitle] = useState(node?.title ?? '');
-  if (!node) return null;
-  return <Modal title="Rename session" onClose={close} restoreFocus blockGlobalShortcuts>
-    <form className="form" onSubmit={(e) => {
-      e.preventDefault();
-      if (!title.trim()) return;
-      if (title.trim() !== node.title) send({ t: 'rename', id, title: title.trim() });
-      close();
-    }}>
-      <label>Session name<input value={title} onChange={(e) => setTitle(e.target.value)} onFocus={(e) => e.currentTarget.select()} required autoFocus /></label>
-      <div className="btns"><button type="button" className="btn" onClick={close}>Cancel</button><button type="submit" className="btn primary" disabled={!title.trim()}>Save</button></div>
-    </form>
-  </Modal>;
-}
-
 function ChangeHarnessDialog({ id }: { id: string }) {
   const node = useStore((s) => s.nodes[id]);
   const connected = useStore((s) => s.connected);
@@ -332,7 +315,6 @@ export function Dialogs() {
   if (d?.kind === 'spawn') return <SpawnDialog d={d} />;
   if (d?.kind === 'kill') return <KillDialog id={d.id} />;
   if (d?.kind === 'restart') return <RestartDialog id={d.id} />;
-  if (d?.kind === 'renameSession') return <RenameSessionDialog key={d.id} id={d.id} />;
   if (d?.kind === 'changeHarness') return <ChangeHarnessDialog key={d.id} id={d.id} />;
   if (d?.kind === 'followup') return <FollowupDialog id={d.id} title={d.title} />;
   if (d?.kind === 'fork') return <ForkDialog d={d} />;

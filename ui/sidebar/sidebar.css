@@ -4,6 +4,14 @@
 .current, .sess { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px; border: 0; border-radius: 6px; background: transparent; text-align: left; }
 .current:hover, .sess:hover { background: var(--hover); }
 .current svg { flex: none; color: var(--dim); }
+/* The selector and its pencil read as one control; the pencil is a sibling button laid over the selector's rename slot,
+   which sits before the chevron (8px padding + 14px icon + 8px gap from the right edge). */
+.session-select { position: relative; }
+.session-select:hover .current { background: var(--hover); }
+.session-select.renaming { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 8px; }
+.rename-slot { flex: none; width: 28px; }
+.session-rename { position: absolute; right: 30px; top: 50%; display: grid; place-items: center; width: 28px; height: 28px; margin-top: -14px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dim); }
+.session-rename:hover { background: var(--surface-2); color: var(--fg); }
 .session-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 2px; }
 .st { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc { display: block; min-width: 0; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 var(--mono); }
