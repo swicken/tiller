@@ -1,5 +1,5 @@
 // Client-side helpers for `tl` / `tl up`: find or start the daemon, pick the orchestrator for a directory.
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -22,18 +22,21 @@ export async function findDaemon(port: number, timeoutMs = 500): Promise<Health 
   } catch { return undefined; }
 }
 
-/** Run bin/<name> detached (survives this process and its terminal) with output appended to <home>/daemon.log; returns the log path. */
-function detach(name: string, args: string[], home: string, port: number, env: NodeJS.ProcessEnv = process.env): string {
+/** Run bin/<name> detached (survives this process and its terminal) with output appended to <home>/<logName>. */
+function detach(name: string, args: string[], home: string, port: number, opts: { env?: NodeJS.ProcessEnv; logName?: string; stdin?: 'ignore' | 'pipe' } = {}): { log: string; child: ChildProcess } {
   mkdirSync(home, { recursive: true });
-  const log = join(home, 'daemon.log');
+  const log = join(home, opts.logName ?? 'daemon.log');
   const fd = openSync(log, 'a');
-  const bin = fileURLToPath(new URL(`../../bin/${name}`, import.meta.url));
-  spawn(bin, args, { detached: true, stdio: ['ignore', fd, fd], env: { ...env, TL_HOME: home, TL_PORT: String(port) } }).unref();
-  return log;
+  try {
+    const bin = fileURLToPath(new URL(`../../bin/${name}`, import.meta.url));
+    const child = spawn(bin, args, { detached: true, stdio: [opts.stdin ?? 'ignore', fd, fd], env: { ...(opts.env ?? process.env), TL_HOME: home, TL_PORT: String(port) } });
+    child.unref();
+    return { log, child };
+  } finally { closeSync(fd); }
 }
 
 /** Start bin/tld detached, then wait for /health. Throws with the log tail on failure. */
-export const startDaemon = (home: string, port: number, waitMs = 15_000): Promise<Health> => waitForDaemon(port, detach('tld', [], home, port), waitMs);
+export const startDaemon = (home: string, port: number, waitMs = 15_000): Promise<Health> => waitForDaemon(port, detach('tld', [], home, port).log, waitMs);
 
 /** Wait for a daemon that is starting, with its output in `log`, to answer /health. Throws with the log tail on failure. */
 export async function waitForDaemon(port: number, log: string, waitMs = 15_000): Promise<Health> {
@@ -81,22 +84,15 @@ export function humanEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 /** Hand `tl reload` to a detached `tl reload --detached`, which outlives the terminal of the node that ran it. */
-export const spawnReload = (home: string, port: number): string => detach('tl', ['reload', '--detached'], home, port, humanEnv(process.env));
+export const spawnReload = (home: string, port: number): string => detach('tl', ['reload', '--detached'], home, port, { env: humanEnv(process.env) }).log;
 
 /** Detached updater retains the reviewed release across the daemon restart; `now` restarts without draining. */
 export function spawnUpdate(home: string, port: number, expected: UpdateStatus, onExit: (code: number | null) => void, now?: boolean): string {
-  const log = join(home, 'update.log');
-  const fd = openSync(log, 'a');
-  try {
-    const child = spawn(fileURLToPath(new URL('../../bin/tl', import.meta.url)), ['update', '--detached', ...(now ? ['--now'] : [])], {
-      detached: true, stdio: ['pipe', fd, fd], env: { ...humanEnv(process.env), TL_HOME: home, TL_PORT: String(port) },
-    });
-    child.stdin!.on('error', () => {}); // Spawn failure is reported by the child's error handler.
-    child.stdin!.end(JSON.stringify(expected));
-    child.once('exit', onExit);
-    child.once('error', () => onExit(1));
-    child.unref();
-  } finally { closeSync(fd); }
+  const { log, child } = detach('tl', ['update', '--detached', ...(now ? ['--now'] : [])], home, port, { env: humanEnv(process.env), logName: 'update.log', stdin: 'pipe' });
+  child.stdin!.on('error', () => {}); // Spawn failure is reported by the child's error handler.
+  child.stdin!.end(JSON.stringify(expected));
+  child.once('exit', onExit);
+  child.once('error', () => onExit(1));
   return log;
 }
 

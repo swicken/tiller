@@ -1,5 +1,6 @@
 import { outcomeLine } from '../shared/format.js';
 import type { NodeView } from '../shared/protocol.js';
+import { active } from './status.js';
 
 interface CompletionQuery {
   view: (id: string) => NodeView | undefined;
@@ -13,7 +14,6 @@ export function turnDone(query: CompletionQuery, id: string, since: number): boo
 }
 
 const NOTIFY_TTL_MS = 12 * 3600_000;
-const ACTIVE = ['working', 'waiting', 'blocked'];
 export type NotifyWhen = { ids: string[]; when: 'all' | 'any'; of: 'turn' | 'success' };
 /** since: the turn in progress at registration, else a later turn or report. */
 interface Watch extends NotifyWhen { at: number; since: Record<string, number> }
@@ -33,7 +33,10 @@ export class CompletionWatches {
     const key = ids.join(',');
     const replaced = this.all.has(key);
     const now = Date.now();
-    const since = Object.fromEntries(ids.map((id) => [id, ACTIVE.includes(this.query.view(id)?.status.state ?? '') ? this.query.turnStartedAt(id) ?? now : now]));
+    const since = Object.fromEntries(ids.map((id) => {
+      const v = this.query.view(id);
+      return [id, v && active(v.status) ? this.query.turnStartedAt(id) ?? now : now];
+    }));
     this.all.set(key, { ...req, ids, at: now, since });
     this.check(key);
     return { replaced };
