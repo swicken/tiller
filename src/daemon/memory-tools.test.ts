@@ -6,12 +6,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryInjectionView } from '../shared/protocol.js';
-import { NodeManager } from './manager.js';
+import type { NodeManager } from './manager.js';
 import { memoryOn, switchMemory } from './memory-config.js';
-import { startServer, type DaemonServer } from './server.js';
+import { startTestDaemon, type TestDaemon } from './memory-test-daemon.js';
+import type { DaemonServer } from './server.js';
 
 // The memory tools over POST /api/<tool>, as the CLI calls them, with a node's token and the admin token.
 let dir: string, home: string, repoA: string, repoB: string, manager: NodeManager, server: DaemonServer;
+let api: TestDaemon['api'], agent: TestDaemon['agent'], close: TestDaemon['close'];
 
 beforeEach(async () => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), 'tl-memtools-')));
@@ -20,30 +22,15 @@ beforeEach(async () => {
   repoB = join(dir, 'b');
   for (const d of [home, repoA, repoB]) mkdirSync(d);
   execFileSync('git', ['init', '-q', repoA]);
-  manager = new NodeManager({ home, shell: '/bin/sh' });
-  server = await startServer(manager, { port: 0 });
-  vi.spyOn(server.updates, 'start').mockImplementation(() => {});
+  ({ manager, server, api, agent, close } = await startTestDaemon(home));
 });
 
 afterEach(async () => {
-  await manager.shutdown();
-  await server.close();
+  await close();
   rmSync(dir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
-type Reply = { status: number; text?: string; data?: any; error?: string };
-async function api(tool: string, args: object, id = 'human'): Promise<Reply> {
-  const token = id === 'human' ? readFileSync(join(home, 'admin-token'), 'utf8') : manager.tokenFor(id);
-  const res = await fetch(`http://127.0.0.1:${server.port}/api/${tool}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-TL-Node': id }, body: JSON.stringify(args) });
-  return { status: res.status, ...(await res.json()) };
-}
-/** An agent node in `cwd`: a terminal relabelled, so no harness runs. */
-async function agent(cwd: string, title = 'w'): Promise<string> {
-  const id = (await api('spawn', { kind: 'terminal', title, cwd })).data.nodeId as string;
-  manager.registry.update(id, { kind: 'claude' });
-  return id;
-}
 const on = () => switchMemory(home, {}, 'on');
 const memoryDir = () => join(home, 'memory');
 
