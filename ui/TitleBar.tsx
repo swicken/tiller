@@ -9,7 +9,7 @@ import { KIND_LABEL, kindTag, statusKind } from './sidebar/tree';
 
 function Breadcrumb({ node }: { node: NodeView }) {
   const nodes = useStore((s) => s.nodes);
-  const renaming = useStore((s) => s.renaming === node.id);
+  const renaming = useStore((s) => s.renaming?.id === node.id && s.renaming.at === 'title');
   const chain = ancestry(nodes, node.id);
   return (
     <nav className="crumbs" aria-label="Breadcrumb">

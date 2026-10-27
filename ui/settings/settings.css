@@ -43,6 +43,10 @@
 .settings-account-note { margin: 6px 0 0; font-size: 13px; color: var(--dim); line-height: 1.5; overflow-wrap: anywhere; }
 .settings-memory-projects { margin: 0 0 8px; padding: 0; list-style: none; font-size: 14px; color: var(--dim); }
 .settings-memory-projects li { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0; overflow-wrap: anywhere; }
+.settings-account-setup > label, .settings-account-row label { display: block; margin: 10px 0 4px; font-size: 13px; color: var(--dim); }
+.settings-account-row { border: 1px solid var(--line); border-radius: 6px; padding: 4px 12px 12px; margin: 12px 0 0; min-width: 0; }
+.settings-control .settings-account-row input[type="checkbox"] { display: inline; width: auto; height: auto; min-height: 0; margin: 0 6px 0 0; }
+.settings-account-note ul { margin: 4px 0; padding-left: 18px; }
 .settings-reset { padding: 0; background: transparent; border: 0; color: var(--dim); font-size: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .settings-reset:hover { color: var(--fg); }
 .settings-pending { color: var(--accent); }

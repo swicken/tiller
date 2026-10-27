@@ -1,14 +1,15 @@
 import fs from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configEntries, loadConfig, profileDefaults } from './config.js';
 import { NodeManager } from './manager.js';
 import { startServer, type DaemonServer } from './server.js';
+import { claudeAccounts } from './claude-accounts.js';
 import { SETTINGS_FIELDS } from '../shared/settings.js';
 import { switchMemory } from './memory-config.js';
 import { LIMITS } from './memory-schema.js';
-import { settingsSnapshot, updateSettings } from './settings.js';
+import { saveClaudeAccounts, settingsSnapshot, updateSettings } from './settings.js';
 
 let root: string, home: string, project: string, manager: NodeManager, server: DaemonServer, nodeId: string;
 beforeEach(async () => {
@@ -476,5 +477,164 @@ describe('Memory settings', () => {
         expect(homeText(), `${key} ${setting}`).toBe(fs.readFileSync(join(copy, 'config.json'), 'utf8'));
       }
     }
+  });
+});
+
+describe('Claude accounts form', () => {
+  const homeFile = () => join(home, 'config.json');
+  const homeJson = () => JSON.parse(fs.readFileSync(homeFile(), 'utf8'));
+  // The names the form was opened with: by default the file's current ones, as a form opened just now would have.
+  const openedNames = () => (fs.existsSync(homeFile()) ? homeJson().claude?.accounts ?? [] : []).map((a: { name: string }) => a.name);
+  const seed = (accounts: { name: string; configDir?: string; create?: boolean }[], account = accounts[0].name, revision = snapshot('home').revision, openedWith = openedNames()) =>
+    saveClaudeAccounts(manager, { scope: 'home', revision, openedWith, claudeAccounts: { accounts, account } });
+  // After the first save the form never sends claude.account: it has its own setting.
+  const configure = (accounts: Parameters<typeof seed>[0], revision = snapshot('home').revision, openedWith = openedNames()) =>
+    saveClaudeAccounts(manager, { scope: 'home', revision, openedWith, claudeAccounts: { accounts } });
+
+  it('writes the accounts and default, keeps other settings, and creates a requested directory owner-only', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ limits: { maxDepth: 3 }, claude: { inheritMcpServers: false } }));
+    const existing = join(root, 'cx'); fs.mkdirSync(existing);
+    const s = seed([{ name: 'personal' }, { name: 'work', configDir: join(root, 'new', 'cw'), create: true }, { name: 'side', configDir: existing }], 'personal');
+    expect(homeJson()).toEqual({ limits: { maxDepth: 3 }, claude: { inheritMcpServers: false, accounts: [{ name: 'personal' }, { name: 'work', configDir: join(root, 'new', 'cw') }, { name: 'side', configDir: existing }], account: 'personal' } });
+    expect(fs.statSync(join(root, 'new', 'cw')).mode & 0o777).toBe(0o700);
+    expect(s.values['claude.account']).toBe('personal');
+    expect(claudeAccounts(home).map((a) => a.name)).toEqual(['personal', 'work', 'side']); // the runtime accepts what was written
+  });
+
+  it('replaces a stale claude.account left without a list', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { account: 'gone' } }));
+    seed([{ name: 'a' }]);
+    expect(homeJson().claude).toEqual({ accounts: [{ name: 'a' }], account: 'a' });
+  });
+
+  it('refuses a symlink to ~/.claude, a directory in the Tiller home, and a file', () => {
+    vi.stubEnv('HOME', root);
+    try {
+      fs.mkdirSync(join(root, '.claude')); fs.symlinkSync(join(root, '.claude'), join(root, 'link'));
+      fs.writeFileSync(join(root, 'file'), '');
+      expect(() => seed([{ name: 'a', configDir: join(root, 'link') }])).toThrow(/is Claude's default home/);
+      expect(() => seed([{ name: 'a', configDir: '~/link' }])).toThrow(/is Claude's default home/);
+      expect(() => seed([{ name: 'a', configDir: join(home, 'claude'), create: true }])).toThrow(/inside the Tiller home/);
+      expect(() => seed([{ name: 'a', configDir: join(root, 'file'), create: true }])).toThrow(/is not a directory/);
+      expect(fs.existsSync(join(home, 'claude'))).toBe(false);
+      expect(fs.existsSync(homeFile())).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('refuses ~/.claude and the Tiller home spelled in another case, where the disk is case-insensitive', ({ skip }) => {
+    vi.stubEnv('HOME', root);
+    try {
+      fs.mkdirSync(join(root, '.claude')); fs.mkdirSync(join(home, 'acct'));
+      if (!fs.existsSync(join(root, '.CLAUDE'))) return skip(); // case-sensitive volume: the spelling is a different folder
+      expect(() => seed([{ name: 'a', configDir: join(root, '.CLAUDE') }])).toThrow(/is Claude's default home/);
+      expect(() => seed([{ name: 'a', configDir: join(root, 'HOME', 'acct') }])).toThrow(/inside the Tiller home/);
+      expect(fs.existsSync(homeFile())).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('refuses a new directory under a symlink to the Tiller home or to the homedir, which would land there', () => {
+    vi.stubEnv('HOME', root);
+    try {
+      fs.symlinkSync(home, join(root, 'tl-link')); fs.symlinkSync(root, join(root, 'up'));
+      expect(() => seed([{ name: 'a', configDir: join(root, 'tl-link', 'acct'), create: true }])).toThrow(/inside the Tiller home/);
+      expect(() => seed([{ name: 'a', configDir: join(root, 'up', '.claude'), create: true }])).toThrow(/is Claude's default home/); // ~/.claude does not exist yet
+      expect(fs.existsSync(join(home, 'acct'))).toBe(false);
+      expect(fs.existsSync(join(root, '.claude'))).toBe(false);
+      expect(fs.existsSync(homeFile())).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('reconfigures by name: kept accounts keep their projects and other fields, new ones get none and their directory, the default stays', () => {
+    const before = snapshot('home').revision;
+    const work = join(root, 'cw'), moved = join(root, 'moved'), added = join(root, 'added');
+    fs.writeFileSync(homeFile(), JSON.stringify({ limits: { maxDepth: 3 }, claude: { account: 'personal', accounts: [
+      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: work, projects: [project], memory: false, gardener: false }, { name: 'side', configDir: '~/never-created', projects: ['/s'] },
+    ] } }));
+    expect(() => configure([{ name: 'personal' }], before)).toThrow(/Settings changed/);
+    // side keeps a directory that does not exist yet (it is only checked when new or changed); old is gone.
+    configure([{ name: 'personal' }, { name: 'work', configDir: moved, create: true }, { name: 'side', configDir: join(homedir(), 'never-created') }, { name: 'new', configDir: added, create: true }]);
+    expect(homeJson()).toEqual({ limits: { maxDepth: 3 }, claude: { account: 'personal', accounts: [
+      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: moved, projects: [project], memory: false, gardener: false }, { name: 'side', configDir: '~/never-created', projects: ['/s'] }, { name: 'new', configDir: added },
+    ] } });
+    expect([moved, added].map((d) => fs.statSync(d).mode & 0o777)).toEqual([0o700, 0o700]);
+    // There is no rename: a different name is a new account, so work's repositories do not follow it.
+    configure([{ name: 'personal' }, { name: 'job', configDir: moved }]);
+    expect(homeJson().claude.accounts).toEqual([{ name: 'personal', projects: ['~/p'] }, { name: 'job', configDir: moved }]);
+  });
+
+  it('refuses to remove the default account, to set claude.account after setup, or to edit an invalid list', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { account: 'work', accounts: [{ name: 'personal' }, { name: 'work', configDir: join(root, 'cw') }] } }));
+    expect(() => configure([{ name: 'personal' }])).toThrow(/work is the default account \(claude.account\); choose another default/);
+    expect(() => seed([{ name: 'personal' }, { name: 'work', configDir: join(root, 'cw') }], 'personal')).toThrow(/change the default account with its own setting/);
+    expect(() => configure([{ name: 'personal' }, { name: 'work', configDir: join(root, 'cw') }, { name: 'personal', configDir: join(root, 'x'), create: true }])).toThrow(/duplicate account name personal/);
+    // Dropping a configDir would quietly move work onto ~/.claude's login (the file would also have two default homes).
+    expect(() => configure([{ name: 'work' }])).toThrow(expect.objectContaining({ status: 400, message: expect.stringMatching(/work: keep a config directory/) }));
+    // Once accounts exist, a claude.account naming none of them blocks saving until the file is fixed.
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { account: 'gone', accounts: [{ name: 'personal' }] } }));
+    expect(() => configure([{ name: 'personal' }])).toThrow(expect.objectContaining({ status: 422, message: expect.stringMatching(/names "gone"/) }));
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { accounts: [{ name: 'a' }, { name: 'a', configDir: '/x' }] } }));
+    expect(() => configure([{ name: 'a' }])).toThrow(expect.objectContaining({ status: 422 }));
+    expect(fs.existsSync(join(root, 'x'))).toBe(false);
+  });
+
+  it('refuses a form opened before an account was added by hand, even with a current revision, and keeps that account', () => {
+    seed([{ name: 'a' }, { name: 'b', configDir: join(root, 'cb'), create: true }], 'a');
+    const json = homeJson(); json.claude.accounts.push({ name: 'c', configDir: join(root, 'cc') }); fs.writeFileSync(homeFile(), JSON.stringify(json));
+    // The form still lists a and b (it loads over WebSocket); the revision is read fresh, so only the names can refuse it.
+    const revision = snapshot('home').revision;
+    expect(() => saveClaudeAccounts(manager, { scope: 'home', revision, openedWith: ['a', 'b'], claudeAccounts: { accounts: [{ name: 'a' }, { name: 'b', configDir: join(root, 'cb') }] } }))
+      .toThrow(expect.objectContaining({ status: 409, message: 'Settings changed; reload before saving' }));
+    expect(homeJson().claude.accounts.map((a: { name: string }) => a.name)).toEqual(['a', 'b', 'c']);
+    // Reloaded, the form lists c and the same save goes through.
+    expect(() => configure([{ name: 'a' }, { name: 'b', configDir: join(root, 'cb') }, { name: 'c', configDir: join(root, 'cc') }], revision, ['a', 'b', 'c'])).not.toThrow();
+    expect(homeJson().claude.accounts.map((a: { name: string }) => a.name)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('refuses invalid lists before creating anything: ~/.claude, duplicates, two default homes, bad names, missing dirs, unknown default', () => {
+    const dir = join(root, 'never');
+    const cases: [Parameters<typeof seed>[0], string | undefined, RegExp][] = [
+      [[{ name: 'a' }, { name: 'b', configDir: '~/.claude', create: true }, { name: 'c', configDir: dir, create: true }], 'a', /omit configDir for Claude's default home/],
+      [[{ name: 'a', configDir: dir, create: true }, { name: 'a', configDir: join(root, 'x'), create: true }], 'a', /duplicate account name a/],
+      [[{ name: 'a' }, { name: 'b' }, { name: 'c', configDir: dir, create: true }], undefined, /at most one account may omit configDir/],
+      [[{ name: '' }, { name: 'c', configDir: dir, create: true }], undefined, /a name is 1-32/],
+      [[{ name: 'a', configDir: join(root, 'missing') }], undefined, /does not exist; choose to create it/],
+      [[{ name: 'a' }, { name: 'c', configDir: dir, create: true }], 'b', /"b" is not one of the accounts/],
+    ];
+    for (const [accounts, account, error] of cases) expect(() => seed(accounts, account)).toThrow(error);
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(fs.existsSync(homeFile())).toBe(false);
+  });
+
+  it('is admin-only over HTTP, home-only, and a project file still cannot set accounts', async () => {
+    const body = { scope: 'home', revision: snapshot('home').revision, openedWith: [], claudeAccounts: { accounts: [{ name: 'a' }], account: 'a' } };
+    expect((await request('POST', '', body, manager.tokenFor(nodeId))).status).toBe(401);
+    expect((await request('POST', '', { ...body, scope: 'project', nodeId })).status).toBe(400);
+    // One body is either a seed or a settings change, never both; the default account is required.
+    for (const bad of [{ ...body, changes: { 'daemon.maxWorking': 2 } }, { ...body, extra: 1 }, { ...body, claudeAccounts: { accounts: body.claudeAccounts.accounts } }]) expect((await request('POST', '', bad)).status).toBe(400);
+    expect(fs.existsSync(homeFile())).toBe(false);
+    expect((await request('POST', '', body)).status).toBe(200);
+    expect((await request('POST', '', body)).status).toBe(409); // stale revision
+    write({ claude: { accounts: [{ name: 'repo' }], account: 'repo' } });
+    expect(loadConfig(project, home).claude).toMatchObject({ accounts: [{ name: 'a' }], account: 'a' });
+  });
+
+  it('checks a prospective config directory for the form: admin-only, ~/ expanded, never creating anything', async () => {
+    vi.stubEnv('HOME', root);
+    try {
+      fs.mkdirSync(join(root, 'existing')); fs.writeFileSync(join(root, 'file'), ''); fs.mkdirSync(join(root, '.claude'));
+      const check = async (path: string, token?: string) => {
+        const res = await request('GET', `?${new URLSearchParams({ claudeConfigDir: path })}`, undefined, token);
+        return res.status === 200 ? res.json() : res.status;
+      };
+      expect(await check('~/existing', manager.tokenFor(nodeId))).toBe(401);
+      expect(await check('~/existing')).toEqual({ exists: true, directory: true });
+      expect(await check('~/file')).toEqual({ exists: true, directory: false });
+      expect(await check('~/missing/deeper')).toEqual({ exists: false, directory: false });
+      expect(fs.existsSync(join(root, 'missing'))).toBe(false);
+      expect((await check('~/.claude')).error).toMatch(/Claude's default home/);
+      expect((await check(join(home, 'x'))).error).toMatch(/inside the Tiller home/);
+      expect((await check('relative')).error).toMatch(/absolute path or one starting with ~\//);
+      expect((await request('GET', '?claudeConfigDir=%2Fx&scope=home')).status).toBe(400); // strict: one query or the other
+    } finally { vi.unstubAllEnvs(); }
   });
 });

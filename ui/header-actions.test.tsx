@@ -3,12 +3,15 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { actionsFor, ActionButtons, actionMenuPosition } from './controls/ActionButtons';
 import { TitleBar } from './TitleBar';
+import { NodeRow } from './sidebar/NodeRow';
+import { flattenSession } from './sidebar/tree';
 import { ExitedCard } from './ExitedCard';
 import { mk } from './fixtures';
 import { getState, openDialog, showPane, togglePanel, update } from './store';
 import { send } from './conn';
 
 vi.mock('./conn', () => ({ send: vi.fn() }));
+vi.mock('./hooks', () => ({ useNow: () => 10_000 }));
 vi.mock('./store', async (importOriginal) => {
   const store = await importOriginal<typeof import('./store')>();
   return { ...store, useStore: (select: (state: ReturnType<typeof store.getState>) => unknown) => select(store.getState()) };
@@ -71,7 +74,7 @@ describe('node action operations', () => {
   it('preserves spawn, rename, mute, fork, resume and merge operations', () => {
     const node = child();
     run(node, 'child'); expect(getState().dialog).toEqual({ kind: 'spawn', parentId: 'child', cwd: '/w/child' });
-    run(node, 'rename'); expect(getState().renaming).toBe('child');
+    run(node, 'rename'); expect(getState().renaming).toEqual({ id: 'child', at: 'row' });
     run(node, 'mute'); expect(send).toHaveBeenLastCalledWith({ t: 'mute', id: 'child', muted: true });
     run({ ...node, muted: true }, 'mute'); expect(send).toHaveBeenLastCalledWith({ t: 'mute', id: 'child', muted: false });
     run(node, 'fork'); expect(getState().dialog).toEqual({ kind: 'fork', from: 'child', title: 'child', cwd: '/w/child', parentId: 'root' });
@@ -99,6 +102,20 @@ function buttons(node: ReactNode): ReactElement<{ children?: ReactNode; onClick?
   if (!isValidElement<{ children?: ReactNode }>(node)) return [];
   return [ ...(node.type === 'button' ? [node] : []), ...[node.props.children].flat().flatMap(buttons) ];
 }
+
+describe('inline rename', () => {
+  // The selected node shows in both its row and the title bar. Two editors used to mount: the second's autofocus
+  // blurred the first, whose blur commit ended renaming, so the menu's Rename appeared to do nothing.
+  it.each(['title', 'row'] as const)('opens exactly one editor, on the surface whose menu was used: %s', (at) => {
+    const node = child();
+    update(() => ({ nodes: { child: node }, order: ['child'], selected: 'child' }));
+    actionsFor(node, at).find((a) => a.key === 'rename')!.run();
+    const row = flattenSession(getState().nodes, getState().order, 'child', [])[0];
+    const editors = (html: string) => html.match(/class="rename"/g)?.length ?? 0;
+    expect(editors(renderToStaticMarkup(<TitleBar node={node} />))).toBe(at === 'title' ? 1 : 0);
+    expect(editors(renderToStaticMarkup(<NodeRow row={row} />))).toBe(at === 'row' ? 1 : 0);
+  });
+});
 
 describe('header views', () => {
   it('switches panes and the independent supporting panel through the visible controls', () => {
