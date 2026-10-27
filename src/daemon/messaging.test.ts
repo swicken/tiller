@@ -418,6 +418,18 @@ describe('mod inbox', () => {
     expect(m.sessions.get('p')!.pasted).toHaveLength(0);
   });
 
+  it('a stopped notice carries the child\'s last message whole, and cuts a very long one visibly', async () => {
+    startNotices(m.mgr);
+    inbox(m.mgr, 'p');
+    const para = 'A full paragraph about what was done. '.repeat(20).trim(); // ~760 characters: carried whole
+    m.set('a', { exited: true, lastAssistantMessage: para });
+    m.set('b', { exited: true, lastAssistantMessage: 'y'.repeat(1600) });
+    await vi.advanceTimersByTimeAsync(0);
+    const [a, b] = inbox(m.mgr, 'p').map((x) => x.text);
+    expect(a).toContain(`\n${para}\n`);
+    expect(b).toContain(`\n${'y'.repeat(1500)}… (read summary for the rest)\n`);
+  });
+
   it('falls back to paste once the mod has not polled for 5 s', async () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect((await deliver(m.mgr, 'a', 'b', 'still live')).outcome).toBe('queued'); // exactly 5 s: still live

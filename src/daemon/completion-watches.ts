@@ -58,7 +58,7 @@ export class CompletionWatches {
   private line(id: string): string {
     const v = this.query.view(id);
     if (!v) return `${id}: closed`;
-    if (v.outcome) return `${id}: ${outcomeLine(v.outcome)}`;
+    if (v.outcome) return `${id}: ${outcomeLine(v.outcome, true)}`;
     return `${id}: ${v.status.exited ? 'exited' : v.status.state}`;
   }
 

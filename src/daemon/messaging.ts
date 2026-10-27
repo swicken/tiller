@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fmtAge, outcomeLine } from '../shared/format.js';
+import { fmtAge, noticeCut, outcomeLine } from '../shared/format.js';
 import type { InboxMessage, NodeView, SendMode, SendResult } from '../shared/protocol.js';
 import { loadConfig } from './config.js';
 import { adapterFor } from './harness.js';
@@ -643,7 +643,8 @@ export function startNotices(m: Mgr): void {
   const notice = (v: NodeView, reason: string) => {
     if (!v.parentId || notified.has(v.id)) return;
     notified.add(v.id);
-    const body = v.status.lastAssistantMessage?.slice(0, 300) ?? 'No further details.';
+    const last = v.status.lastAssistantMessage;
+    const body = last ? noticeCut(last, 'read summary for the rest') : 'No further details.';
     childNotice(m, v, `stopped: ${reason}`, body);
   };
   const onNode = (v: NodeView) => {
@@ -680,7 +681,7 @@ export function startNotices(m: Mgr): void {
   const onOutcome = (id: string) => {
     const v = m.view(id);
     if (!v?.parentId || !v.outcome || watching(m, v.parentId, id)) return;
-    childNotice(m, v, `reported ${v.outcome.outcome}`, `${id} reported ${outcomeLine(v.outcome)}`);
+    childNotice(m, v, `reported ${v.outcome.outcome}`, `${id} reported ${outcomeLine(v.outcome, true)}`);
   };
   m.on('node', onNode);
   m.on('outcome', onOutcome);

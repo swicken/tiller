@@ -60,8 +60,21 @@ export function usageLine(u: Usage | undefined, now = Date.now()): string {
   return `usage${u.account ? ` (${u.account})` : ''}: ${usageParts(u.rateLimits, false, now).map((p) => p.text).join(' · ')} (from ${u.nodeId}, ${fmtAge(now - u.at)} ago)`;
 }
 
-/** A reported outcome as one line: "succeeded (gate passed): <summary, else note>", the text capped at 200 characters. */
-export function outcomeLine(o: Pick<Outcome, 'outcome' | 'gate' | 'summary' | 'note'>): string {
-  const text = (o.summary || o.note)?.replace(/\s+/g, ' ').trim().slice(0, 200);
+/** Characters of a summary or message a daemon notice carries; past that it is cut, visibly. */
+export const NOTICE_CHARS = 1500;
+
+/** `text` whole up to NOTICE_CHARS, else cut there with "… (<rest>)" saying where the rest is. */
+export function noticeCut(text: string, rest: string): string {
+  const chars = [...text]; // by code point, so a cut never splits a surrogate pair
+  return chars.length > NOTICE_CHARS ? `${chars.slice(0, NOTICE_CHARS).join('')}… (${rest})` : text;
+}
+
+/**
+ * A reported outcome as one line: "succeeded (gate passed): <summary, else note>", the text capped at 200 characters,
+ * or for a notice (`notice`) whole up to NOTICE_CHARS.
+ */
+export function outcomeLine(o: Pick<Outcome, 'outcome' | 'gate' | 'summary' | 'note'>, notice = false): string {
+  const whole = (o.summary || o.note)?.replace(/\s+/g, ' ').trim();
+  const text = notice ? whole && noticeCut(whole, 'read outcome for the rest') : whole?.slice(0, 200);
   return `${o.outcome}${o.gate ? ` (gate ${o.gate})` : ''}${text ? `: ${text}` : ''}`;
 }

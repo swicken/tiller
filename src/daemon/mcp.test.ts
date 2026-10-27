@@ -405,12 +405,13 @@ describe('mcp api', () => {
     await api('report_outcome', { outcome: 'succeeded', summary: 'did one' }, w1, manager.tokenFor(w1));
     await expect.poll(() => inbox(manager, p).map((x) => x.text)).toEqual([expect.stringContaining(`${w1} reported succeeded: did one`)]);
     expect((await api('notify_when', { ids: [w2], when: 'all', of: 'success' }, p, manager.tokenFor(p))).status).toBe(200);
-    await api('report_outcome', { outcome: 'failed', note: 'no' }, w2, manager.tokenFor(w2));
+    const summary = 'Tried the approach and hit a wall. '.repeat(20).trim(); // a paragraph: the notice carries it whole
+    await api('report_outcome', { outcome: 'failed', note: 'no', summary }, w2, manager.tokenFor(w2));
     await expect.poll(() => inbox(manager, p).length).toBe(2);
     await new Promise((r) => setTimeout(r, 50));
     const texts = inbox(manager, p).map((x) => x.text);
     expect(texts).toHaveLength(2);
-    expect(texts[1]).toContain(`1 of 1 finished:\n${w2}: failed: no`);
+    expect(texts[1]).toContain(`1 of 1 finished:\n${w2}: failed: ${summary}\n`);
   });
 
   describe('completion gate', () => {
