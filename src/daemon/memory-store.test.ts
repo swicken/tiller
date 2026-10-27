@@ -133,6 +133,9 @@ describe('upsert and retraction', () => {
     for (let i = 0; i < 20; i++) s.add(scope(), agent('n-cap'), { kind: 'note', text: `note ${i}` });
     expect(() => s.add(scope(), agent('n-cap'), { kind: 'note', text: 'the twenty-first' })).toThrow('memory_add is limited to 20 per node');
     expect(s.add(scope(), agent('n-other'), { kind: 'note', text: 'the twenty-first' }).id).toBeGreaterThan(1);
+    const ids = Array.from({ length: 21 }, (_, i) => s.add(scope(), human, { kind: 'note', text: `human note ${i}` }).id);
+    for (const id of ids.slice(0, 20)) s.forget(scope(), agent('n-cap'), { id, reason: 'stale' });
+    expect(() => s.forget(scope(), agent('n-cap'), { id: ids[20]!, reason: 'stale' })).toThrow('memory_forget is limited to 20 per node');
   });
 
   it('pins restore a retracted item, and unpin undoes a pin', () => {

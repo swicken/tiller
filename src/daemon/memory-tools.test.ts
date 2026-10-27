@@ -176,15 +176,6 @@ describe('memory tools', () => {
     expect((await api('memory_get', { id: `m${id}` }, a)).data.invalid).toBeUndefined();
   });
 
-  it('caps an agent at 20 forgets', async () => {
-    on();
-    const a = await agent(repoA);
-    const ids: number[] = [];
-    for (let i = 0; i < 21; i++) ids.push((await api('memory_add', { kind: 'note', text: `human note ${i}`, repo: repoA })).data.id);
-    for (const id of ids.slice(0, 20)) expect((await api('memory_forget', { id: `m${id}`, reason: 'stale' }, a)).status).toBe(200);
-    expect((await api('memory_forget', { id: `m${ids[20]}`, reason: 'stale' }, a)).error).toBe('memory_forget is limited to 20 per node');
-  });
-
   /** Two Claude accounts with their own files; work covers repoA, with the given memory setting. */
   function accounts(work: { memory?: boolean } = {}) {
     for (const d of ['cw', 'co']) mkdirSync(join(dir, d), { recursive: true });
