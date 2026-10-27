@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setProjectTrust } from '../../../src/daemon/trust.js';
 import { mainCheckoutSync } from '../../../src/daemon/worktree.js';
@@ -22,14 +22,17 @@ export function realPath(path: string): string {
   try { return realpathSync(abs); } catch { return dirname(abs) === abs ? abs : join(realPath(dirname(abs)), basename(abs)); }
 }
 
+/** Whether path is dir or below it, both real paths: a sibling named like `..x` is not below. */
+function inside(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return !(rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel));
+}
+
 /** <root> as a real path, created; refused inside the live tiller home, this checkout or any of `also`. */
 export function benchRoot(path: string, also: string[] = []): string {
   const root = realPath(path);
   const forbidden = [LIVE_HOME, CHECKOUT, mainCheckoutSync(CHECKOUT), ...also].flatMap((p) => (p ? [realPath(p)] : []));
-  for (const f of forbidden) {
-    const rel = relative(f, root);
-    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw new Error(`refusing --root ${root}: it is inside ${f}`);
-  }
+  for (const f of forbidden) if (inside(f, root)) throw new Error(`refusing --root ${root}: it is inside ${f}`);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   return root;
 }
@@ -67,7 +70,7 @@ export function freePort(): Promise<number> {
 
 /** Start a daemon on `home` and wait for it to listen. Its output goes to <home>/daemon.log. */
 export async function startDaemon(home: string, timeoutMs = 30_000): Promise<Daemon> {
-  if (realPath(home) === realPath(LIVE_HOME)) throw new Error(`refusing to run a bench daemon on the live home ${LIVE_HOME}`);
+  if (inside(realPath(LIVE_HOME), realPath(home))) throw new Error(`refusing to run a bench daemon on the live home ${LIVE_HOME}`);
   let port = await freePort();
   if (port === LIVE_PORT) port = await freePort();
   const log = join(home, 'daemon.log');

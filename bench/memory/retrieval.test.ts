@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ArchivedNode } from '../../src/shared/protocol.js';
 import { ftsTerms } from '../../src/daemon/memory-schema.js';
 import type { Tree } from './lib/archive.js';
-import { benchRoot } from './lib/daemon.js';
+import { benchRoot, startDaemon } from './lib/daemon.js';
 import { Case, type Fixture } from './lib/fixture.js';
 import { readSafetensors } from './retrieval/embedders.js';
 import {
@@ -267,12 +267,16 @@ describe('the configuration freeze (§2.4)', () => {
 });
 
 describe('replay.ts', () => {
-  it('refuses a --root inside the repo, ~/.tiller or the home it reads', () => {
+  it('refuses a --root inside the repo, ~/.tiller or the home it reads, and a daemon home inside ~/.tiller', async () => {
     const repo = fileURLToPath(new URL('../../', import.meta.url));
     const home = scratch('tl-bench-home-');
     expect(() => benchRoot(join(repo, 'bench', 'out'), [home])).toThrow(/inside/);
     expect(() => benchRoot(join(homedir(), '.tiller', 'bench'), [home])).toThrow(/inside/);
     expect(() => benchRoot(join(home, 'results'), [home])).toThrow(/inside/);
+    // A child named like `..x` is still inside.
+    expect(() => benchRoot(join(repo, '..out'), [home])).toThrow(/inside/);
+    expect(() => benchRoot(join(homedir(), '.tiller', '..out'), [home])).toThrow(/inside/);
+    await expect(startDaemon(join(homedir(), '.tiller', 'bench-home'))).rejects.toThrow(/live home/);
     expect(benchRoot(join(scratch('tl-bench-root-'), 'new'), [home])).toMatch(/new$/);
   });
 
