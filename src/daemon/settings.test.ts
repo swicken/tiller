@@ -6,6 +6,9 @@ import { configEntries, loadConfig, profileDefaults } from './config.js';
 import { NodeManager } from './manager.js';
 import { startServer, type DaemonServer } from './server.js';
 import { claudeAccounts } from './claude-accounts.js';
+import { SETTINGS_FIELDS } from '../shared/settings.js';
+import { switchMemory } from './memory-config.js';
+import { LIMITS } from './memory-schema.js';
 import { saveClaudeAccounts, settingsSnapshot, updateSettings } from './settings.js';
 
 let root: string, home: string, project: string, manager: NodeManager, server: DaemonServer, nodeId: string;
@@ -76,8 +79,8 @@ describe('settings persistence', () => {
     write({ limits: { maxDepth: -1, maxChildren: 4 }, roles: { worker: { effort: 'invalid' } }, custom: 'kept' });
     const s = snapshot();
     const runtime = configEntries(project, home), homeRuntime = configEntries(null, home);
-    // claude.accounts is home-file JSON only, never a Settings field.
-    for (const key of Object.keys(runtime).filter(key => !key.startsWith('profiles.') && key !== 'claude.accounts') as (keyof typeof runtime)[]) {
+    // claude.accounts is home-file JSON only, never a Settings field; memory has no Settings fields in v1.
+    for (const key of Object.keys(runtime).filter(key => !key.startsWith('profiles.') && key !== 'claude.accounts' && !key.startsWith('memory.')) as (keyof typeof runtime)[]) {
       expect(s.entries[key]).toEqual(runtime[key]);
       expect(s.inherited[key]).toEqual(homeRuntime[key]);
     }
@@ -316,6 +319,174 @@ describe('Claude account setting', () => {
   });
 });
 
+describe('Memory settings', () => {
+  const homeFile = () => join(home, 'config.json');
+  const homeText = () => fs.readFileSync(homeFile(), 'utf8');
+  const homeJson = () => JSON.parse(homeText());
+  const accounts = () => [{ name: 'personal' }, { name: 'work', configDir: join(root, 'cw') }];
+  const saveHome = (changes: Record<string, unknown>, s = snapshot('home')) => updateSettings(manager, { scope: 'home', revision: s.revision, changes });
+  const saveProject = (changes: Record<string, unknown>, s = snapshot()) => updateSettings(manager, { scope: 'project', nodeId, revision: s.revision, homeRevision: s.homeRevision, changes });
+
+  it('reports each pseudo-key and the memory verdict at both scopes', () => {
+    const [personal, work] = accounts();
+    fs.writeFileSync(homeFile(), JSON.stringify({ memory: { enabled: true, maxMB: 32, projects: [{ path: project, enabled: false }, { path: root, enabled: true }] }, claude: { accounts: [{ ...personal, memory: false }, { ...work, memory: true }, { name: 'plain', configDir: join(root, 'cp') }] } }));
+    const h = snapshot('home');
+    expect(h.values).toMatchObject({ 'memory.enabled': true, 'memory.maxMB': 32, 'claude.accounts.personal.memory': false, 'claude.accounts.work.memory': true });
+    expect(h.values).not.toHaveProperty('claude.accounts.plain.memory');
+    expect(h.values).not.toHaveProperty('memory.project');
+    expect(h.memory).toEqual({ on: true, source: `memory.enabled in ${homeFile()}`, projects: [{ path: project, enabled: false }, { path: root, enabled: true }] });
+    expect(h.entries['memory.maxMB']).toEqual({ value: 32, source: homeFile() });
+    const p = snapshot();
+    expect(p.values['memory.project']).toBe(false); // this repository's own entry, not the broader one for root
+    expect(p.memory).toEqual({ on: false, source: `memory.projects ${project} in ${homeFile()}` });
+    expect(p.values).not.toHaveProperty('claude.accounts.work.memory');
+  });
+
+  it('shows no repository value when only a broader entry decides, and names a repo file memory.enabled false', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ memory: { projects: [{ path: root, enabled: true }] } }));
+    let p = snapshot();
+    expect(p.values).not.toHaveProperty('memory.project');
+    expect(p.memory).toEqual({ on: true, source: `memory.projects ${root} in ${homeFile()}` });
+    write({ memory: { enabled: false } });
+    p = snapshot();
+    expect(p.memory).toEqual({ on: false, source: `memory.enabled in ${file()}` });
+  });
+
+  it('fails closed when the account list is invalid, rather than reading memory.enabled', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ memory: { enabled: true }, claude: { accounts: [{ name: 'a' }, { name: 'a', configDir: '/x' }] } }));
+    expect(snapshot().memory).toEqual({ on: false, source: expect.stringMatching(/^account unknown: claude\.accounts in .* is invalid/) });
+    expect(snapshot('home').memory?.on).toBe(true);
+  });
+
+  it('refuses the global switch like tl memory does when memory.projects is invalid', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ memory: { projects: 'x' } }));
+    const bytes = homeText();
+    expect(() => saveHome({ 'memory.enabled': true })).toThrow(expect.objectContaining({ status: 422 }));
+    expect(() => switchMemory(home, {}, 'on')).toThrow(expect.objectContaining({ status: 422 }));
+    expect(homeText()).toBe(bytes);
+    expect(() => saveHome({ 'memory.enabled': 'yes' }, snapshot('home'))).toThrow(expect.objectContaining({ status: 400 }));
+  });
+
+  it('judges the verdict for the account root nodes here run in', () => {
+    const [personal, work] = accounts();
+    fs.writeFileSync(homeFile(), JSON.stringify({ memory: { enabled: true }, claude: { accounts: [{ ...personal, memory: false }, work], account: 'personal' } }));
+    expect(snapshot().memory).toEqual({ on: false, source: `claude.accounts personal.memory in ${homeFile()}`, account: 'personal' });
+    expect(snapshot('home').memory?.on).toBe(true); // the global value, whatever the accounts say
+  });
+
+  it('memory.project writes the exact path in the home memory.projects, and null removes it', () => {
+    write({ limits: { maxDepth: 2 } });
+    const repoBefore = fs.readFileSync(file(), 'utf8');
+    fs.writeFileSync(homeFile(), JSON.stringify({ memory: { projects: [{ path: root, enabled: false }] } }));
+    let s = saveProject({ 'memory.project': true });
+    expect(homeJson().memory.projects).toEqual([{ path: root, enabled: false }, { path: project, enabled: true }]);
+    expect(s.values['memory.project']).toBe(true);
+    expect(s.memory).toEqual({ on: true, source: `memory.projects ${project} in ${homeFile()}` });
+    s = saveProject({ 'memory.project': false }, s);
+    expect(homeJson().memory.projects).toEqual([{ path: root, enabled: false }, { path: project, enabled: false }]);
+    s = saveProject({ 'memory.project': null }, s);
+    expect(homeJson().memory.projects).toEqual([{ path: root, enabled: false }]);
+    expect(s.values).not.toHaveProperty('memory.project');
+    expect(fs.readFileSync(file(), 'utf8')).toBe(repoBefore); // the repo file is never written for it
+  });
+
+  it('refuses a stale or missing homeRevision for memory.project without writing', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ custom: 1 }));
+    const s = snapshot();
+    fs.writeFileSync(homeFile(), JSON.stringify({ custom: 2 })); // edited meanwhile
+    const bytes = homeText();
+    expect(() => saveProject({ 'memory.project': true }, s)).toThrow(expect.objectContaining({ status: 409 }));
+    expect(() => updateSettings(manager, { scope: 'project', nodeId, revision: s.revision, changes: { 'memory.project': true } })).toThrow(expect.objectContaining({ status: 409 }));
+    expect(homeText()).toBe(bytes);
+    expect(fs.existsSync(file())).toBe(false);
+  });
+
+  it('saves claude.account and memory.project in one home write', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { accounts: accounts() } }));
+    const rename = vi.spyOn(fs, 'renameSync');
+    saveProject({ 'claude.account': 'work', 'memory.project': true });
+    expect(rename.mock.calls.filter(([, to]) => to === homeFile())).toHaveLength(1);
+    expect(rename.mock.calls.filter(([, to]) => to === file())).toHaveLength(0);
+    const [personal, work] = accounts();
+    expect(homeJson()).toMatchObject({ claude: { accounts: [personal, { ...work, projects: [project] }] }, memory: { projects: [{ path: project, enabled: true }] } });
+    expect(fs.existsSync(file())).toBe(false);
+  });
+
+  it('sets and removes an account value in the same write as other home changes', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { accounts: accounts() } }));
+    let s = saveHome({ 'claude.accounts.work.memory': false, 'memory.maxMB': 64 });
+    expect(homeJson().claude.accounts[1]).toEqual({ ...accounts()[1], memory: false });
+    expect(homeJson().memory.maxMB).toBe(64);
+    expect(s.values['claude.accounts.work.memory']).toBe(false);
+    s = saveHome({ 'claude.accounts.work.memory': true }, s);
+    expect(homeJson().claude.accounts[1].memory).toBe(true);
+    s = saveHome({ 'claude.accounts.work.memory': null, 'memory.maxMB': null }, s);
+    expect(homeJson().claude.accounts).toEqual(accounts());
+    expect(homeJson().memory).toEqual({});
+    expect(s.values).not.toHaveProperty('claude.accounts.work.memory');
+  });
+
+  it('refuses an unknown account with 400 and an invalid account list with 422', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { accounts: accounts() } }));
+    expect(() => saveHome({ 'claude.accounts.gone.memory': true })).toThrow(expect.objectContaining({ status: 400, message: expect.stringContaining('"gone" is not configured') }));
+    expect(() => saveHome({ 'claude.accounts.work.memory': 'yes' })).toThrow(expect.objectContaining({ status: 400 }));
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { accounts: [{ name: 'a' }, { name: 'a', configDir: '/x' }] } }));
+    const bytes = homeText();
+    expect(() => saveHome({ 'claude.accounts.a.memory': true })).toThrow(expect.objectContaining({ status: 422 }));
+    expect(homeText()).toBe(bytes);
+  });
+
+  it('validates memory.maxMB against the 16 MB floor', () => {
+    expect(() => saveHome({ 'memory.maxMB': 15 })).toThrow(expect.objectContaining({ status: 400 }));
+    expect(fs.existsSync(homeFile())).toBe(false);
+    expect(saveHome({ 'memory.maxMB': 16 }).values['memory.maxMB']).toBe(16);
+    expect(SETTINGS_FIELDS.find((f) => f.key === 'memory.maxMB')?.min).toBe(LIMITS.size.minMB);
+  });
+
+  it('keeps every other memory key home-only', () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { accounts: accounts() } }));
+    const bytes = homeText();
+    for (const key of ['memory.enabled', 'memory.maxMB', 'claude.accounts.work.memory']) expect(() => saveProject({ [key]: key === 'memory.maxMB' ? 32 : true })).toThrow(expect.objectContaining({ status: 400, message: expect.stringMatching(/home-only/) }));
+    expect(() => saveHome({ 'memory.project': true })).toThrow(expect.objectContaining({ status: 400 }));
+    expect(homeText()).toBe(bytes);
+    expect(fs.existsSync(file())).toBe(false);
+  });
+
+  it('refuses a node bearer token on POST with 401 and leaves the file bytes unchanged', async () => {
+    fs.writeFileSync(homeFile(), JSON.stringify({ claude: { accounts: accounts() } }));
+    const bytes = homeText(), s = snapshot('home');
+    const res = await request('POST', '', { scope: 'home', revision: s.revision, changes: { 'memory.enabled': true, 'claude.accounts.work.memory': true } }, manager.tokenFor(nodeId));
+    expect(res.status).toBe(401);
+    expect(homeText()).toBe(bytes);
+    const repo = await request('POST', '', { scope: 'project', nodeId, revision: snapshot().revision, homeRevision: s.homeRevision, changes: { 'memory.project': true } }, manager.tokenFor(nodeId));
+    expect(repo.status).toBe(401);
+    expect(homeText()).toBe(bytes);
+    expect(fs.existsSync(file())).toBe(false);
+  });
+
+  // M7: a Settings save writes the same bytes as the matching `tl memory` change on a copy of the home file.
+  it('writes the same home file as switchMemory for each control', () => {
+    const start = JSON.stringify({ custom: 1, memory: { projects: [{ path: root, enabled: false }, { path: project, enabled: false }] }, claude: { accounts: accounts() } }, null, 2) + '\n';
+    const copy = join(root, 'copy');
+    const cases: { target: { account?: string; project?: string }; key: string; scope: 'home' | 'project' }[] = [
+      { target: {}, key: 'memory.enabled', scope: 'home' },
+      { target: { account: 'work' }, key: 'claude.accounts.work.memory', scope: 'home' },
+      { target: { project }, key: 'memory.project', scope: 'project' },
+    ];
+    for (const { target, key, scope } of cases) {
+      for (const [value, setting] of [[true, 'on'], [false, 'off'], [null, 'inherit']] as const) {
+        fs.writeFileSync(homeFile(), start);
+        fs.rmSync(copy, { recursive: true, force: true }); fs.mkdirSync(copy);
+        fs.writeFileSync(join(copy, 'config.json'), start);
+        switchMemory(copy, target, setting);
+        const s = snapshot(scope);
+        updateSettings(manager, { scope, ...(scope === 'project' ? { nodeId } : {}), revision: s.revision, homeRevision: s.homeRevision, changes: { [key]: value } });
+        expect(homeText(), `${key} ${setting}`).toBe(fs.readFileSync(join(copy, 'config.json'), 'utf8'));
+      }
+    }
+  });
+});
+
 describe('Claude accounts form', () => {
   const homeFile = () => join(home, 'config.json');
   const homeJson = () => JSON.parse(fs.readFileSync(homeFile(), 'utf8'));
@@ -380,17 +551,17 @@ describe('Claude accounts form', () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
-  it('reconfigures by name: kept accounts keep their projects, new ones get none and their directory, the default stays', () => {
+  it('reconfigures by name: kept accounts keep their projects and other fields, new ones get none and their directory, the default stays', () => {
     const before = snapshot('home').revision;
     const work = join(root, 'cw'), moved = join(root, 'moved'), added = join(root, 'added');
     fs.writeFileSync(homeFile(), JSON.stringify({ limits: { maxDepth: 3 }, claude: { account: 'personal', accounts: [
-      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: work, projects: [project] }, { name: 'side', configDir: '~/never-created', projects: ['/s'] },
+      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: work, projects: [project], memory: false, gardener: false }, { name: 'side', configDir: '~/never-created', projects: ['/s'] },
     ] } }));
     expect(() => configure([{ name: 'personal' }], before)).toThrow(/Settings changed/);
     // side keeps a directory that does not exist yet (it is only checked when new or changed); old is gone.
     configure([{ name: 'personal' }, { name: 'work', configDir: moved, create: true }, { name: 'side', configDir: join(homedir(), 'never-created') }, { name: 'new', configDir: added, create: true }]);
     expect(homeJson()).toEqual({ limits: { maxDepth: 3 }, claude: { account: 'personal', accounts: [
-      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: moved, projects: [project] }, { name: 'side', configDir: '~/never-created', projects: ['/s'] }, { name: 'new', configDir: added },
+      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: moved, projects: [project], memory: false, gardener: false }, { name: 'side', configDir: '~/never-created', projects: ['/s'] }, { name: 'new', configDir: added },
     ] } });
     expect([moved, added].map((d) => fs.statSync(d).mode & 0o777)).toEqual([0o700, 0o700]);
     // There is no rename: a different name is a new account, so work's repositories do not follow it.

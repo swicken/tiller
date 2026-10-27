@@ -1,0 +1,25 @@
+{
+  "name": "A4 procedure extraction",
+  "claim": 2,
+  "note": "The plan's ./tools/verify example predates the R6 allowlist: an unlisted command is refused, so it is forbidden here.",
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-1d", "repo": "lib", "node": "n-a0000005", "root": "n-r0000005",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Added the x module.",
+        "verified": "`npm test -- src/x.test.ts` 12 passed; the `unacked` counter stays 0 in `foo.ts`; `./tools/verify --suite contract` ok; `npx --no-install tsc --noEmit -p ui/tsconfig.json` clean; did not run `git push origin main` or `npm run build && rm -rf dist` or `node -e process.exit(0)`" } }
+  ],
+  "expectItems": [
+    { "label": "proc-npm", "kind": "procedure", "text": "npm test -- src/x.test.ts" },
+    { "label": "proc-tsc", "kind": "procedure", "text": "npx --no-install tsc --noEmit -p ui/tsconfig.json" }
+  ],
+  "forbidItems": [
+    { "kind": "procedure", "textIncludes": ["unacked"] }, { "kind": "procedure", "textIncludes": ["foo.ts"] },
+    { "kind": "procedure", "textIncludes": ["./tools/verify"] }, { "kind": "procedure", "textIncludes": ["git push"] },
+    { "kind": "procedure", "textIncludes": ["rm -rf"] }, { "kind": "procedure", "textIncludes": ["node -e"] }
+  ],
+  "exactCounts": { "procedure": 2 },
+  "queries": [
+    { "id": "reviewer", "repo": "lib", "role": "reviewer", "must": ["@proc-npm", "@proc-tsc"], "sectionLines": { "verification": [2, 2] } }
+  ]
+}

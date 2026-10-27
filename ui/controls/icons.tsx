@@ -14,6 +14,7 @@ const PATHS = {
   fork: 'M6 4v4a4 4 0 004 4h4a4 4 0 014 4v4M18 4v4a4 4 0 01-4 4M6 20v-4',
   history: 'M12 4a8 8 0 100 16 8 8 0 000-16zM12 8v4l3 2',
   bellOff: 'M6 16v-5a6 6 0 0112 0v5l2 2H4l2-2zM10 21h4M3 3l18 18',
+  memory: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
 } as const;
 
 export type IconName = keyof typeof PATHS;

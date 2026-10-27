@@ -1,0 +1,18 @@
+{
+  "name": "A18 stale pitfall",
+  "claim": 5,
+  "note": "Reported: the pitfall is 60 days old and names `npm run check`, while the repo's gate.command is now `npm run gate`. v1 has no staleness filter, so it is still shown (input to D-5).",
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-60d", "repo": "lib", "node": "n-stale1", "root": "n-r0000018",
+      "event": { "type": "gate", "ok": false, "command": "npm run check", "tail": "check-docs: missing section Usage in README.md\nnpm run check: exited with 1" } },
+    { "at": "-60d+5m", "repo": "lib", "node": "n-stale1",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Added the Usage section." } }
+  ],
+  "expectItems": [ { "label": "pit-stale", "kind": "pitfall", "textIncludes": ["gate `npm run check` failed: check-docs: missing section Usage"] } ],
+  "queries": [
+    { "id": "worker", "repo": "lib", "role": "worker", "brief": "Update the usage examples in README.md", "should": ["@pit-stale"], "report": true },
+    { "id": "orchestrator", "repo": "lib", "role": "orchestrator", "should": ["@pit-stale"], "report": true }
+  ]
+}

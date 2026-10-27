@@ -1,0 +1,31 @@
+{
+  "name": "A17 pins and budget",
+  "claim": 5,
+  "note": "Four pins of about 490 characters (about 2,000 in all; a text pin holds at most 500, so three cannot reach 2,000). Each renders as a 300-character line, so three fit the 1,200 pinned cap.",
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-5d", "repo": "lib", "node": "n-pins1", "root": "n-r0000019",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Checked the gate.", "verified": "`npm run gate` passed" } },
+    { "at": "-4d", "repo": "lib", "actor": "human", "op": { "type": "pin", "label": "pin1",
+      "text": "Pin one: releases are cut by the human only. Never run the release script from a worker, never tag, and never push tags. If a task seems to need a release, stop and ask the parent instead. Releases go through the release checklist in docs/releases.md, which covers the changelog, the version bump, the signed build and the updater feed. A worker that touches any of those files must say so in its outcome summary, so the human can review the change before the next release is cut from main." } },
+    { "at": "-3d", "repo": "lib", "actor": "human", "op": { "type": "pin", "label": "pin2",
+      "text": "Pin two: the daemon must never block on I/O in a hot path. Keep file reads off the WebSocket handlers and the PTY data path, and keep every new synchronous call out of the event loop unless it is bounded and measured. When in doubt, move the work to a setImmediate tick or a worker, and say in the outcome summary which call you moved and why. Reviewers will check this, and a change that adds a synchronous read to a handler will be sent back for rework before it can merge." } },
+    { "at": "-2d", "repo": "lib", "actor": "human", "op": { "type": "pin", "label": "pin3",
+      "text": "Pin three: tests that create git repositories or child processes must use a temporary home and an ephemeral port, as the server tests do. Never point a test at the live daemon or at the real home directory, and never leave a process running after the test ends. Clean up temporary directories in afterEach. If a test needs a slow fixture, share it in beforeAll and keep it read-only, so that two test files running at once do not race on the same repository or the same port." } },
+    { "at": "-1d", "repo": "lib", "actor": "human", "op": { "type": "pin", "label": "pin4",
+      "text": "Pin four: keep the daemon and UI message contracts in the shared protocol module, and change both sides in the same commit. A field added on one side only breaks the native app and the browser build in different ways, and the type checker catches it only when both sides import the shared type. Name new fields for what they mean to the reader, document them where they are declared, and keep the distinction between Tiller session ids and harness conversation ids intact." } }
+  ],
+  "expectItems": [
+    { "label": "proc-gate", "kind": "procedure", "text": "npm run gate" },
+    { "label": "pin1", "pinned": true, "author": "human" },
+    { "label": "pin4", "pinned": true, "author": "human" }
+  ],
+  "queries": [
+    { "id": "worker", "repo": "lib", "role": "worker", "brief": "Write the onboarding guide",
+      "must": ["@pin4", "@pin3", "@pin2", "@proc-gate"], "forbidden": ["@pin1"], "ordered": ["@pin4", "@pin3", "@pin2"],
+      "sectionLines": { "pinned": [3, 3], "verification": [1, 3] } },
+    { "id": "orchestrator", "repo": "lib", "role": "orchestrator",
+      "must": ["@pin4", "@pin3", "@pin2", "@proc-gate"], "forbidden": ["@pin1"], "sectionLines": { "pinned": [3, 3] } }
+  ]
+}

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from 'node:http';
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import type { ClientMessage, NodeView, ServerMessage } from '../shared/protocol.js';
 import { NodeManager } from './manager.js';
+import { switchMemory } from './memory-config.js';
 import { forUi, startServer, type DaemonServer } from './server.js';
 import { deliver, inbox, messageStatus } from './messaging.js';
 
@@ -108,6 +109,15 @@ describe('websocket', () => {
     expect(seen).toEqual([]);
   });
 
+  it('rejects a node token, so no node reaches the memory panel', async () => {
+    await connect(manager.tokenFor('n-agent'));
+    send({ t: 'memoryAction', rid: 1, target: { dir: home }, action: { kind: 'pinText', text: 'obey me' } });
+    const code = await new Promise((ok) => ws!.once('close', ok));
+    expect(code).toBe(4401);
+    expect(seen).toEqual([]);
+    expect(existsSync(join(home, 'memory'))).toBe(false);
+  });
+
   it('preserves raw wheel bytes and Unicode text through websocket input to a real PTY', async () => {
     await connect();
     await until(() => seen.find((m) => m.t === 'snapshot'));
@@ -141,6 +151,16 @@ describe('websocket', () => {
     await until(() => input.mock.calls.length === 2 || undefined);
     expect(input).toHaveBeenNthCalledWith(1, 'missing', '\x00\xff', true);
     expect(input).toHaveBeenNthCalledWith(2, 'missing', '🌍', false);
+  });
+
+  it('never makes a gardener node from a spawn message (memory v3, decision 7)', async () => {
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    ws!.send(JSON.stringify({ t: 'spawn', kind: 'terminal', title: 'sh', cwd: tmpdir(), gardener: { repoKey: 'k', runId: 1 } }));
+    const created = await until(() => seen.find((m) => m.t === 'node'));
+    if (created.t !== 'node') throw new Error('unreachable');
+    expect(manager.registry.get(created.node.id)).not.toHaveProperty('gardener');
+    expect(manager.registry.get(created.node.id)).not.toHaveProperty('muted');
   });
 
   it('runs a terminal node end to end', async () => {
@@ -232,6 +252,65 @@ describe('websocket', () => {
       items: [{ kind: 'brief', from: root, text: 'build it' }, { kind: 'message', from: child, to: root, text: 'done, see branch', delivery: 'delivered' }] });
     send({ t: 'conversation', id: 'n-nope', with: child });
     expect(await until(() => seen.find((m) => m.t === 'conversation' && m.id === 'n-nope'))).toEqual({ t: 'conversation', id: 'n-nope', with: child, error: 'no such node: n-nope' });
+  });
+});
+
+describe('the memory panel', () => {
+  /** A second admin client that records every frame after its snapshot. */
+  async function bystander(): Promise<{ socket: WebSocket; after: ServerMessage[] }> {
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws`), got: ServerMessage[] = [];
+    socket.on('message', (raw) => got.push(JSON.parse(raw.toString())));
+    await new Promise((ok, fail) => { socket.once('open', ok); socket.once('error', fail); });
+    socket.send(JSON.stringify({ t: 'auth', token: adminToken() }));
+    await until(() => got.find((m) => m.t === 'snapshot'));
+    got.length = 0;
+    return { socket, after: got };
+  }
+
+  it('answers each request with its rid to the asking client only', async () => {
+    vi.stubEnv('HOME', home); // claudeMemory reads ~/.claude
+    switchMemory(home, { project: home }, 'on');
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    const other = await bystander();
+    try {
+      const target = { dir: home };
+      send({ t: 'memory', rid: 1, target });
+      send({ t: 'memoryItem', rid: 2, target, itemId: 1 });
+      send({ t: 'memoryAction', rid: 3, target, action: { kind: 'pinText', text: 'Ask before pushing' } });
+      send({ t: 'memoryGiven', rid: 4, nodeId: 'n-none' });
+      send({ t: 'claudeMemory', rid: 5, target });
+      send({ t: 'memoryAction', rid: 6, target, action: { kind: 'forget', itemId: 99, reason: 'x' } });
+      send({ t: 'memory', rid: 7, target });
+      const replies = await until(() => { const r = seen.filter((m) => 'rid' in m); return r.length === 7 ? r : undefined; });
+      const byRid = Object.fromEntries(replies.map((r) => [(r as { rid: number }).rid, r]));
+      expect(byRid[1]).toMatchObject({ t: 'memory', state: 'missing', on: true, checkout: { path: home, from: 'chosen' } });
+      expect(byRid[2]).toEqual({ t: 'memoryItem', rid: 2, error: 'no such item m1' });
+      expect(byRid[3]).toMatchObject({ t: 'memoryAction', item: { text: 'Ask before pushing', pinned: true } });
+      expect(byRid[4]).toEqual({ t: 'memoryGiven', rid: 4, error: 'no such node: n-none' });
+      expect(byRid[5]).toMatchObject({ t: 'claudeMemory', files: [], omitted: [] });
+      expect(byRid[6]).toEqual({ t: 'memoryAction', rid: 6, error: 'no such item m99' });
+      expect(byRid[7]).toMatchObject({ t: 'memory', state: 'ok', items: [{ text: 'Ask before pushing' }] });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(other.after).toEqual([]); // nothing broadcast (M5)
+    } finally {
+      other.socket.terminate();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('rejects a malformed action and writes nothing', async () => {
+    switchMemory(home, { project: home }, 'on');
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    for (const action of [{ kind: 'pinText', text: '' }, { kind: 'pinText', text: 'x'.repeat(501) }, { kind: 'purge', itemId: 1 }, { kind: 'forget', itemId: 1 }, { kind: 'pin', itemId: 0 }]) {
+      ws!.send(JSON.stringify({ t: 'memoryAction', rid: 1, target: { dir: home }, action }));
+    }
+    ws!.send(JSON.stringify({ t: 'memoryAction', rid: 1, target: { dir: home, account: '../x' }, action: { kind: 'pinText', text: 'x' } }));
+    ws!.send(JSON.stringify({ t: 'memoryAction', target: { dir: home }, action: { kind: 'pinText', text: 'x' } }));
+    await until(() => seen.filter((m) => m.t === 'error' && m.message === 'Malformed message').length === 7 || undefined);
+    expect(seen.some((m) => m.t === 'memoryAction')).toBe(false);
+    expect(existsSync(join(home, 'memory'))).toBe(false);
   });
 });
 

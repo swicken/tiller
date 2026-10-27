@@ -203,6 +203,8 @@ export interface NodeRecord {
   forkSession?: string;
   /** The archived node whose session this one continues (followup). */
   followupOf?: string;
+  /** Set on a memory gardener node, which the daemon spawns (docs/memory.md): the repository and garden run it serves. */
+  gardener?: { repoKey: string; runId: number };
 }
 
 /** Do not disturb: while on (and before `until`, when set) the daemon sends no OS notifications. Not persisted. */
@@ -254,6 +256,8 @@ export interface ArchivedNode {
   explicit?: ('model' | 'effort')[];
   /** NodeRecord.account, so a follow-up stays in the same Claude account. */
   account?: string;
+  /** NodeRecord.gardener: a memory gardener's conversation is never followed up or forked. */
+  gardener?: NodeRecord['gardener'];
   role?: Role;
   profile?: Profile;
   /** The first prompt the node was spawned with. */
@@ -353,6 +357,90 @@ export interface Drain {
   force?: boolean;
 }
 
+// ---- Memory panel (docs/memory.md). Requested by the UI and answered to that client only: never broadcast, and nothing is
+// added to node or snapshot messages. WebSocket clients authenticate with the admin token, so these are the human's.
+
+export const MEMORY_ITEM_KINDS = ['ledger', 'open_question', 'procedure', 'pitfall', 'note'] as const;
+export type MemoryItemKind = (typeof MEMORY_ITEM_KINDS)[number];
+/**
+ * Why an item is hidden. agent: an agent's forget or supersede, undone when later work derives it again. human and
+ * superseded (the human's supersede): sticky. evicted: tombstoned by the size limit. gardener: the memory gardener's
+ * supersede, undone like agent. merged: the gardener merged it into mergedInto, which later work recording it again
+ * bumps instead. The UI shows a kind it has no label for generically.
+ */
+export const MEMORY_INVALID_KINDS = ['agent', 'human', 'superseded', 'evicted', 'gardener', 'merged'] as const;
+export type MemoryInvalidKind = (typeof MEMORY_INVALID_KINDS)[number];
+
+/**
+ * A memory item, as tools, the digest and the panel see it. Tools always carry cites and gets; the panel's list rows omit
+ * body, cites, gets and rootId, which its detail reply carries. eligible only in panel replies.
+ */
+export interface MemoryItemView {
+  id: number; kind: MemoryItemKind; text: string; body?: string;
+  author: 'daemon' | 'agent' | 'human';
+  nodeId?: string; rootId?: string; harness?: string; model?: string;
+  seen: number; pinned: boolean; cites?: number; gets?: number; createdAt: number; updatedAt: number;
+  supersedes?: number;
+  invalid?: { at: number; kind: MemoryInvalidKind; by?: string; reason?: string };
+  /** The keep a gardener merge redirected this item to; set only while invalid.kind is 'merged'. */
+  mergedInto?: number;
+  /** Set when text is '': evicted by the size limit, or purged by the human. */
+  tombstone?: 'evicted' | 'purged';
+  /** A human text pin: editable with editPin; set only when true. */
+  textPin?: true;
+  /** May enter a digest: the human or the daemon wrote it, the tree's root did, or its node's latest outcome succeeded. */
+  eligible?: boolean;
+}
+/** One launch's digest decision for a node. text is '' on a resume, which reused its session's first digest. */
+export interface MemoryInjectionView { sessionId: string; arm: 'on' | 'off'; cause: 'config' | 'ab' | 'resume'; itemIds: number[]; text: string; ts: number }
+
+/** Which memory the panel shows. Every field is optional; a node (live or closed) supplies its account and checkout. */
+export interface MemoryTarget {
+  /** A configured account's name; null: no account (the _default file). Absent: the node's, else the checkout's default. */
+  account?: string | null;
+  /** A repos key in that file. Absent: the node's or dir's repository, else the file's first. */
+  repo?: string;
+  /** The node the panel was opened from; live or closed. */
+  nodeId?: string;
+  /** A checkout directory the human chose (absolute). */
+  dir?: string;
+}
+export interface MemoryPage {
+  /** The target as resolved; send it back to stay on this page. */
+  target: { account: string | null; repo?: string; nodeId?: string; dir?: string };
+  /** This account file's key and health: ok, missing, or "off: …" / "broken: …"; quarantined copies beside it. */
+  file: string; state: string; quarantined: string[];
+  /** Existing account files, for the account picker. */
+  files: { account: string | null; file: string; state: string }[];
+  /** This file's repositories with their live item counts; path is the first path recorded for the key. */
+  repos: { key: string; path: string; items: number }[];
+  /** The checkout the opt-in was judged for; absent: none known, and on is null. */
+  checkout?: { path: string; from: 'node' | 'chosen' | 'live node' | 'recorded path' };
+  /** Memory on or off for that checkout in this account, and the setting that decides; actions need true. */
+  on: boolean | null; source: string;
+  /** The tl memory scope that opens exactly this file and repository; absent when none does (no purge command). */
+  cli?: { repo: string; account?: string };
+  counts: Record<MemoryItemKind, number> & { pinned: number; retracted: number };
+  /** At most 50: newest first, or best match first for a query; without body. */
+  items: MemoryItemView[];
+  /** The browse cursor for the next page; absent for a query or the last page. */
+  next?: { updatedAt: number; id: number };
+}
+export interface MemoryItemDetail {
+  item: MemoryItemView;
+  supersededBy?: number;
+  /** Nodes whose digest included it, newest first, at most 20; arm off: recorded for the A/B, not given. */
+  givenTo: { nodeId: string; sessionId: string; arm: 'on' | 'off'; ts: number }[];
+}
+/** The human's change to an item. editPin: the new text pin supersedes the old one. forget is permanent (never a purge). */
+export type MemoryAction =
+  | { kind: 'pin'; itemId: number } | { kind: 'pinText'; text: string } | { kind: 'unpin'; itemId: number }
+  | { kind: 'editPin'; itemId: number; text: string } | { kind: 'forget'; itemId: number; reason: string }
+  | { kind: 'restore'; itemId: number };
+export interface ClaudeMemoryFile { name: string; bytes: number; mtime: number; text: string; truncated?: true }
+/** Claude Code's auto-memory for a checkout, read-only: <Claude home>/projects/<checkout slug>/memory. */
+export interface ClaudeMemoryView { dir: string; account?: string; files: ClaudeMemoryFile[]; omitted: string[]; note?: string }
+
 // Daemon -> UI (WebSocket, JSON). One message per line.
 export type ServerMessage =
   | { t: 'update'; update: UpdateStatus }
@@ -379,6 +467,12 @@ export type ServerMessage =
   | ({ t: 'conversation'; id: string; with?: string } & (Conversation | { error: string })) // reply to a conversation request
   | { t: 'history'; items: ArchivedNode[] }   // reply to a history request, newest closed first
   | { t: 'sent'; id: string; result: SendResult } // reply to a send request
+  // Memory panel replies, to the asking client only, echoing its rid.
+  | ({ t: 'memory'; rid: number } & (MemoryPage | { error: string }))
+  | ({ t: 'memoryItem'; rid: number } & (MemoryItemDetail | { error: string }))
+  | ({ t: 'memoryAction'; rid: number } & ({ item: MemoryItemView } | { error: string }))
+  | ({ t: 'memoryGiven'; rid: number } & ({ injections: MemoryInjectionView[] } | { error: string }))
+  | ({ t: 'claudeMemory'; rid: number } & (ClaudeMemoryView | { error: string }))
   ;
 
 /** One node's line in the away digest: still needs you, errored or failed, or finished (with its outcome note). */
@@ -419,6 +513,12 @@ export type ClientMessage =
   | { t: 'send'; id: string; text: string; mode?: SendMode } // a message from the human, as `tl send` delivers it; replies sent
   | { t: 'mute'; id: string; muted: boolean }  // the human mutes or unmutes a node's OS notifications
   | { t: 'dnd'; on: boolean; minutes?: number } // do not disturb on (for minutes, else until turned off) or off
+  // Memory panel requests; rid is the client's request number, echoed in the reply.
+  | { t: 'memory'; rid: number; target: MemoryTarget; kind?: MemoryItemKind | 'pinned'; query?: string; retracted?: boolean; before?: { updatedAt: number; id: number } } // replies memory
+  | { t: 'memoryItem'; rid: number; target: MemoryTarget; itemId: number }       // one item in full; not counted as an agent read
+  | { t: 'memoryAction'; rid: number; target: MemoryTarget; action: MemoryAction } // the human's change; needs memory on for the checkout
+  | { t: 'memoryGiven'; rid: number; nodeId: string }                            // a live or closed node's digest decisions, newest first
+  | { t: 'claudeMemory'; rid: number; target: MemoryTarget }                     // Claude Code's auto-memory for the target's checkout, read-only
   ;
 
 // Outcome of delivering a message into an agent node (PLAN.md §6).

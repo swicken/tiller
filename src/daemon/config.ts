@@ -1,5 +1,6 @@
 // Per-project settings: <cwd>/.tiller/config.json, then <home>/config.json, then built-in defaults. Read fresh on every call.
-// The `daemon` group, `claude.accounts` and `claude.account` come from the home file only. A project file may only make `approvals` stricter.
+// The `daemon` group, `claude.accounts`, `claude.account`, `memory.projects`, `memory.maxMB` and `memory.gardener` come from the home file only. A project file
+// may only make `approvals` and `memory.digest` stricter, and may set `memory.enabled` only to false.
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -8,6 +9,7 @@ import { HARNESSES, PROFILES, isSupportedEffort } from '../shared/harness-policy
 import { EFFORTS, ISOLATIONS, type Harness, type Profile, type Role } from '../shared/protocol.js';
 import { CLAUDE_ACCOUNT_NAME, CLAUDE_ACCOUNT_NAME_RULE, SETTINGS_PROFILE_DEFAULTS, type SettingsEntry } from '../shared/settings.js';
 import { homeDir } from './home.js';
+import { LIMITS } from './memory-schema.js';
 import { expandHome } from './util.js';
 
 export const MERGE_STYLES = ['merge', 'squash', 'ff-only'] as const;
@@ -35,6 +37,10 @@ const ClaudeAccounts = z.array(z.object({
   configDir: AccountPath.optional(),
   /** Root nodes whose project is inside one of these run in this account (the longest match wins; Settings writes a repo's exact path). */
   projects: z.array(AccountPath).optional(),
+  /** Memory for nodes in this account: true opts in; false keeps it off whatever a memory.projects entry says. Unset: no say. */
+  memory: z.boolean().optional(),
+  /** false: no memory gardener run, scheduled or manual, for this account's memory file. Unset or true: no say. */
+  gardener: z.boolean().optional(),
 }).strict()).superRefine((accounts, ctx) => {
   const names = new Set<string>(), dirs = new Set<string>();
   const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
@@ -136,6 +142,28 @@ export const ConfigFile = z.object({
     stallMinutes: z.number().positive().optional(),
     maxMessagesPer10Min: z.number().int().positive().optional(),
   }).strict().optional(),
+  /**
+   * Daemon-native memory (docs/memory.md), off unless the human opts in. enabled: the global opt-in; a project file may
+   * only set it false. projects (home file only): per-project opt-in or opt-out, the longest containing path wins.
+   * digest: whether a launch gets the # Memory section ("ab" splits nodes by id); a project may only make it stricter.
+   * maxMB (home file only): the size past which each account's file evicts old entries.
+   * gardener (home file only): the memory gardener. enabled: its daily schedule (manual runs need no opt-in). model: its
+   * Claude model. minNewItems: new gardenable items a scheduled run needs. maxUsdPerRun: one run's cost cap.
+   * maxUsdPer30Days: one account file's budget over 30 days; 0 blocks every run, manual ones included.
+   */
+  memory: z.object({
+    enabled: z.boolean().optional(),
+    projects: z.array(z.object({ path: AccountPath, enabled: z.boolean() }).strict()).optional(),
+    digest: z.enum(['on', 'ab', 'off']).optional(),
+    maxMB: z.number().min(LIMITS.size.minMB).optional(),
+    gardener: z.object({
+      enabled: z.boolean().optional(),
+      model: z.string().min(1).optional(),
+      minNewItems: z.number().int().min(5).optional(),
+      maxUsdPerRun: z.number().min(0.01).max(5).optional(),
+      maxUsdPer30Days: z.number().nonnegative().optional(),
+    }).strict().optional(),
+  }).strict().optional(),
 }).strict();
 type ConfigFile = z.infer<typeof ConfigFile>;
 
@@ -173,6 +201,9 @@ export const DEFAULTS = {
   'notifications.kinds.needsYou': 'sound', 'notifications.kinds.errored': 'silent', 'notifications.kinds.done': 'banner', 'notifications.kinds.exited': 'silent',
   'notifications.treeDoneSummary': true, 'notifications.quietHours': undefined,
   'limits.maxDepth': 3, 'limits.maxChildren': 8, 'limits.stallMinutes': 5, 'limits.maxMessagesPer10Min': 20,
+  'memory.enabled': false, 'memory.projects': [], 'memory.digest': 'on', 'memory.maxMB': LIMITS.size.defaultMB,
+  'memory.gardener.enabled': false, 'memory.gardener.model': 'claude-haiku-5-5', 'memory.gardener.minNewItems': 25,
+  'memory.gardener.maxUsdPerRun': 0.25, 'memory.gardener.maxUsdPer30Days': 3,
 } satisfies Flat;
 
 type Defaulted = { [K in Key]: (typeof DEFAULTS)[K] extends undefined ? never : K }[Key];
@@ -196,6 +227,9 @@ const warn = (path: string, msg: string) => {
 };
 const get = (o: unknown, path: PropertyKey[]): any => path.reduce<any>((x, k) => x?.[k], o);
 
+/** The settings a project file may not set. */
+const HOME_ONLY = ['daemon', 'claude.accounts', 'claude.account', 'memory.projects', 'memory.maxMB', 'memory.gardener'];
+
 /** A file's settings. An unreadable file gives none; a bad key (unknown, renamed or invalid) is logged once and dropped. */
 function readLayer(path: string, isHome: boolean): ConfigFile | undefined {
   let raw: string;
@@ -203,10 +237,12 @@ function readLayer(path: string, isHome: boolean): ConfigFile | undefined {
   let data: any;
   try { data = JSON.parse(raw); } catch (err) { warn(path, (err as Error).message); return undefined; }
   const bad: string[] = [];
-  if (!isHome && data?.daemon !== undefined) { delete data.daemon; bad.push('daemon: read from the home file only'); }
-  for (const key of ['accounts', 'account'] as const) {
-    if (!isHome && data?.claude?.[key] !== undefined) { delete data.claude[key]; bad.push(`claude.${key}: read from the home file only`); }
+  for (const key of isHome ? [] : HOME_ONLY) {
+    const path = key.split('.'), last = path.pop()!, parent = get(data, path);
+    if (parent?.[last] !== undefined) { delete parent[last]; bad.push(`${key}: read from the home file only`); }
   }
+  // Agents can edit a project file, so it may turn memory off but never on.
+  if (!isHome && data?.memory?.enabled === true) { delete data.memory.enabled; bad.push('memory.enabled: a project file may only set false; opt in from the home file'); }
   const r = ConfigFile.safeParse(data);
   if (!r.success) {
     for (const i of r.error.issues) {
@@ -224,12 +260,13 @@ function readLayer(path: string, isHome: boolean): ConfigFile | undefined {
 }
 
 /**
- * How strict each approvals value is: higher asks the human more often. An agent can edit its project file, so a project
- * value applies only when it is at least as strict as the home file's value, or the default when home does not set it.
+ * How strict each approvals value is: higher asks the human more often; for memory.digest, higher injects less. An agent can edit its
+ * project file, so a project value applies only when it is at least as strict as the home file's value, or the default when home does not set it.
  */
 const STRICTNESS: Partial<Record<Key, (value: unknown) => number>> = {
   'approvals.close': (value) => ['always', 'done', 'never'].indexOf(value as string),
   'approvals.merge': (value) => (value ? 0 : 1),
+  'memory.digest': (value) => ['on', 'ab', 'off'].indexOf(value as string),
 };
 
 /** Each key's effective value and where it came from: the first file that sets it, else 'default'. */
@@ -244,8 +281,9 @@ export function configEntries(cwd: string | null, home = homeDir()): Record<Key,
       const limit = set[1] ?? { value: fallback, source: 'default' };
       if (strictness(set[0].value) < strictness(limit.value)) {
         const [value, instead] = [JSON.stringify(set[0].value), JSON.stringify(limit.value)];
-        warn(set[0].source, `${key}: ${value} asks the human less often than allowed, so ${instead} (${limit.source === 'default' ? 'the default' : `from ${homeFile}`}) applies instead. `
-          + `A project file may only make approvals stricter, because agents can edit it; to allow ${value}, set ${key} to ${value} in ${homeFile}`);
+        const [looser, group] = key.startsWith('approvals.') ? ['asks the human less often', 'approvals'] : ['injects memory more often', key];
+        warn(set[0].source, `${key}: ${value} ${looser} than allowed, so ${instead} (${limit.source === 'default' ? 'the default' : `from ${homeFile}`}) applies instead. `
+          + `A project file may only make ${group} stricter, because agents can edit it; to allow ${value}, set ${key} to ${value} in ${homeFile}`);
         set = set.slice(1);
       }
     }

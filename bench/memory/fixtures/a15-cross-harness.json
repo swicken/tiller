@@ -1,0 +1,24 @@
+{
+  "name": "A15 cross-harness",
+  "claim": 6,
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-2d", "repo": "lib", "node": "n-codex1", "root": "n-r0000016", "harness": "codex", "model": "gpt-5-codex",
+      "event": { "type": "gate", "ok": false, "command": "npm test", "tail": "error: snapshot mismatch in test/render.test.ts\nnpm test: exited with 1" } },
+    { "at": "-2d+5m", "repo": "lib", "node": "n-codex1",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Updated the render snapshot.", "verified": "`npm test -- test/render.test.ts` passed" } },
+    { "at": "-1d", "repo": "lib", "node": "n-pi1", "root": "n-r0000016", "harness": "pi", "model": "anthropic/claude-haiku-5-5",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Linted.", "verified": "`npm run lint` clean" } }
+  ],
+  "expectItems": [
+    { "label": "pit-codex", "kind": "pitfall", "harness": "codex", "textIncludes": ["snapshot mismatch"] },
+    { "label": "proc-codex", "kind": "procedure", "harness": "codex", "text": "npm test -- test/render.test.ts" },
+    { "label": "proc-pi", "kind": "procedure", "harness": "pi", "text": "npm run lint" }
+  ],
+  "queries": [
+    { "id": "claude-worker", "repo": "lib", "role": "worker", "brief": "Change the render output checked by test/render.test.ts",
+      "must": ["@pit-codex", "@proc-pi"], "should": ["@proc-codex"], "sameForHarnesses": ["codex", "pi"],
+      "textIncludes": ["n-codex1 codex: ", "n-pi1 pi: "] }
+  ]
+}

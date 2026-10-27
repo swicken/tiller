@@ -28,10 +28,12 @@ export function TitleBar({ node }: { node: NodeView }) {
   const panel = useStore((s) => s.panel);
   const diff = useStore((s) => s.diffOpen) && !!node.worktree;
   const transcript = useStore((s) => s.transcriptOpen) && isAgentKind(node.kind);
+  const memory = useStore((s) => s.memoryOpen) && isAgentKind(node.kind);
   const tabs = [
-    { key: 'terminal', label: 'Terminal', on: !diff && !transcript, show: true },
+    { key: 'terminal', label: 'Terminal', on: !diff && !transcript && !memory, show: true },
     { key: 'diff', label: 'Diff', on: diff, show: !!node.worktree },
     { key: 'transcript', label: 'Transcript', on: transcript, show: isAgentKind(node.kind) },
+    { key: 'memory', label: 'Memory', on: memory, show: isAgentKind(node.kind) },
   ] as const;
   const kind = statusKind(node);
   const s = node.status;

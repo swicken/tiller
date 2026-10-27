@@ -1,0 +1,40 @@
+{
+  "name": "A10 retraction",
+  "claim": 5,
+  "note": "The human's retraction is sticky: the same failure derived again neither bumps nor revives it. An agent's retraction lasts until later work derives the item again (M3).",
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-5d", "repo": "lib", "node": "n-lint1", "root": "n-r0000010",
+      "event": { "type": "gate", "ok": false, "command": "npm run lint",
+        "tail": "src/a.js\n  3:7  error  'x' is assigned a value but never used  no-unused-vars\nnpm run lint: exited with 1" } },
+    { "at": "-5d+5m", "repo": "lib", "node": "n-lint1", "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Removed the unused variable." } },
+    { "at": "-3d", "repo": "lib", "actor": "human", "op": { "type": "forget", "match": "@pit-lint", "reason": "obsolete: the rule is off now" } },
+    { "at": "-1d", "repo": "lib", "node": "n-lint2", "root": "n-r0000010",
+      "event": { "type": "gate", "ok": false, "command": "npm run lint",
+        "tail": "src/a.js\n  9:11  error  'x' is assigned a value but never used  no-unused-vars\nnpm run lint: exited with 1" } },
+    { "at": "-1d+5m", "repo": "lib", "node": "n-lint2", "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Removed another unused variable." } },
+
+    { "at": "-4d", "repo": "lib", "node": "n-round1", "root": "n-r0000010",
+      "event": { "type": "gate", "ok": false, "command": "npm test", "tail": "FAIL test/b.test.ts > rounds half up\nnpm test: exited with 1" } },
+    { "at": "-4d+5m", "repo": "lib", "node": "n-round1", "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Used banker's rounding." } },
+    { "at": "-3d", "repo": "lib", "node": "n-skeptic", "root": "n-r0000010", "op": { "type": "forget", "match": "@pit-round", "reason": "looked flaky, not a lesson" } },
+    { "at": "-1d+1h", "repo": "lib", "node": "n-round2", "root": "n-r0000010",
+      "event": { "type": "gate", "ok": false, "command": "npm test", "tail": "FAIL test/b.test.ts > rounds half up\nnpm test: exited with 1" } },
+    { "at": "-1d+1h+5m", "repo": "lib", "node": "n-round2", "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Same rounding fix again." } }
+  ],
+  "expectItems": [
+    { "label": "pit-lint", "kind": "pitfall", "textIncludes": ["no-unused-vars"], "retracted": true, "seen": 1, "nodeId": "n-lint1" },
+    { "label": "pit-round", "kind": "pitfall", "textIncludes": ["rounds half up"], "retracted": false, "seen": 2, "nodeId": "n-round2" }
+  ],
+  "exactCounts": { "pitfall": 2 },
+  "searches": [
+    { "repo": "lib", "query": "no-unused-vars in src/a.js", "excludes": ["@pit-lint"] },
+    { "repo": "lib", "query": "rounds half up", "includes": ["@pit-round"] }
+  ],
+  "queries": [
+    { "id": "worker", "repo": "lib", "role": "worker", "brief": "Fix the unused vars lint errors in src/a.js and the rounds half up test",
+      "must": ["@pit-round"], "forbidden": ["@pit-lint"] },
+    { "id": "orchestrator", "repo": "lib", "role": "orchestrator", "must": ["@pit-round"], "forbidden": ["@pit-lint"] }
+  ]
+}

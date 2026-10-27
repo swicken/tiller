@@ -585,7 +585,7 @@ describe('mcp api', () => {
     const id = (await spawnT('mcp-caller')).body.data.nodeId as string;
     const human = await connect('human', admin);
     const humanTools = (await human.listTools()).tools;
-    expect(humanTools.map((t) => t.name).sort()).toEqual(['change_harness', 'close', 'diff', 'dnd', 'drain', 'followup', 'history', 'list_nodes', 'merge', 'message_status', 'mute', 'notify_when', 'prune', 'read', 'rename', 'report_outcome', 'restart', 'resume', 'select', 'send', 'sessions_clean', 'shutdown', 'spawn', 'transcript', 'update', 'withdraw', 'worktrees', 'write']);
+    expect(humanTools.map((t) => t.name).sort()).toEqual(['change_harness', 'close', 'diff', 'dnd', 'drain', 'followup', 'history', 'list_nodes', 'memory_add', 'memory_forget', 'memory_garden', 'memory_get', 'memory_pin', 'memory_search', 'memory_status', 'memory_switch', 'merge', 'message_status', 'mute', 'notify_when', 'prune', 'read', 'rename', 'report_outcome', 'restart', 'resume', 'select', 'send', 'sessions_clean', 'shutdown', 'spawn', 'transcript', 'update', 'withdraw', 'worktrees', 'write']);
     expect(Object.fromEntries(humanTools.map((t) => [t.name, t.title]))).toMatchObject({
       send: 'Send message', spawn: 'Start node', notify_when: 'Watch node completion', read: 'Read node output',
       history: 'List past agents', followup: 'Continue past agent', merge: 'Merge node changes',

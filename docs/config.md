@@ -8,6 +8,8 @@ Each config key resolves independently: project file, then home file, then built
 
 Keys in the `daemon` group are daemon-wide and come from the home file only. A `daemon` group in a project file is ignored with a warning. So are `claude.accounts` and `claude.account`: an agent can edit its project file, and must not be able to choose which Claude account it runs in. The Settings panel's repository-level Claude account is stored in the home file too (see below).
 
+Memory is off unless you opt in, and the opt-in is home-only for the same reason: `memory.projects`, `memory.maxMB`, `memory.gardener` and `claude.accounts[].memory` in a project file are ignored with a warning, `memory.enabled` there may only be `false`, and `memory.digest` there may only be stricter. How the settings combine is in [memory.md](memory.md#which-setting-wins). A project file's `memory.enabled: false` can only be written by editing the file: Settings never writes it. Settings → Memory writes the home file instead, as described under Settings below.
+
 Keys in the `approvals` group decide when an agent skips the human's approval, and an agent can edit its project file, so a project file may only make them stricter. The home file's value, or the default when the home file does not set the key, is the loosest an approval can be. A project value at least as strict applies; a looser one is ignored with a warning, and `tl config` then shows the home or default value as the source. For `approvals.close`, `never` is strictest, then `done`, then `always`; for `approvals.merge`, `false` is stricter than `true`. To let agents in a repo close finished nodes without asking, set `"approvals": { "close": "done" }` in the home file; a repo that should still ask can set `never` in its project file.
 
 ## Bad files and bad keys
@@ -30,6 +32,8 @@ The layer column says where a key may be set: "project, home" means either file,
 | `claude.inheritMcpServers` | boolean | `true` | project, home | When true, a Claude node loads the user's and plugins' MCP servers as well as tiller's. A project's `.mcp.json` servers stay off in nodes (tiller lists them as `disabledMcpjsonServers` in the node's settings) because Claude would otherwise stop each new node on an approval prompt. Plugin tools are named `mcp__plugin_<plugin>_<server>__*`. When false the node is launched with `--strict-mcp-config` and gets only tiller's server. Read when the node's files are written for a launch, so a resume uses the current value. |
 | `claude.accounts` | array | `[]` | home | Claude accounts nodes can run under, each `{ "name", "configDir"?, "projects"? }`; see [Claude accounts](harnesses.md#claude-accounts). `name` is 1-32 letters, digits, `_` or `-`. `configDir` (absolute or `~/…`) is the account's `CLAUDE_CONFIG_DIR`; an entry without it is Claude's default home (at most one). `projects` lists directories whose root nodes run in the account. A bad entry, an unknown key, a duplicate name or `configDir`, or a `configDir` of `~/.claude` makes the whole list invalid: Claude nodes then fail closed rather than run in the wrong account. A root spawn is refused with an error naming the file and the problem (the spawn dialog shows it too), as is a restart or resume of a node that has an account, until the list is fixed. When none are configured, Settings → Claude → **Claude account** offers a setup form that writes the first list; after that, Settings → Claude → **Configure** adds, removes and re-directs accounts, and Settings → Claude → **Claude account** picks the default. Editing the JSON also works. |
 | `claude.account` | string | unset | home | The default account, by name, for a root node whose project no account's `projects` lists; unset means no account. A name not in `claude.accounts` makes Claude spawns fail closed, as an invalid list does. Settings → Claude → **Claude account** for all repositories. |
+| `claude.accounts[].memory` | boolean | unset | home | Part of a `claude.accounts` entry. `true` opts the account's nodes into [memory](memory.md); `false` keeps it off whatever a `memory.projects` entry says, so no project can lift it. Unset: no say. |
+| `claude.accounts[].gardener` | boolean | unset | home | Part of a `claude.accounts` entry. `false` is a ceiling: no [memory gardener](memory.md#gardener) run, scheduled or manual, for that account's memory file. Unset or `true`: no say. |
 | `approvals.close` | `never`, `done`, `always` | `never` | home, project stricter | Whether an agent's `close` skips the human's approval: always, only when every node in the batch is done, exited or has reported an outcome, or never. A close that waits for approval replies pending and the decision arrives as a message ([messaging](messaging.md#notices-from-the-daemon)). |
 | `approvals.merge` | boolean | `false` | home, project stricter | When true, an agent's `merge` does not ask the human. |
 | `worktrees.isolation` | `none`, `worktree` | `none` | project, home | What a spawn of a worker agent node (any harness, not an orchestrator) gets when it does not say. |
@@ -59,8 +63,17 @@ The layer column says where a key may be set: "project, home" means either file,
 | `limits.maxChildren` | integer | `8` | project, home | An agent's spawn is refused when the parent already has this many live children. |
 | `limits.stallMinutes` | positive number | `5` | project, home | A working node with no hook event for this long is marked stalled and its parent is told. |
 | `limits.maxMessagesPer10Min` | positive integer | `20` | project, home | Messages one node may send another in 10 minutes before further sends are refused as a likely loop. |
+| `memory.enabled` | boolean | `false` | home, project may only set `false` | The global opt-in for [memory](memory.md). A project file's `true` is ignored with a warning. Settings → Memory edits the home value only; a project file's `false` is JSON-only. |
+| `memory.projects` | list of `{ "path", "enabled" }` | `[]` | home | Per-project memory opt-in or opt-out; the longest path containing the node's project wins. `tl memory on\|off\|inherit --project P` edits it, and so does Settings → Memory at repository scope (see below). |
+| `memory.digest` | `on`, `ab`, `off` | `on` | home, project stricter | Whether a launch gets the `# Memory` digest when memory is on: `ab` gives it to half the nodes and logs what the other half would have seen; `off` keeps capture and tools only. A project may only move toward `off`. |
+| `memory.maxMB` | number, 16 or more | `200` | home | Size past which each account's memory file evicts old entries. Settings → Memory rejects less than 16. |
+| `memory.gardener.enabled` | boolean | `false` | home | The [gardener](memory.md#gardener)'s daily schedule. A manual `tl memory garden run` needs no opt-in. Memory must also be on for the repository. |
+| `memory.gardener.model` | string | `claude-haiku-5-5` | home | The Claude model a gardener run uses. |
+| `memory.gardener.minNewItems` | integer, 5 or more | `25` | home | New gardenable items since a repository's last run that a scheduled run needs. |
+| `memory.gardener.maxUsdPerRun` | number, 0.01 to 5 | `0.25` | home | One run's cost cap. It also sets the run's tool-call cap, at most 20. |
+| `memory.gardener.maxUsdPer30Days` | number, 0 or more | `3` | home | One account file's gardener budget over 30 days. A run starts only when a full `maxUsdPerRun` still fits; `0` blocks every run, manual ones included. |
 
-For notification levels, `sound` is a banner with a sound and `silent` sends nothing. The behaviour each key controls is described in the topic documents: [agent-roles.md](agent-roles.md) for roles, the gate and the spawn limits, [worktrees.md](worktrees.md) for the worktree keys and merge approval, [sessions.md](sessions.md) for resume, retention and the digest, [messaging.md](messaging.md) for the message limit and the working cap, and [frontends.md](frontends.md) for notifications.
+For notification levels, `sound` is a banner with a sound and `silent` sends nothing. The behaviour each key controls is described in the topic documents: [agent-roles.md](agent-roles.md) for roles, the gate and the spawn limits, [worktrees.md](worktrees.md) for the worktree keys and merge approval, [sessions.md](sessions.md) for resume, retention and the digest, [memory.md](memory.md) for the memory keys and how they combine, [messaging.md](messaging.md) for the message limit and the working cap, and [frontends.md](frontends.md) for notifications.
 
 ## Example
 
@@ -184,6 +197,14 @@ the global `claude.account`, and `claudeAccount` `{ effective, project }` names 
 entry that decides it. Saving it rewrites those `projects` lists in the home file, never the
 repository file, so the request must also carry the snapshot's `homeRevision`; a stale one is a
 409 like a stale `revision`. A name must be in `claude.accounts`.
+
+The **Memory** group (under Workflow) edits the memory opt-in with two pseudo-keys beside the config keys above, each writing to the **home** file:
+
+- `claude.accounts.<name>.memory` (home scope) sets or, with `null`, removes that account's `memory` flag. An account that is not in `claude.accounts` is a 400, an invalid account list a 422.
+- `memory.project` (project scope) sets or, with `null`, removes the `memory.projects` entry for the repository's exact path. Like `claude.account`, it rewrites the home file, so the request must carry the snapshot's `homeRevision` (a stale one is a 409), and a save that changes both shares one home write.
+- `memory.enabled` and `memory.maxMB` are ordinary home-scope keys; `memory.maxMB` below 16 is a 400. The `memory.gardener` keys and the accounts' `gardener` flag are not in Settings: edit the home file.
+
+At project scope every other `memory.*` key, and the account keys, are refused as home-only. A home snapshot carries `memory` `{ on, source, projects }`, and a project snapshot `{ on, source, account }`, where `source` is the setting that decides, for root nodes in that repository's account. Each opt-in change writes the same bytes as the matching `tl memory` command (`memory.maxMB` has no `tl` equivalent). See [memory.md](memory.md#turning-memory-on).
 
 Save with `POST /api/settings` and a JSON body such as:
 

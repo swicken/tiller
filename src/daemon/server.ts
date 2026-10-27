@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
-import { HARNESSES, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
+import { HARNESSES, MEMORY_ITEM_KINDS, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
 import { loadConfig } from './config.js';
 import { DEFAULT_PORT } from './home.js';
 import type { NodeManager, NotifyEvent } from './manager.js';
@@ -15,6 +15,8 @@ import type { PtySession } from './pty.js';
 import { history } from './archive.js';
 import { conversation, conversations } from './conversation.js';
 import { mountMcp } from './mcp.js';
+import { claudeMemory, memoryAction, memoryGiven, memoryItem, memoryPage } from './memory-panel.js';
+import { LIMITS } from './memory-schema.js';
 import { modApi } from './modapi.js';
 import { settingsApi } from './settings.js';
 import { SPAWN_FIELDS } from './spawnfields.js';
@@ -42,6 +44,21 @@ const MIME: Record<string, string> = {
 
 const id = z.string().min(1);
 const size = z.number().int().min(1).max(1000);
+const rid = z.number().int().min(0);
+const itemId = z.number().int().positive();
+const memoryTarget = z.object({
+  account: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/).nullable().optional(),
+  repo: z.string().min(1).max(1024).optional(), nodeId: id.optional(), dir: z.string().min(1).max(4096).optional(),
+});
+const pinText = z.string().min(1).max(LIMITS.tools.pinText);
+const memoryActionShape = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('pin'), itemId }),
+  z.object({ kind: z.literal('pinText'), text: pinText }),
+  z.object({ kind: z.literal('unpin'), itemId }),
+  z.object({ kind: z.literal('editPin'), itemId, text: pinText }),
+  z.object({ kind: z.literal('forget'), itemId, reason: z.string().min(1).max(LIMITS.tools.reason) }),
+  z.object({ kind: z.literal('restore'), itemId }),
+]);
 const clientMessage = z.discriminatedUnion('t', [
   z.object({ t: z.literal('auth'), token: z.string(), client: z.enum(['app', 'browser']).optional() }),
   z.object({ t: z.literal('nativeNotifyReady'), ok: z.boolean(), error: z.string().max(1000).optional() }),
@@ -77,6 +94,14 @@ const clientMessage = z.discriminatedUnion('t', [
   z.object({ t: z.literal('send'), id, text: z.string().min(1), mode: z.enum(['queue', 'now']).optional() }),
   z.object({ t: z.literal('mute'), id, muted: z.boolean() }),
   z.object({ t: z.literal('dnd'), on: z.boolean(), minutes: z.number().positive().max(7 * 24 * 60).optional() }),
+  z.object({
+    t: z.literal('memory'), rid, target: memoryTarget, kind: z.enum([...MEMORY_ITEM_KINDS, 'pinned'] as const).optional(),
+    query: z.string().max(LIMITS.tools.query).optional(), retracted: z.boolean().optional(), before: z.object({ updatedAt: z.number().int().min(0), id: itemId }).optional(),
+  }),
+  z.object({ t: z.literal('memoryItem'), rid, target: memoryTarget, itemId }),
+  z.object({ t: z.literal('memoryAction'), rid, target: memoryTarget, action: memoryActionShape }),
+  z.object({ t: z.literal('memoryGiven'), rid, nodeId: id }),
+  z.object({ t: z.literal('claudeMemory'), rid, target: memoryTarget }),
 ]) satisfies z.ZodType<ClientMessage>;
 
 export interface DaemonServer {
@@ -200,6 +225,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
   manager.on('drain', syncDrain);
   manager.on('node', () => { if (manager.draining) syncDrain(); });
 
+  const failed = (err: Error) => ({ error: err.message });
   async function handle(c: Client, m: ClientMessage): Promise<void> {
     switch (m.t) {
       case 'auth': return;
@@ -276,28 +302,34 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
       case 'rename': manager.rename(m.id, m.title); return;
       case 'confirm': pendingConfirms.get(m.confirmId)?.(m.ok); return;
       case 'transcript': {
-        const r = await manager.transcript(m.id, m.sessionId).catch((err: Error) => ({ error: err.message }));
+        const r = await manager.transcript(m.id, m.sessionId).catch(failed);
         sendTo(c, { t: 'transcript', id: m.id, ...(m.sessionId ? { sessionId: m.sessionId } : {}), ...r });
         return;
       }
       case 'conversations': {
-        const r = await conversations(manager, m.id).then((items) => ({ items }), (err: Error) => ({ error: err.message }));
+        const r = await conversations(manager, m.id).then((items) => ({ items }), failed);
         sendTo(c, { t: 'conversations', id: m.id, ...r });
         return;
       }
       case 'conversation': {
-        const r = await conversation(manager, m.id, m.with).catch((err: Error) => ({ error: err.message }));
+        const r = await conversation(manager, m.id, m.with).catch(failed);
         sendTo(c, { t: 'conversation', id: m.id, ...(m.with ? { with: m.with } : {}), ...r });
         return;
       }
       case 'history': sendTo(c, { t: 'history', items: await history(manager.home, { rootId: m.rootId, query: m.query }) }); return;
       case 'followup': await manager.followup(m.id, m.prompt, m.title); return;
-      case 'diff': sendTo(c, { t: 'diff', id: m.id, ...(await manager.diff(m.id).catch((err: Error) => ({ error: err.message }))) }); return;
+      case 'diff': sendTo(c, { t: 'diff', id: m.id, ...(await manager.diff(m.id).catch(failed)) }); return;
       case 'send': sendTo(c, { t: 'sent', id: m.id, result: await deliver(manager, HUMAN, m.id, m.text, { mode: m.mode }) }); return;
       case 'mute':
         if (!manager.mute(m.id, m.muted)) sendTo(c, { t: 'error', message: `no such node: ${m.id}`, id: m.id });
         return;
       case 'dnd': setDnd(m.on, m.minutes); return;
+      // The Memory panel: replies to this client only, echoing its rid.
+      case 'memory': sendTo(c, { t: 'memory', rid: m.rid, ...(await memoryPage(manager, m).catch(failed)) }); return;
+      case 'memoryItem': sendTo(c, { t: 'memoryItem', rid: m.rid, ...(await memoryItem(manager, m.target, m.itemId).catch(failed)) }); return;
+      case 'memoryAction': sendTo(c, { t: 'memoryAction', rid: m.rid, ...(await memoryAction(manager, m.target, m.action).then((item) => ({ item }), failed)) }); return;
+      case 'memoryGiven': sendTo(c, { t: 'memoryGiven', rid: m.rid, ...(await memoryGiven(manager, m.nodeId).then((injections) => ({ injections }), failed)) }); return;
+      case 'claudeMemory': sendTo(c, { t: 'claudeMemory', rid: m.rid, ...(await claudeMemory(manager, m.target).catch(failed)) }); return;
     }
   }
 

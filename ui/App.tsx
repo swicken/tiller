@@ -7,6 +7,7 @@ import { ExitedCard } from './ExitedCard';
 import { ArchivePane } from './transcript/History';
 import { useDocumentSync } from './hooks';
 import { LastMessagePanel } from './LastMessagePanel';
+import { MemoryPane } from './memory/MemoryPane';
 import { Palette } from './Palette';
 import { Sidebar, useRows } from './sidebar/Sidebar';
 import { StatusBar } from './StatusBar';
@@ -14,7 +15,7 @@ import { TerminalPane } from './TerminalPane';
 import { TitleBar } from './TitleBar';
 import { TranscriptPane } from './transcript/TranscriptPane';
 import { ConfirmModal, DigestCard, Toasts } from './Toasts';
-import { getState, openDialog, selectNode, useStore } from './store';
+import { getState, openDialog, selectNode, useStore, viewMemory } from './store';
 import { IN_APP } from './url';
 import { SettingsPanel } from './settings/SettingsPanel';
 
@@ -28,7 +29,9 @@ export function App() {
   const palette = useStore((s) => s.dialog?.kind === 'palette');
   const diff = useStore((s) => s.diffOpen) && !!node?.worktree;
   const transcript = useStore((s) => s.transcriptOpen) && !!node && isAgentKind(node.kind);
+  const memoryTab = useStore((s) => s.memoryOpen) && !!node && isAgentKind(node.kind);
   const archived = useStore((s) => s.archived);
+  const memoryView = useStore((s) => s.memoryView);
   useDocumentSync();
 
   useEffect(() => {
@@ -51,15 +54,17 @@ export function App() {
       {IN_APP && <div className="dragstrip" data-tauri-drag-region />}
       <Sidebar onSettings={() => setSettingsNode({ id: node?.id })} />
       <main className="main">
-        {node && !archived ? <TitleBar node={node} /> : null}
+        {node && !archived && !memoryView ? <TitleBar node={node} /> : null}
         <div className="work">
           <div className="stage">
             <TerminalPane />
             {archived ? <ArchivePane a={archived} />
+              : memoryView ? <MemoryPane key={JSON.stringify(memoryView)} target={memoryView} onClose={() => viewMemory(null)} />
+              : memoryTab ? <MemoryPane key={node!.id} target={{ nodeId: node!.id }} />
               // Refreshed whenever a turn ends.
               : transcript ? <TranscriptPane key={node!.id} id={node!.id} currentSessionId={node!.sessionId} refresh={finished(node!.status) ? node!.status.changedAt : 'running'} harness={node!.harness} />
               : diff ? <DiffPane node={node!} /> : node?.status.exited && <ExitedCard node={node} />}
-            {!node && !archived && (
+            {!node && !archived && !memoryView && (
               <div className="empty">
                 <p>No sessions yet.</p>
                 <p>Choose New session in the sidebar to get started.</p>

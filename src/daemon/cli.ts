@@ -89,6 +89,15 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl sessions clean                                   delete the ones daemon.sessionsKeepDays has expired now
   tl sessions path [id]                               print the session directory of a node's tree (default: this node's, or this directory's orchestrator's)
   tl log [id] [--since 2h] [--follow]                 print a tree's event log (for a non-root id, only that node's events)
+  tl memory on|off|inherit [--account NAME | --project PATH]  opt memory in or out (human only; no flag: globally)
+  tl memory status [--days N] [--node ID] [--repo PATH] [--account NAME]   memory's health, whether it is on here, and a node's injections
+  tl memory search QUERY [--kind K] [--all] [--repo PATH] [--account NAME]   --all includes retracted items
+  tl memory show mID | add KIND TEXT [--body B] [--supersedes mID] | forget mID REASON [--purge]
+  tl memory pin (mID | --text TEXT) [--unpin]         the human's standing instructions; outside a node, memory is the repo
+                                                      of --repo (default: this directory) in --account (default: by project)
+  tl memory garden [status] [--repo PATH] [--account NAME]   the gardener's spend, paused repositories and recent runs
+  tl memory garden run --repo PATH [--account NAME] [--wait] | show rN | undo (rN [--immune] | mID)
+                                                      start a gardener run now, show a run's actions, or undo a run or an item's hiding
   tl help`;
 
 const fail = (msg: string): never => { console.error(msg); process.exit(1); };
@@ -147,6 +156,9 @@ const { values: f, positionals: pos } = parseArgs({
     worktree: { type: 'boolean' }, 'no-app': { type: 'boolean' }, since: { type: 'string' }, follow: { type: 'boolean' }, 'keep-branch': { type: 'boolean' }, discard: { type: 'boolean' }, detached: { type: 'boolean' }, check: { type: 'boolean' }, close: { type: 'boolean' }, 'when-idle': { type: 'boolean' }, stat: { type: 'boolean' }, preset: { type: 'string' },
     after: { type: 'string', multiple: true }, 'after-success': { type: 'string', multiple: true }, now: { type: 'boolean' },
     fork: { type: 'string' }, root: { type: 'string' }, session: { type: 'string' }, base: { type: 'string' }, account: { type: 'string' },
+    repo: { type: 'string' }, project: { type: 'string' }, days: { type: 'string' }, node: { type: 'string' }, all: { type: 'boolean' },
+    body: { type: 'string' }, supersedes: { type: 'string' }, purge: { type: 'boolean' }, text: { type: 'string' }, unpin: { type: 'boolean' },
+    wait: { type: 'boolean' }, immune: { type: 'boolean' },
   },
 });
 /** `--after a,b --after c` as [a, b, c]; undefined when absent. */
@@ -484,6 +496,72 @@ switch (cmd) {
     const tick = () => { const r = readNewEvents(dir, cursor, cutoff); cursor = r.cursor; show(r.events); };
     tick();
     setInterval(tick, 1000);
+    break;
+  }
+  case 'memory': {
+    const [sub, ref, ...words] = pos;
+    // Inside a node, tl acts as the node: its memory is its own repository's and account's.
+    const inNode = !!process.env.TL_NODE_ID;
+    if (inNode && (f.repo || f.account)) fail('--repo and --account are for the human; inside a node, memory is the node\'s own');
+    const scope = inNode ? {} : { repo: resolve(f.repo ?? process.cwd()), account: f.account };
+    switch (sub) {
+      case 'on': case 'off': case 'inherit':
+        if (ref) fail(usage());
+        await call('memory_switch', { on: sub === 'inherit' ? null : sub === 'on', account: f.account, project: f.project && resolve(f.project) });
+        break;
+      case 'status': {
+        await call('memory_status', { days: f.days ? Number(f.days) : undefined, nodeId: f.node, ...scope });
+        break;
+      }
+      case 'search':
+        if (!ref) fail(usage());
+        await call('memory_search', { query: [ref, ...words].join(' '), kind: f.kind, includeRetracted: f.all, ...scope });
+        break;
+      case 'show':
+        if (!ref || words.length) fail(usage());
+        await call('memory_get', { id: ref, ...scope });
+        break;
+      case 'add':
+        if (!ref || !words.length) fail(usage());
+        await call('memory_add', { kind: ref, text: words.join(' '), body: f.body, supersedes: f.supersedes, ...scope });
+        break;
+      case 'forget':
+        if (!ref || !words.length) fail(usage());
+        await call('memory_forget', { id: ref, reason: words.join(' '), purge: f.purge, ...scope });
+        break;
+      case 'pin':
+        if (words.length) fail(usage());
+        await call('memory_pin', { id: ref, text: f.text, unpin: f.unpin, ...scope });
+        break;
+      case 'garden': {
+        const [target, ...extra] = words;
+        // status and run name a repository only when asked: status then covers every one, and run refuses without it.
+        const named = { repo: f.repo && resolve(f.repo), account: f.account };
+        if (extra.length) fail(usage());
+        if (!ref || ref === 'status') {
+          if (target) fail(usage());
+          await call('memory_garden', { action: 'status', ...named });
+        } else if (ref === 'run') {
+          if (target) fail(usage());
+          // Polled rather than held open: a run may take longer than an HTTP response may.
+          const { data } = await call('memory_garden', { action: 'run', ...named }, !f.wait);
+          if (!f.wait) break;
+          const run = `r${data.id}`;
+          console.log(`started ${run}; waiting for it to end`);
+          let shown;
+          while ((shown = await call('memory_garden', { action: 'show', run, ...named }, false)).data.state === 'running') await new Promise((ok) => setTimeout(ok, 2000));
+          console.log(shown.text);
+        } else if (ref === 'show') {
+          if (!target) fail(usage());
+          await call('memory_garden', { action: 'show', run: target, ...scope });
+        } else if (ref === 'undo') {
+          if (!target) fail(usage());
+          await call('memory_garden', { action: 'undo', ...(target.startsWith('m') ? { id: target } : { run: target }), immune: f.immune, ...scope });
+        } else fail(usage());
+        break;
+      }
+      default: fail(usage());
+    }
     break;
   }
   case 'doctor': {

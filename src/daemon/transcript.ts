@@ -3,11 +3,12 @@
 // Pi keeps JSONL entries in <treeSessionDir>/agents/<nodeId>/<sessionId>.jsonl,
 // with a tree of id/parentId entries whose active branch is the current conversation.
 // The Codex bridge stores a header plus normalized user/assistant entries in the Claude content format.
-import { copyFileSync, constants, existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { copyFileSync, constants, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Harness, SessionRecord, Transcript, TranscriptEntry } from '../shared/protocol.js';
+import { claudeProjectSlug } from './claude-memory.js';
 
 /** The most recent messages a transcript read returns. */
 export const MAX_ENTRIES = 2000;
@@ -64,9 +65,7 @@ type Entry = {
 
 /** Fallback for where Claude keeps a session's transcript: the real path of cwd with every non-alphanumeric character replaced by -. */
 export function transcriptFor(cwd: string, sessionId: string, claudeHome = join(homedir(), '.claude')): string {
-  let real = cwd;
-  try { real = realpathSync(cwd); } catch { /* keep the path as given */ }
-  return join(claudeHome, 'projects', real.replace(/[^a-zA-Z0-9]/g, '-'), `${sessionId}.jsonl`);
+  return join(claudeHome, 'projects', claudeProjectSlug(cwd), `${sessionId}.jsonl`);
 }
 
 /** JSON.parse each non-empty line, dropping malformed lines and non-objects. */

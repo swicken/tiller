@@ -5,6 +5,7 @@
 // history, transcript, followup and spawn with fork answer from the fake archive below; tl-d and the archived "auth refactor" have two sessions.
 // conversations and conversation answer from the same tree (see conversationFor); tl-test and tl-ui exchange peer messages.
 // claudeAccounts answers with three accounts (one logged out); a root claude spawn takes its chosen or project-mapped account, children inherit it.
+// memory, memoryItem, memoryAction, memoryGiven and claudeMemory answer from the fake memory files below, echoing rid.
 // spawn with isolation "worktree" fakes a worktree; a plain close of a worktree node whose title contains "dirty" is refused, as the daemon would.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -110,6 +111,9 @@ const archive = [
   { id: 'a-mig', rootId: 'dc', parentId: 'dc', title: 'db migration dry run', cwd: '/Users/scott/code/dotcms-core', ...OPUS, sessionId: 'deadbeef-0000-1111-2222-333344445555', branch: 'tl/a-mig', branchFate: 'merged', base: 'main',
     prompt: 'Dry-run the 24.10 schema migration against the staging dump.', brief: 'Dry run passed on the staging dump in 4 minutes; two slow indexes noted. Succeeded.',
     outcome: { outcome: 'succeeded', summary: 'Dry run passed.', at: now - 5 * 3600_000 }, spentUsd: 1.9, createdAt: now - 7 * 3600_000, closedAt: now - 5 * 3600_000 },
+  // Its checkout has since moved away: its Memory page has no checkout and no repository.
+  { id: 'a-old', rootId: 'sc', parentId: 'sc', title: 'old site fix', cwd: '/Users/scott/old-site', ...SONNET, sessionId: 'feedface-0000-1111-2222-333344445555',
+    prompt: 'Fix the Netlify image limit.', outcome: { outcome: 'succeeded', summary: 'Resized the images.', at: now - 40 * 86400_000 }, createdAt: now - 41 * 86400_000, closedAt: now - 40 * 86400_000 },
 ];
 
 const LONG = Array.from({ length: 14 }, (_, i) => `${i + 1}. ${['Read the handshake code', 'Wrote the failing test', 'Switched to timingSafeEqual', 'Ran the suite'][i % 4]}: details of step ${i + 1}, which go on long enough to wrap at the pane's width.`).join('\n');
@@ -188,6 +192,223 @@ function conversationsFor(id) {
     .map((c) => row(c.id, undefined, 'child', c.id)).sort((x, y) => (y.lastAt ?? 0) - (x.lastAt ?? 0));
   const peers = PEERS.filter((p) => p.includes(id)).map((p) => p.find((x) => x !== id)).map((other) => row(id, other, 'peer', other));
   return { items: [row(id, undefined, 'parent', n.parentId && known(n.parentId) ? n.parentId : 'human'), ...children, ...peers] };
+}
+
+// ---- Memory panel. Two account files and a broken one, keyed as the daemon's accountKey does: personal has no Claude home of
+// its own, so it shares _default with no account; work has its own file; client's is broken. Their repositories hold items in
+// every kind and validity state; tiller and dotcms-core have checkouts with memory on, scratch one with it off, and old-site
+// none known (its recorded path moved away), so its page says on is unknown. Actions change the items in memory.
+// TL_MOCK_MEMORY_ITEMS=N adds N generated items to _default's tiller repository, for timing the panel (ui/README.md).
+const TILLER = '/Users/scott/workspace/tiller', DOTCMS = '/Users/scott/code/dotcms-core', SCRATCH = '/tmp/scratch';
+const CHECKOUTS = [
+  { path: TILLER, key: 'git:github.com/swicken/tiller', on: `memory.projects ${TILLER}` },
+  { path: DOTCMS, key: 'git:github.com/dotcms/core', on: 'claude.accounts.work.memory' },
+  { path: SCRATCH, key: 'path:/tmp/scratch' },
+];
+const checkoutAt = (dir) => CHECKOUTS.find((c) => dir === c.path || dir.startsWith(`${c.path}/`)) ?? { path: dir, key: `path:${dir}` };
+const MISSING = new Set(['/Users/scott/old-site']); // directories that no longer exist
+const accountKey = (account) => (account !== undefined && accounts.find((a) => a.name === account)?.configDir ? account : '_default');
+const memFiles = {
+  _default: { state: 'ok', quarantined: [], items: [], seq: 0, repos: [
+    { key: 'git:github.com/swicken/tiller', path: TILLER }, { key: 'path:/tmp/scratch', path: SCRATCH }, { key: 'git:github.com/scott/old-site', path: '/Users/scott/old-site' }] },
+  work: { state: 'ok', quarantined: [], items: [], seq: 0, repos: [{ key: 'git:github.com/dotcms/core', path: DOTCMS }, { key: 'git:github.com/swicken/tiller', path: TILLER }] },
+  client: { state: 'broken: file is not a database', quarantined: ['client.db.broken-1729418400000'], items: [], seq: 0, repos: [] },
+};
+// textPin marks a text pin (the daemon's PIN: dedupe), as the view does; repo stays out of replies.
+const memItem = (file, repo, kind, text, { ago, ...x } = {}) => {
+  const f = memFiles[file], at = now - (ago ?? (40 - f.seq) * 17 * MIN);
+  const agent = (x.author ?? 'agent') === 'agent' ? { nodeId: 'tl-d', rootId: 'tl', harness: 'claude', model: 'claude-opus-5-5' } : {};
+  const it = { id: ++f.seq, repo, kind, text, body: '', author: 'agent', seen: 1, pinned: false, cites: 0, gets: 0, createdAt: at - 3600_000, updatedAt: at, eligible: true, ...agent, ...x };
+  f.items.push(it);
+  return it;
+};
+{
+  const T = 'git:github.com/swicken/tiller', p = '_default';
+  memItem(p, T, 'note', 'Run npm run typecheck and the UI typecheck before reporting.', { author: 'human', pinned: true, textPin: true, seen: 0 });
+  memItem(p, T, 'ledger', 'daemon (tl-d) succeeded: the daemon serves ui/dist and reports /health', { author: 'daemon', nodeId: 'tl-d', body: 'Brief: Serve the built UI from the daemon.\nOutcome: succeeded. Changed src/daemon/server.ts, src/daemon/server.test.ts.' });
+  memItem(p, T, 'procedure', 'npm test -- ui', { seen: 6, cites: 2, gets: 3, body: 'Verified by the gate on attempt 1 in tl-ui, tl-css and a-css.' });
+  memItem(p, T, 'pitfall', 'Vitest runs at most two files at once; a test that spawns git can time out under load.', { nodeId: 'a-css', model: 'claude-haiku-4-5', body: 'Fixed by a-css: the gate passed on attempt 2.\nFiles it reported changing: vitest.config.ts' });
+  memItem(p, T, 'open_question', 'Rebase on main or merge by hand?', { nodeId: 'a-auth' });
+  memItem(p, T, 'note', 'WKWebView loses the WebGL context on sleep; the DOM renderer is the safe choice.', { nodeId: 'a-probe', model: 'claude-sonnet-5-5', seen: 2 });
+  memItem(p, T, 'pitfall', 'The Vite proxy drops /ws after a hot reload.', { nodeId: 'tl-ui', invalid: { at: now - 50 * MIN, kind: 'agent', by: 'tl-ui', reason: 'no longer true after the Vite upgrade' } });
+  memItem(p, T, 'note', 'Use the yarn workspace scripts.', { nodeId: 'tl-test', invalid: { at: now - 70 * MIN, kind: 'human', by: 'human', reason: 'wrong or stale' } });
+  const old = memItem(p, T, 'procedure', 'npm test', { seen: 3, invalid: { at: now - 80 * MIN, kind: 'superseded', by: 'human', reason: 'superseded by m10' } });
+  memItem(p, T, 'procedure', 'npm test -- --run', { supersedes: old.id, seen: 2 });
+  memItem(p, T, 'ledger', '', { author: 'daemon', tombstone: 'evicted', invalid: { at: now - 5 * 86400_000, kind: 'evicted', by: 'daemon', reason: 'over memory.maxMB' } });
+  memItem(p, T, 'note', '', { tombstone: 'purged', invalid: { at: now - 2 * 86400_000, kind: 'human', by: 'human', reason: 'held a token' } });
+  memItem(p, T, 'pitfall', 'server.ts merge conflicts come from the auth refactor branch.', { nodeId: 'a-auth', eligible: false, body: 'Recorded by a node whose latest outcome failed: search only until it succeeds.' });
+  memItem(p, T, 'note', 'The DOM renderer is safest in WKWebView.', { nodeId: 'tl-spike', invalid: { at: now - 30 * MIN, kind: 'gardener', by: 'gardener', reason: 'duplicate of m6' } });
+  memItem(p, T, 'note', 'Hostile: <img src=x onerror="alert(1)"> <script>alert(1)</script>', { nodeId: 'tl-test', body: '<img src=x onerror="alert(2)">\n<b>not bold</b> [x](javascript:alert(3))' });
+  memItem(p, T, 'pitfall', 'Never commit node_modules symlinks.', { pinned: true, invalid: { at: now - 20 * MIN, kind: 'human', by: 'human', reason: 'wrong or stale' } });
+  memItem(p, T, 'note', 'Prefer small PRs.', { author: 'human', textPin: true, invalid: { at: now - 90 * MIN, kind: 'human', by: 'human', reason: 'unpinned' } });
+  memItem(p, T, 'note', 'Release notes go in docs/releases.md.', { author: 'human', pinned: true, seen: 0 }); // tl memory add, then pinned: no text pin
+  memItem(p, 'path:/tmp/scratch', 'ledger', 'scratch (sc) succeeded: wrote out.csv with 120 rows', { author: 'daemon', nodeId: 'sc' });
+  memItem(p, 'path:/tmp/scratch', 'procedure', 'python3 make_csv.py > out.csv', { nodeId: 'sc', rootId: 'sc', model: 'claude-haiku-4-5' });
+  memItem(p, 'git:github.com/scott/old-site', 'note', 'The site builds with hugo 0.92; newer versions break the theme.', { nodeId: 'n-0ld1', rootId: 'n-0ld1', model: 'claude-sonnet-5-5', ago: 40 * 86400_000 });
+  memItem(p, 'git:github.com/scott/old-site', 'pitfall', 'Images over 2 MB fail the Netlify deploy.', { nodeId: 'n-0ld1', rootId: 'n-0ld1', ago: 41 * 86400_000 });
+  const D = 'git:github.com/dotcms/core', w = 'work';
+  memItem(w, D, 'note', 'Never run the migration against production from a node.', { author: 'human', pinned: true, textPin: true, seen: 0 });
+  memItem(w, D, 'procedure', './mvnw -pl dotCMS test', { nodeId: 'dc', rootId: 'dc', seen: 4 });
+  memItem(w, D, 'ledger', 'db migration dry run (a-mig) succeeded: dry run passed on the staging dump', { author: 'daemon', nodeId: 'a-mig' });
+  memItem(w, D, 'pitfall', 'The overloaded API error ends the turn; resume rather than restart.', { nodeId: 'dc-mig', rootId: 'dc', eligible: false });
+  memItem(w, 'git:github.com/swicken/tiller', 'note', 'Work account: use the work GitHub remote.', { nodeId: 'dc', rootId: 'dc' });
+  const words = ['daemon', 'gate', 'worktree', 'merge', 'socket', 'digest', 'sidebar', 'release', 'session', 'transcript', 'harness', 'tests', 'config', 'account'];
+  const kinds = ['ledger', 'open_question', 'procedure', 'pitfall', 'note'];
+  for (let i = 0; i < Number(process.env.TL_MOCK_MEMORY_ITEMS ?? 0); i++) {
+    const text = Array.from({ length: 6 + (i % 40) }, (_, j) => words[(i * 7 + j * 3) % words.length]).join(' ');
+    memItem(p, T, kinds[i % 5], `Generated ${i}: ${text}`.slice(0, 300), { ago: (i + 1) * 61_000, seen: i % 9, pinned: i % 200 === 0, eligible: i % 13 !== 0,
+      ...(i % 10 === 9 && { invalid: { at: now - i * 1000, kind: 'agent', by: 'tl-ui', reason: 'stale' } }) });
+  }
+}
+const digestOf = (ids) => ['# Memory', '## Pinned', '- m1 Run npm run typecheck and the UI typecheck before reporting.', '## Procedures', '- m3 npm test -- ui (seen 6)',
+  '## Pitfalls', '- m4 Vitest runs at most two files at once.', '## Notes from agents', ...ids.filter((id) => id === 6 || id === 15).map((id) => id === 6 ? '- m6 WKWebView loses the WebGL context on sleep.' : '- m15 Hostile: <img src=x onerror="alert(1)">')].join('\n');
+// Digest decisions per node, newest first: a resume row (tl-ui), an A/B off-arm row (tl-test) and a closed node (a-auth).
+const injections = {
+  tl: [{ sessionId: 'tl-session', arm: 'on', cause: 'config', itemIds: [1, 3, 4, 6], text: digestOf([1, 3, 4, 6]), ts: now - 3 * 3600_000 }],
+  'tl-ui': [
+    { sessionId: 'tl-ui-session', arm: 'on', cause: 'resume', itemIds: [], text: '', ts: now - 20 * MIN },
+    { sessionId: 'tl-ui-session', arm: 'on', cause: 'config', itemIds: [1, 3, 4, 6, 15], text: digestOf([1, 3, 4, 6, 15]), ts: now - 2 * 3600_000 }],
+  'tl-test': [{ sessionId: 'tl-test-session', arm: 'off', cause: 'ab', itemIds: [1, 3, 4], text: digestOf([1, 3, 4]), ts: now - 2 * 3600_000 }],
+  'a-auth': [{ sessionId: '9f8e7d6c-1111-2222-3333-444455556666', arm: 'on', cause: 'config', itemIds: [1, 3, 4, 5], text: digestOf([1, 3, 4, 5]), ts: now - 26 * 3600_000 }],
+  dc: [{ sessionId: 'dc-session', arm: 'on', cause: 'config', itemIds: [1, 2], text: '# Memory\n## Pinned\n- m1 Never run the migration against production from a node.\n## Procedures\n- m2 ./mvnw -pl dotCMS test', ts: now - 3 * 3600_000 }],
+};
+
+/**
+ * The panel's target resolved as the daemon does. A chosen dir wins over the node; the node's own account is used as it is
+ * (none: the _default file); a node whose checkout is gone has no repository unless one is chosen, so on is null.
+ */
+function memoryScope(t) {
+  const node = t.nodeId && (nodes.get(t.nodeId) ?? archive.find((a) => a.id === t.nodeId));
+  if (t.nodeId && !node) return { error: `no such node: ${t.nodeId}` };
+  if (t.dir && (!t.dir.startsWith('/') || MISSING.has(t.dir))) return { error: `dir must be the absolute path of a directory: ${t.dir}` };
+  const nodeDir = node && (node.worktree?.repo ?? node.cwd);
+  const nodeAt = nodeDir && !MISSING.has(nodeDir) ? checkoutAt(nodeDir) : undefined, dirAt = t.dir && checkoutAt(t.dir);
+  const project = dirAt || nodeAt;
+  const account = t.account === null ? undefined : t.account ?? (node ? node.account : project && accountFor(project.path));
+  if (account && !accounts.some((a) => a.name === account)) return { error: `Claude account "${account}" is not configured (claude.accounts)` };
+  const file = accountKey(account), f = memFiles[file];
+  const repo = t.repo ?? (project ? project.key : node ? undefined : f?.repos[0]?.key);
+  // The checkout that judges the opt-in: the chosen dir, the node's, a live node's, then the recorded path if it still exists.
+  const liveAt = [...nodes.values()].map((n) => checkoutAt(n.worktree?.repo ?? n.cwd)).find((c) => c.key === repo);
+  const recorded = CHECKOUTS.find((c) => c.key === repo && f?.repos.some((r) => r.key === repo && r.path === c.path));
+  const checkout = !repo ? undefined : dirAt?.key === repo ? { ...dirAt, from: 'chosen' } : nodeAt?.key === repo ? { ...nodeAt, from: 'node' }
+    : liveAt ? { ...liveAt, from: 'live node' } : recorded ? { ...recorded, from: 'recorded path' } : undefined;
+  const optIn = checkout && CHECKOUTS.find((c) => c.path === checkout.path)?.on;
+  // The purge command's scope: a named account opens its own file; with none, the CLI picks the checkout's account.
+  const cli = !checkout ? undefined : account !== undefined ? { repo: checkout.path, account }
+    : accountKey(accountFor(checkout.path)) === '_default' ? { repo: checkout.path } : undefined;
+  return { account, file, f, repo, checkout, cli, on: checkout ? !!optIn : null,
+    source: !checkout ? 'no checkout of this repository is known; choose its directory' : optIn ?? 'memory.enabled (global): off (default)',
+    target: { account: account ?? null, ...(repo && { repo }), ...(t.nodeId && { nodeId: t.nodeId }), ...(t.dir && { dir: t.dir }) } };
+}
+const memView = ({ repo: _repo, ...it }, full) => {
+  if (!full) { delete it.body; delete it.cites; delete it.gets; delete it.rootId; }
+  return it;
+};
+const STOPWORDS = new Set(['the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'is', 'src', 'for', 'on']);
+function memoryPage(m) {
+  const s = memoryScope(m.target);
+  if (s.error) return s;
+  const ok = s.f?.state === 'ok';
+  const items = ok ? s.f.items.filter((i) => i.repo === s.repo) : [];
+  const live = items.filter((i) => !i.invalid);
+  const counts = { ledger: 0, open_question: 0, procedure: 0, pitfall: 0, note: 0, pinned: live.filter((i) => i.pinned).length, retracted: items.length - live.length };
+  for (const i of live) counts[i.kind]++;
+  let rows = (m.retracted ? items : live).filter((i) => !m.kind || (m.kind === 'pinned' ? i.pinned : i.kind === m.kind));
+  let next;
+  if (m.query) { // OR over terms, stopwords dropped, best match first (here: newest)
+    const terms = m.query.toLowerCase().split(/\W+/).filter((w) => w && !STOPWORDS.has(w));
+    rows = terms.length ? rows.filter((i) => terms.some((w) => `${i.text} ${i.body}`.toLowerCase().includes(w))).slice(0, 50) : [];
+  } else {
+    rows = rows.sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id)
+      .filter((i) => !m.before || i.updatedAt < m.before.updatedAt || (i.updatedAt === m.before.updatedAt && i.id < m.before.id));
+    if (rows.length > 50) next = { updatedAt: rows[49].updatedAt, id: rows[49].id };
+    rows = rows.slice(0, 50);
+  }
+  const { cli } = s;
+  return {
+    target: s.target, file: s.file, state: s.f?.state ?? 'missing', quarantined: s.f?.quarantined ?? [],
+    files: Object.entries(memFiles).map(([file, f]) => ({ account: file === '_default' ? null : file, file, state: f.state })),
+    repos: ok ? s.f.repos.map((r) => ({ ...r, items: s.f.items.filter((i) => i.repo === r.key && !i.invalid).length })) : [],
+    ...(s.checkout && { checkout: { path: s.checkout.path, from: s.checkout.from } }), on: s.on, source: s.source, ...(cli && { cli }),
+    counts, items: rows.map((i) => memView(i)), ...(next && { next }),
+  };
+}
+function memoryItem(m) {
+  const s = memoryScope(m.target);
+  if (s.error) return s;
+  const it = s.f?.items.find((i) => i.id === m.itemId && i.repo === s.repo);
+  if (!it) return { error: `no item m${m.itemId} in this repository` };
+  const givenTo = Object.entries(injections).flatMap(([nodeId, xs]) => xs.filter((x) => x.cause !== 'resume' && x.itemIds.includes(it.id)).map((x) => ({ nodeId, sessionId: x.sessionId, arm: x.arm, ts: x.ts })));
+  const by = s.f.items.find((i) => i.supersedes === it.id);
+  return { item: memView(it, true), ...(by && { supersededBy: by.id }), givenTo: givenTo.sort((a, b) => b.ts - a.ts).slice(0, 20) };
+}
+function memoryAction(m) {
+  const s = memoryScope(m.target), a = m.action;
+  if (s.error) return s;
+  if (s.on !== true) return { error: `memory is not on for this checkout (${s.source})` };
+  if (s.f?.state !== 'ok') return { error: `the account file is ${s.f?.state ?? 'missing'}` };
+  const t = Date.now(), items = s.f.items.filter((i) => i.repo === s.repo);
+  const pinOf = (text) => items.find((i) => i.textPin && i.text.toLowerCase() === text.trim().toLowerCase());
+  const pinNew = (text) => {
+    const r = pinOf(text);
+    return r ? Object.assign(r, { text: text.trim(), body: '', pinned: true, invalid: undefined, updatedAt: t }) : memItem(s.file, s.repo, 'note', text.trim(), { author: 'human', pinned: true, textPin: true, seen: 0, createdAt: t, updatedAt: t });
+  };
+  const pinnedAs = (text) => { const r = pinOf(text); return r?.pinned && !r.invalid ? { error: `already pinned as m${r.id}` } : undefined; };
+  if (a.kind === 'pinText') return pinnedAs(a.text) ?? { item: memView(pinNew(a.text), true) };
+  const it = items.find((i) => i.id === a.itemId);
+  if (!it) return { error: `no item m${a.itemId} in this repository` };
+  const retract = (kind, reason) => Object.assign(it, { invalid: { at: t, kind, by: 'human', reason }, updatedAt: t });
+  switch (a.kind) {
+    case 'pin':
+      if (it.tombstone) return { error: `m${it.id} is a tombstone: its text is gone` };
+      Object.assign(it, { pinned: true, invalid: undefined, updatedAt: t });
+      break;
+    case 'unpin':
+      it.pinned = false;
+      if (it.textPin) retract('human', 'unpinned');
+      break;
+    case 'forget':
+      if (it.invalid) return { error: `m${it.id} is already retracted` };
+      retract('human', a.reason);
+      break;
+    case 'restore':
+      if (!it.invalid) return { error: `m${it.id} is not retracted` };
+      if (it.tombstone) return { error: `m${it.id} is a tombstone: its text is gone` };
+      if (it.textPin) return { error: `m${it.id} is a text pin: pin it again instead` };
+      if (!['agent', 'human', 'superseded'].includes(it.invalid.kind)) return { error: `cannot restore a ${it.invalid.kind} item here` };
+      Object.assign(it, { invalid: undefined, updatedAt: t });
+      break;
+    case 'editPin': {
+      if (!it.textPin || !it.pinned || it.invalid) return { error: 'only your own text pins can be edited; pin new text instead' };
+      if (it.text.toLowerCase() === a.text.trim().toLowerCase()) return { error: 'unchanged' };
+      const refused = pinnedAs(a.text);
+      if (refused) return refused;
+      const next = pinNew(a.text);
+      next.supersedes = it.id;
+      it.pinned = false;
+      retract('superseded', `edited as m${next.id}`);
+      return { item: memView(next, true) };
+    }
+  }
+  return { item: memView(it, true) };
+}
+const HOSTILE = '# Hostile notes\n<script>alert(1)</script>\n<img src=x onerror="alert(2)">\n\n[click me](javascript:alert(3)) and [a local file](file:///etc/passwd)\n\n![tracker](https://example.com/pixel.png)\n';
+function claudeMemory(m) {
+  const s = memoryScope(m.target);
+  if (s.error) return s;
+  if (!s.checkout) return { error: "No checkout of this repository is known: choose the repository's directory." };
+  const home = accounts.find((a) => a.name === s.account)?.configDir ?? '/Users/scott/.claude';
+  const base = { dir: `${home}/projects/${s.checkout.path.replace(/[^a-zA-Z0-9]/g, '-')}/memory`, ...(s.account && { account: s.account }), files: [], omitted: [] };
+  const file = (name, text, x = {}) => ({ name, bytes: text.length, mtime: now - 3600_000, text, ...x });
+  if (s.checkout.path === DOTCMS) return { ...base, note: 'The memory directory is a symlink; it is not followed.' };
+  if (s.checkout.path !== TILLER) return base;
+  return { ...base, omitted: ['zz-archive-1.md', 'zz-archive-2.md'], files: [
+    file('MEMORY.md', "- [No Mythos access](no-mythos-access.md) — defaults to Opus\n- [Stale update lock](stale-update-lock-bug.md) — a dead helper's lock file\n"),
+    file('no-mythos-access.md', '---\nname: no-mythos-access\ndescription: Claude orchestrator defaults to Opus\nmetadata:\n  type: user\n---\n\nThe user has **no** Mythos access. See [the docs](https://docs.example.com).\n'),
+    file('hostile.md', HOSTILE),
+    file('long-log.md', `# A long log\n\n${'- an entry that repeats\n'.repeat(40)}`, { bytes: 70_000, truncated: true }),
+  ] };
 }
 
 const clients = new Set();
@@ -299,6 +520,11 @@ wss.on('connection', (ws) => {
         else if (n?.status.git) touch(n, { git: { ...n.status.git, ahead: 0, mergedAt: Date.now() } }); break;
       case 'mute': if (n) { n.muted = m.muted || undefined; broadcast({ t: 'node', node: n }); } break;
       case 'dnd': dnd = m.on ? { on: true, ...(m.minutes && { until: Date.now() + m.minutes * MIN }) } : { on: false }; broadcast({ t: 'dnd', ...dnd }); break;
+      case 'memory': send({ t: 'memory', rid: m.rid, ...memoryPage(m) }); break;
+      case 'memoryItem': send({ t: 'memoryItem', rid: m.rid, ...memoryItem(m) }); break;
+      case 'memoryAction': send({ t: 'memoryAction', rid: m.rid, ...memoryAction(m) }); break;
+      case 'memoryGiven': send({ t: 'memoryGiven', rid: m.rid, ...(nodes.has(m.nodeId) || archive.some((a) => a.id === m.nodeId) ? { injections: injections[m.nodeId] ?? [] } : { error: `no live or closed node ${m.nodeId}` }) }); break;
+      case 'claudeMemory': send({ t: 'claudeMemory', rid: m.rid, ...claudeMemory(m) }); break;
       case 'send': console.log(`send to ${m.id}:\n${m.text}`); send({ t: 'sent', id: m.id, result: { outcome: 'queued', retryable: false, messageId: `m-${Date.now()}` } }); break;
     }
   });

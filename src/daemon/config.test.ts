@@ -36,6 +36,7 @@ describe('loadConfig', () => {
       daemon: { resumeOnStart: true, resumeMaxAgeDays: 7, sessionsKeepDays: 14, digestAfterMinutes: 30, maxLiveNodes: 20, maxWorking: 4 },
       limits: { maxDepth: 3, maxChildren: 2, stallMinutes: 2, maxMessagesPer10Min: 20 },
       notifications: { kinds: { needsYou: 'sound', errored: 'silent', done: 'silent', exited: 'silent' }, treeDoneSummary: true, quietHours: '22:00-07:00' },
+      memory: { enabled: false, projects: [], digest: 'on', maxMB: 200, gardener: { enabled: false, model: 'claude-haiku-5-5', minNewItems: 25, maxUsdPerRun: 0.25, maxUsdPer30Days: 3 } },
     });
     const sources = Object.fromEntries(Object.entries(configEntries(cwd, homeDir)).map(([k, e]) => [k, e.source]));
     expect(sources).toEqual({
@@ -49,6 +50,9 @@ describe('loadConfig', () => {
       'notifications.kinds.needsYou': 'default', 'notifications.kinds.done': proj, 'notifications.kinds.errored': 'default', 'notifications.kinds.exited': home,
       'notifications.treeDoneSummary': 'default', 'notifications.quietHours': home,
       'limits.maxDepth': 'default', 'limits.maxChildren': proj, 'limits.stallMinutes': home, 'limits.maxMessagesPer10Min': 'default',
+      'memory.enabled': 'default', 'memory.projects': 'default', 'memory.digest': 'default', 'memory.maxMB': 'default',
+      'memory.gardener.enabled': 'default', 'memory.gardener.model': 'default', 'memory.gardener.minNewItems': 'default',
+      'memory.gardener.maxUsdPerRun': 'default', 'memory.gardener.maxUsdPer30Days': 'default',
     });
     expect(configEntries(cwd, homeDir)['gate.timeoutMinutes']).toEqual({ value: 10, source: 'default' });
   });
@@ -143,6 +147,9 @@ describe('loadConfig', () => {
       [JSON.stringify({ worktrees: { taskBranch: 'tl/task' }, limits: { maxChildren: 2 } }), 'worktrees.taskBranch: must contain {slug}'],
       [JSON.stringify({ notifications: { quietHours: '22-7' }, limits: { maxChildren: 2 } }), 'notifications.quietHours'],
       [JSON.stringify({ daemon: { maxWorking: 1 }, limits: { maxChildren: 2 } }), 'daemon: read from the home file only'],
+      [JSON.stringify({ memory: { maxMB: 8 }, limits: { maxChildren: 2 } }), 'memory.maxMB'],
+      [JSON.stringify({ memory: { digest: 'sometimes' }, limits: { maxChildren: 2 } }), 'memory.digest'],
+      [JSON.stringify({ memory: { projects: [{ path: 'rel', enabled: true }] }, limits: { maxChildren: 2 } }), 'memory.projects'],
     ];
     for (const [bad, named] of cases) {
       const { cwd, homeDir } = setup(bad, JSON.stringify({ roles: { worker: { effort: 'low' } }, approvals: { close: 'always' }, daemon: { maxWorking: 3 } }));
@@ -190,6 +197,55 @@ describe('loadConfig', () => {
     err.mockRestore();
   });
 
+  it('reads the memory opt-in, projects and size from the home file only; a project may turn memory off', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cwd, homeDir } = setup(
+      JSON.stringify({ memory: { enabled: true, projects: [{ path: '/x', enabled: true }], maxMB: 50 } }),
+      JSON.stringify({ memory: { maxMB: 300 } }),
+    );
+    expect(loadConfig(cwd, homeDir).memory).toEqual({ enabled: false, projects: [], digest: 'on', maxMB: 300, gardener: { enabled: false, model: 'claude-haiku-5-5', minNewItems: 25, maxUsdPerRun: 0.25, maxUsdPer30Days: 3 } });
+    expect(err.mock.calls.map((c) => c[0])).toEqual([`tiller: ignoring in ${join(cwd, '.tiller', 'config.json')}: memory.projects: read from the home file only; `
+      + 'memory.maxMB: read from the home file only; memory.enabled: a project file may only set false; opt in from the home file']);
+    writeFileSync(join(cwd, '.tiller', 'config.json'), JSON.stringify({ memory: { enabled: false } }));
+    writeFileSync(join(homeDir, 'config.json'), JSON.stringify({ memory: { enabled: true } }));
+    expect(configEntries(cwd, homeDir)['memory.enabled']).toEqual({ value: false, source: join(cwd, '.tiller', 'config.json') });
+    err.mockRestore();
+  });
+
+  it('reads the gardener from the home file only, within its bounds', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cwd, homeDir } = setup(
+      JSON.stringify({ memory: { gardener: { enabled: false, maxUsdPerRun: 0.01 } } }),
+      JSON.stringify({ memory: { gardener: { enabled: true, model: 'claude-sonnet-5-5', minNewItems: 4, maxUsdPerRun: 6, maxUsdPer30Days: 0 } } }),
+    );
+    expect(loadConfig(cwd, homeDir).memory.gardener).toEqual({ enabled: true, model: 'claude-sonnet-5-5', minNewItems: 25, maxUsdPerRun: 0.25, maxUsdPer30Days: 0 });
+    expect(err.mock.calls.map((c) => c[0])).toEqual([
+      `tiller: ignoring in ${join(cwd, '.tiller', 'config.json')}: memory.gardener: read from the home file only`,
+      expect.stringMatching(/memory\.gardener\.minNewItems: .*; memory\.gardener\.maxUsdPerRun: /),
+    ]);
+    err.mockRestore();
+  });
+
+  it('lets a project file make memory.digest stricter, never looser', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // [project digest, home digest, expected value, expected source]
+    const cases: [string, string | undefined, string, 'project' | 'home'][] = [
+      ['off', undefined, 'off', 'project'], ['ab', 'on', 'ab', 'project'], ['off', 'ab', 'off', 'project'],
+      ['on', 'ab', 'ab', 'home'], ['ab', 'off', 'off', 'home'],
+    ];
+    for (const [project, home, value, from] of cases) {
+      const { cwd, homeDir } = setup(JSON.stringify({ memory: { digest: project } }), home && JSON.stringify({ memory: { digest: home } }));
+      err.mockClear();
+      const homeFile = join(homeDir, 'config.json'), source = from === 'project' ? join(cwd, '.tiller', 'config.json') : homeFile;
+      expect(configEntries(cwd, homeDir)['memory.digest'], JSON.stringify([project, home])).toEqual({ value, source });
+      if (from === 'project') expect(err).not.toHaveBeenCalled();
+      else expect(err.mock.calls.map((c) => c[0])).toEqual([`tiller: ignoring in ${join(cwd, '.tiller', 'config.json')}: memory.digest: "${project}" injects memory more often than allowed, `
+        + `so "${value}" (from ${homeFile}) applies instead. A project file may only make memory.digest stricter, because agents can edit it; to allow "${project}", set memory.digest to "${project}" in ${homeFile}`]);
+      rmSync(dir, { recursive: true, force: true });
+    }
+    err.mockRestore();
+  });
+
   it('skips a file that is not JSON with one log line', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const { cwd, homeDir } = setup('{not json', JSON.stringify({ approvals: { close: 'always' } }));
@@ -218,6 +274,11 @@ describe('claude.accounts', () => {
   it('reads the list from the home file', () => {
     const { homeDir } = setup([{ name: 'personal' }, work]);
     expect(loadConfig(null, homeDir).claude.accounts).toEqual([{ name: 'personal' }, work]);
+  });
+
+  it('accepts an account memory opt-in or opt-out, and a gardener ceiling', () => {
+    const { homeDir } = setup([{ name: 'personal', memory: true }, { ...work, memory: false, gardener: false }]);
+    expect(loadConfig(null, homeDir).claude.accounts).toEqual([{ name: 'personal', memory: true }, { ...work, memory: false, gardener: false }]);
   });
 
   it('drops accounts from a project file with a warning', () => {

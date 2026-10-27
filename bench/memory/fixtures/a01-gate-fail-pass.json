@@ -1,0 +1,41 @@
+{
+  "name": "A1 gate fail→pass (and A8 no word overlap)",
+  "claim": 1,
+  "note": "Workers get pitfalls only through FTS, so the lesson is a should for both briefs: worker-overlap shares only code stopwords with it since D-2, and A8 (a8-no-overlap) shares nothing and is reported only (decision D-1).",
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-3d", "repo": "lib", "node": "n-a0000001", "root": "n-r0000001",
+      "event": { "type": "spawn", "prompt": "Add formatCents to src/format.js" } },
+    { "at": "-3d+5m", "repo": "lib", "node": "n-a0000001",
+      "event": { "type": "gate", "ok": false, "command": "npm run gate",
+        "tail": "> gate\n> node scripts/check-changelog.mjs\n\nchangelog check: ## Unreleased has no entry for src/format.js (scripts/check-changelog.mjs)\nnpm run gate: exited with 1" } },
+    { "at": "-3d+9m", "repo": "lib", "node": "n-a0000001",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed",
+        "summary": "Added formatCents with tests. The gate also needs a CHANGELOG.md Unreleased entry per changed src file.",
+        "verified": "`node --test test/` 6 passed; `npm run gate` passed",
+        "changedFiles": ["src/format.js", "test/format.test.js", "CHANGELOG.md"] } },
+    { "at": "-3d+10m", "repo": "lib", "node": "n-a0000001",
+      "event": { "type": "close", "archived": { "title": "formatCents", "branchFate": "merged", "base": "tl/x" } } }
+  ],
+  "expectItems": [
+    { "label": "pit-changelog", "kind": "pitfall", "author": "agent", "seen": 1,
+      "text": "gate `npm run gate` failed: changelog check: ## Unreleased has no entry for src/format.js (scripts/check-changelog.mjs)",
+      "bodyIncludes": ["npm run gate: exited with 1", "Fixed by this node: the gate passed.", "Files it reported changing: src/format.js, test/format.test.js, CHANGELOG.md"] },
+    { "label": "proc-gate", "kind": "procedure", "author": "agent", "text": "npm run gate" },
+    { "label": "proc-node-test", "kind": "procedure", "author": "agent", "text": "node --test test/" },
+    { "label": "ledger-format", "kind": "ledger", "author": "agent",
+      "text": "formatCents: succeeded (gate passed): Added formatCents with tests. (merged to task branch tl/x)",
+      "bodyIncludes": ["Add formatCents to src/format.js", "Files: src/format.js, test/format.test.js, CHANGELOG.md", "Verified: `node --test test/`"] }
+  ],
+  "exactCounts": { "pitfall": 1, "procedure": 2, "ledger": 1, "open_question": 0, "note": 0 },
+  "queries": [
+    { "id": "worker-overlap", "repo": "lib", "role": "worker", "brief": "Add parseCents to src/money.js with tests",
+      "should": ["@pit-changelog", "@proc-gate"] },
+    { "id": "a8-no-overlap", "repo": "lib", "role": "worker", "brief": "Rename the Formatter class",
+      "should": ["@pit-changelog"], "report": true },
+    { "id": "orchestrator", "repo": "lib", "role": "orchestrator", "brief": "Plan the money formatting work",
+      "must": ["@ledger-format", "@pit-changelog"], "should": ["@proc-gate", "@proc-node-test"],
+      "sectionLines": { "recent": [1, 1], "verification": [2, 2], "pitfalls": [1, 1] } }
+  ]
+}

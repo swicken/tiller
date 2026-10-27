@@ -1,0 +1,5 @@
+{
+  "note": "R2a scores of the product's memory search: a ratchet, raise when search improves, never lower to pass.",
+  "recallAtK": 0.912,
+  "mrr": 0.978
+}

@@ -10,6 +10,7 @@ Use the behavior references for current contracts and configuration:
 | Roles, task profiles, presets, outcomes and gates | [agent-roles.md](agent-roles.md) |
 | Worktree creation, merging and closing | [worktrees.md](worktrees.md) |
 | Session storage, event log, restart and resume | [sessions.md](sessions.md) |
+| Memory: opt-in, what is recorded, trust, limits | [memory.md](memory.md) |
 | Browser, macOS app and notifications | [frontends.md](frontends.md) |
 | Releases and updater | [releases.md](releases.md) |
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { accountsError, accountStatus, buildChanges, cliStatus, fieldPreview, groups, profileFields, type SettingsSnapshot } from './settings-model';
+import type { ClaudeAccountView } from '../../src/shared/protocol';
+import { accountsError, accountStatus, buildChanges, cliStatus, fieldPreview, groups, isMemoryChoice, memoryChoices, memoryFields, memoryStatus, profileFields, staleDrafts, type SettingsSnapshot } from './settings-model';
 const snapshot: SettingsSnapshot = { scope: 'project', path: '/tmp/project/.tiller/config.json', projectPath: '/tmp/project', revision: 'a', values: { 'limits.maxDepth': 3, 'worktrees.include': ['local'], 'approvals.merge': true }, entries: {}, inherited: {} };
 const fields = [...groups.flatMap((g) => g.fields), ...profileFields('codex')];
 describe('settings drafts', () => {
@@ -138,5 +139,52 @@ describe('Claude account setting', () => {
   it('recognizes the single error view of an invalid accounts config', () => {
     expect(accountsError([{ name: 'claude.accounts', projects: [], isDefault: false, loggedIn: null, loginCommand: '', error: 'bad' }])).toBe('bad');
     expect(accountsError([{ name: 'work', projects: [], isDefault: false, loggedIn: null, loginCommand: 'x', error: 'probe failed' }])).toBeUndefined();
+  });
+});
+
+describe('memory settings', () => {
+  const accounts = [{ name: 'personal', projects: [], isDefault: true, loggedIn: true, loginCommand: 'x' }, { name: 'work', projects: [], isDefault: false, loggedIn: true, loginCommand: 'y' }];
+  const base = groups.find((g) => g.title === 'Memory')!.fields;
+  const keys = (scope: 'home' | 'project', list: ClaudeAccountView[] = accounts) => memoryFields(base, scope, list).map((f) => f.key);
+  it('lists the global switch, then each account, then the size limit at home scope', () => {
+    expect(keys('home')).toEqual(['memory.enabled', 'claude.accounts.personal.memory', 'claude.accounts.work.memory', 'memory.maxMB']);
+  });
+  it('shows only the repository choice at project scope', () => {
+    expect(keys('project')).toEqual(['memory.project']);
+  });
+  it('shows no account fields while the account list is loading, empty or invalid', () => {
+    expect(memoryFields(base, 'home').map((f) => f.key)).toEqual(['memory.enabled', 'memory.maxMB']);
+    expect(keys('home', [])).toEqual(['memory.enabled', 'memory.maxMB']);
+    expect(keys('home', [{ name: 'claude.accounts', projects: [], isDefault: false, loggedIn: null, loginCommand: '', error: 'bad' }])).toEqual(['memory.enabled', 'memory.maxMB']);
+  });
+  it('labels an account’s Off as a ceiling and a repository’s as plain Off', () => {
+    expect(memoryChoices('claude.accounts.work.memory')).toEqual([['', 'No account setting'], ['true', 'On'], ['false', 'Off (a ceiling: no repository setting turns it on)']]);
+    expect(memoryChoices('memory.project')).toEqual([['', 'Inherit'], ['true', 'On'], ['false', 'Off']]);
+    expect(['memory.project', 'claude.accounts.work.memory'].every(isMemoryChoice)).toBe(true);
+    expect(['memory.enabled', 'memory.maxMB', 'claude.account'].some(isMemoryChoice)).toBe(false);
+  });
+  it('saves true, false and removal of an account value and a repository value', () => {
+    const f = memoryFields(base, 'home', accounts).concat(memoryFields(base, 'project'));
+    const saved: SettingsSnapshot = { ...snapshot, values: { 'claude.accounts.work.memory': false, 'memory.project': true } };
+    expect(buildChanges(snapshot, { 'claude.accounts.work.memory': 'false', 'memory.project': 'true' }, f)).toEqual({ 'claude.accounts.work.memory': false, 'memory.project': true });
+    expect(buildChanges(saved, { 'claude.accounts.work.memory': null, 'memory.project': null }, f)).toEqual({ 'claude.accounts.work.memory': null, 'memory.project': null });
+    expect(buildChanges(saved, { 'claude.accounts.work.memory': 'false', 'memory.project': 'true' }, f)).toEqual({});
+  });
+  it('skips a draft whose account field is gone instead of failing the whole save', () => {
+    const f = memoryFields(base, 'home', accounts.slice(0, 1));
+    const drafts = { 'claude.accounts.work.memory': 'true', 'memory.maxMB': '64' };
+    expect(staleDrafts(drafts, f)).toEqual(['claude.accounts.work.memory']);
+    expect(buildChanges(snapshot, drafts, f)).toEqual({ 'memory.maxMB': 64 });
+    expect(() => buildChanges(snapshot, { 'nope.field': 'x' }, f)).toThrow('Unknown field'); // only memory accounts are forgiven
+  });
+  it('checks memory.maxMB against the size floor locally as a number', () => {
+    expect(buildChanges(snapshot, { 'memory.maxMB': '64' }, memoryFields(base, 'home'))).toEqual({ 'memory.maxMB': 64 });
+    expect(base.find((f) => f.key === 'memory.maxMB')?.min).toBe(16);
+  });
+  it('words the saved verdict for each scope', () => {
+    expect(memoryStatus(snapshot)).toBeUndefined();
+    expect(memoryStatus({ ...snapshot, scope: 'home', memory: { on: false, source: 'default' } })).toBe('The global setting is off (default).');
+    expect(memoryStatus({ ...snapshot, memory: { on: true, source: 'memory.projects /r in /h/config.json', account: 'work' } })).toBe('Memory is on for root nodes here (account work): memory.projects /r in /h/config.json.');
+    expect(memoryStatus({ ...snapshot, memory: { on: false, source: 'memory.enabled in /r/.tiller/config.json' } })).toBe('Memory is off for root nodes here: memory.enabled in /r/.tiller/config.json.');
   });
 });

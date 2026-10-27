@@ -6,7 +6,7 @@ import { OutcomeDetails } from '../controls/Bits';
 import { send } from '../conn';
 import { useNow } from '../hooks';
 import { Icon } from '../controls/icons';
-import { getState, openDialog, useStore, viewArchived } from '../store';
+import { getState, openDialog, useStore, viewArchived, viewMemory } from '../store';
 import { OutcomeGlyph } from './parts';
 import { TranscriptPane } from './TranscriptPane';
 
@@ -82,6 +82,7 @@ export function ArchivePane({ a }: { a: ArchivedNode }) {
           <span className="spacer" />
           <button className="btn" onClick={() => openDialog({ kind: 'followup', id: a.id, title: a.title })}><Icon name="play" size={14} />Follow up…</button>
           {(a.harness ?? 'claude') === 'claude' && <button className="btn" onClick={fork}><Icon name="fork" size={14} />Fork…</button>}
+          <button className="btn" title="What memory gave this node and holds for its repository" onClick={() => viewMemory({ nodeId: a.id }, a)}><Icon name="memory" size={14} />Memory</button>
           <button className="btn icon" title="Close" aria-label="Close archived node" onClick={() => viewArchived(null)}><Icon name="x" size={14} /></button>
         </div>
         <div className="tb2">

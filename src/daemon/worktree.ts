@@ -5,10 +5,11 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { closeSync, existsSync, openSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { Diff, DiffFile, Worktree } from '../shared/protocol.js';
 import type { MergeStyle } from './config.js';
+import { normalizeRemote } from './memory-schema.js';
 import { canonical, pidAlive } from './util.js';
 
 const run = promisify(execFile);
@@ -46,6 +47,14 @@ export function mainCheckoutSync(cwd: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Memory's identity for the repo at `dir`: 'git:' + its normalized origin URL (a local-path remote resolved first), else 'path:' + its real path. */
+export function repoKeySync(dir: string): string {
+  let origin: string | undefined;
+  try { origin = execFileSync('git', ['-C', dir, 'config', '--get', 'remote.origin.url'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || undefined; } catch { /* no origin */ }
+  if (origin) return `git:${normalizeRemote(/^[a-z][a-z0-9+.-]*:\/\//i.test(origin) || /^[^/:]+:/.test(origin) ? origin : resolve(dir, origin))}`;
+  return `path:${canonical(dir)}`;
 }
 
 /** The checkout's HEAD: its branch name (or the sha when detached) and sha. */

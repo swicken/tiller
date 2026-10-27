@@ -2,7 +2,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { Transcript } from '../../src/shared/protocol';
 import { followupMsg, forkMsg } from '../dialogs/Dialogs';
-import { branchLine } from './History';
+import { ArchivePane, branchLine } from './History';
+import { getState } from '../store';
+import type { ReactElement, ReactNode } from 'react';
 import { TranscriptView } from './TranscriptPane';
 
 vi.mock('../conn', () => ({ send: vi.fn() }));
@@ -70,5 +72,18 @@ describe('transcript', () => {
     expect([
       branchLine({ ...a, branchFate: 'merged', base: 'main' }), branchLine({ ...a, branchFate: 'kept' }), branchLine({ ...a, branchFate: 'discarded' }), branchLine(a),
     ]).toEqual(['tl/n-123 merged into main', 'tl/n-123 kept', 'tl/n-123 discarded', 'tl/n-123']);
+  });
+});
+
+describe('closed node pane', () => {
+  it('opens Memory for the closed node', () => {
+    const a = { id: 'closed-1', rootId: 'r', parentId: null, title: 'auth refactor', cwd: '/w', createdAt: 0, closedAt: 1 };
+    const flat = (n: ReactNode): ReactElement<Record<string, any>>[] => Array.isArray(n) ? n.flatMap(flat)
+      : n && typeof n === 'object' && 'props' in n ? [n as ReactElement<Record<string, any>>, ...flat((n as ReactElement<{ children?: ReactNode }>).props.children)] : [];
+    const memory = flat(ArchivePane({ a })).find((e) => e.type === 'button' && [e.props.children].flat().includes('Memory'))!;
+    memory.props.onClick();
+    expect(getState().memoryView).toEqual({ nodeId: 'closed-1' });
+    expect(getState().archived).toBeNull();
+    expect(getState().memoryBack).toBe(a);
   });
 });

@@ -1,0 +1,16 @@
+{
+  "name": "A5 no procedure from a gate-failed outcome",
+  "claim": 2,
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-1d", "repo": "lib", "node": "n-a0000006", "root": "n-r0000006",
+      "event": { "type": "gate", "ok": false, "command": "npm test", "tail": "FAIL src/x.test.ts\nnpm test: exited with 1" } },
+    { "at": "-1d+5m", "repo": "lib", "node": "n-a0000006",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "failed", "summary": "Done, I think.", "verified": "`npm test -- src/x.test.ts` passed" } }
+  ],
+  "exactCounts": { "procedure": 0, "pitfall": 0 },
+  "queries": [
+    { "id": "reviewer", "repo": "lib", "role": "reviewer", "sectionLines": { "verification": [0, 0] } }
+  ]
+}

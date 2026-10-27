@@ -101,3 +101,29 @@ it("tl url prints the browser UI's URL with the admin token, outside a node only
   await expect(tl('url')).rejects.toThrow('exit 1');
   expect(console.log).toHaveBeenCalledTimes(1);
 });
+
+const bodies = () => fetch.mock.calls.map(([url, init]) => [url.replace(/^.*\/api\//, ''), JSON.parse(init.body as string)]);
+
+it('tl memory sends the human its directory as repo; inside a node, never repo or account', async () => {
+  vi.stubEnv('TL_HOME', other);
+  await tl('memory', 'search', 'gate', 'flakes', '--kind', 'pitfall', '--account', 'work');
+  await tl('memory', 'show', 'm3', '--repo', 'sub');
+  await tl('memory', 'on', '--project', 'proj');
+  await tl('memory', 'inherit', '--account', 'work');
+  expect(bodies()).toEqual([
+    ['memory_search', { query: 'gate flakes', kind: 'pitfall', repo: process.cwd(), account: 'work' }],
+    ['memory_get', { id: 'm3', repo: join(process.cwd(), 'sub') }],
+    ['memory_switch', { on: true, project: join(process.cwd(), 'proj') }],
+    ['memory_switch', { on: null, account: 'work' }],
+  ]);
+  fetch.mockClear();
+  insideNode();
+  await tl('memory', 'add', 'note', 'tests', 'need', 'a', 'repo', '--body', 'b');
+  await tl('memory', 'forget', 'm4', 'stale', 'now');
+  expect(bodies()).toEqual([
+    ['memory_add', { kind: 'note', text: 'tests need a repo', body: 'b' }],
+    ['memory_forget', { id: 'm4', reason: 'stale now' }],
+  ]);
+  await expect(tl('memory', 'search', 'x', '--repo', '/elsewhere')).rejects.toThrow('exit 1');
+  expect(fetch).toHaveBeenCalledTimes(2);
+});

@@ -7,7 +7,7 @@ import { SessionSwitcher } from './SessionSwitcher';
 import { SidebarInspector } from './SidebarInspector';
 import { SidebarResize } from './SidebarResize';
 import { flattenSession, type Row } from './tree';
-import { selectNode, toggleCollapsed, toggleHistory, useStore } from '../store';
+import { selectNode, toggleCollapsed, toggleHistory, useStore, viewMemory } from '../store';
 import { readPref, writePref } from '../prefs';
 
 const DETAILS_KEY = 'tl.sidebarDetails';
@@ -54,6 +54,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
   const tabStop = rows.some((r) => r.node.id === selected) ? selected : rows[0]?.node.id;
   const history = useStore((s) => s.historyOpen);
   const panelOpen = useStore((s) => s.panel);
+  const memory = useStore((s) => !!s.memoryView);
 
   useEffect(() => {
     if (restoreDetailsFocus.current) {
@@ -94,6 +95,8 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
         <button className={`btn hist${history ? ' on' : ''}`} aria-pressed={history} onClick={toggleHistory} title="History: closed nodes to read, follow up or fork" aria-label="History">
           <Icon name="history" size={14} />History
         </button>
+        <button className={`btn mem${memory ? ' on' : ''}`} aria-pressed={memory} aria-label="Memory" title="Memory: what Tiller remembers for the selected node's repository, or any account and repository"
+          onClick={() => viewMemory(memory ? null : selected ? { nodeId: selected } : {})}><Icon name="memory" size={14} /></button>
       </footer>
       <SidebarResize panelOpen={panelOpen} />
     </aside>

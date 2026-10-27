@@ -8,6 +8,9 @@ type Guard = [check: (rec: NodeRecord, rt: NodeRuntime) => boolean, message: (id
 const pending: Guard = [(rec) => !!rec.pending, () => 'node is armed or queued: it launches by itself; close it to drop it'];
 const busy: Guard = [(_, rt) => !!rt.busy, (id, rt) => `${id} is ${rt.busy}`];
 const setupRunning: Guard = [(_, rt) => !!rt.setup, () => 'worktree setup is running'];
+/** Resume, restart, a harness change, a follow-up and a fork of a memory gardener node are refused with this. */
+export const GARDENER_REFUSAL = 'a gardener run cannot be resumed; start one with tl memory garden run';
+const gardener: Guard = [(rec) => !!rec.gardener, () => GARDENER_REFUSAL];
 
 /**
  * Each lifecycle operation's synchronous refusals, checked in order; the first that holds wins. Callers check that the
@@ -16,6 +19,7 @@ const setupRunning: Guard = [(_, rt) => !!rt.setup, () => 'worktree setup is run
  */
 const GUARDS: Record<LifecycleOp, Guard[]> = {
   resume: [
+    gardener,
     pending,
     [(rec) => !isAgentKind(rec.kind), () => 'Only agent nodes can be resumed'],
     busy,
@@ -24,6 +28,7 @@ const GUARDS: Record<LifecycleOp, Guard[]> = {
     [(_, rt) => !!rt.needsSetup, () => 'worktree setup has not succeeded; restart runs it again'],
   ],
   restart: [
+    gardener,
     pending,
     [(rec) => !!rec.worktree && !existsSync(rec.worktree.path), () => 'worktree missing'], // --worktree would make a fresh one
     setupRunning,
@@ -31,6 +36,7 @@ const GUARDS: Record<LifecycleOp, Guard[]> = {
     [(_, rt) => rt.gate?.state === 'running', (id) => `${id} is running its completion gate`],
   ],
   changeHarness: [
+    gardener,
     [(rec) => !!rec.pending, () => 'node is armed or queued; wait until it launches'],
     busy,
     [(_, rt) => !!(rt.setup || rt.needsSetup), () => 'worktree setup must succeed before changing harness; use Restart to retry setup'],

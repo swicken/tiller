@@ -4,10 +4,11 @@ import type http from 'node:http';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
-import { SETTINGS_FIELDS, type ClaudeAccountsSave, type ClaudeConfigDirCheck, type SettingsScope, type SettingsSnapshot, type SettingsUpdate } from '../shared/settings.js';
+import { MEMORY_ACCOUNT_KEY, SETTINGS_FIELDS, type ClaudeAccountsSave, type ClaudeConfigDirCheck, type SettingsScope, type SettingsSnapshot, type SettingsUpdate } from '../shared/settings.js';
 import { canonicalProject, projectAccount } from './claude-accounts.js';
 import { ConfigFile, DEFAULTS, claudeAccountListError, claudeAccountsError, configEntries, effectiveProfileEntries, loadConfig } from './config.js';
 import type { NodeManager } from './manager.js';
+import { applyMemorySetting, memoryOn, type MemorySetting } from './memory-config.js';
 import { expandHome, inside, readBody } from './util.js';
 
 export class SettingsError extends Error {
@@ -31,7 +32,7 @@ function checkPath(path: string): void {
     } catch (e) { if (!missing(e)) throw e; }
   }
 }
-function read(path: string): { raw: string | null; data: Record<string, unknown> } {
+export function read(path: string): { raw: string | null; data: Record<string, unknown> } {
   checkPath(path);
   let raw: string;
   let fd: number | undefined;
@@ -56,7 +57,7 @@ function read(path: string): { raw: string | null; data: Record<string, unknown>
   }
   return { raw, data };
 }
-const revision = (raw: string | null) => createHash('sha256').update(raw === null ? 'missing' : `file:${raw}`).digest('hex');
+export const revision = (raw: string | null) => createHash('sha256').update(raw === null ? 'missing' : `file:${raw}`).digest('hex');
 function flatten(data: Record<string, unknown>, prefix = ''): Record<string, unknown> {
   return Object.fromEntries(Object.entries(data).flatMap(([k, v]) => {
     const key = prefix + k;
@@ -84,6 +85,7 @@ export function settingsSnapshot(manager: NodeManager, scope: SettingsScope, nod
   const below = scope === 'project' ? configEntries(null, home) : null;
   const inherited: SettingsSnapshot['inherited'] = {}, entries: SettingsSnapshot['entries'] = {};
   for (const key of keys) {
+    if (key === 'memory.project') continue; // a pseudo-key: its value is in the home file, below
     const runtimeKey = key as keyof typeof effective;
     entries[key] = effective[runtimeKey];
     inherited[key] = below ? below[runtimeKey] : { value: (DEFAULTS as Record<string, unknown>)[key], source: 'default' };
@@ -105,7 +107,23 @@ export function settingsSnapshot(manager: NodeManager, scope: SettingsScope, nod
     if (project === projectPath) values['claude.account'] = account;
     entries['claude.account'] = { value: account, source: project || inherited['claude.account']?.value !== undefined ? homePath : 'default' };
   }
-  return { scope, path, projectPath, revision: revision(layer.raw), values, entries, inherited, homeRevision: revision(read(homePath).raw), claudeAccount };
+  const homeLayer = scope === 'home' ? layer : read(homePath);
+  const config = loadConfig(null, home);
+  let memory: SettingsSnapshot['memory'];
+  if (scope === 'home') {
+    // Each account's own memory value, whether or not the account list is valid enough to load.
+    const accounts = (homeLayer.data.claude as { accounts?: unknown } | undefined)?.accounts;
+    for (const a of Array.isArray(accounts) ? accounts : []) if (object(a) && typeof a.name === 'string' && typeof a.memory === 'boolean') values[`claude.accounts.${a.name}.memory`] = a.memory;
+    const from = entries['memory.enabled'].source; // the wording memoryOn uses for the same setting
+    memory = { on: config.memory.enabled, source: from === 'default' ? from : `memory.enabled in ${from}`, projects: config.memory.projects.map(({ path, enabled }) => ({ path, enabled })) };
+  } else {
+    const exact = config.memory.projects.find((p) => canonicalProject(p.path) === projectPath);
+    if (exact) values['memory.project'] = exact.enabled;
+    // With an invalid account list the repo's account is unknown, so fail closed as memoryOn does for a named account.
+    const listError = claudeAccountListError(home);
+    memory = listError ? { on: false, source: `account unknown: ${listError}` } : { ...memoryOn(home, projectPath!, claudeAccount.effective), account: claudeAccount.effective };
+  }
+  return { scope, path, projectPath, revision: revision(layer.raw), values, entries, inherited, homeRevision: revision(homeLayer.raw), claudeAccount, memory };
 }
 
 /**
@@ -132,20 +150,45 @@ export function updateSettings(manager: NodeManager, update: SettingsUpdate): Se
   const before = read(path);
   if (scope === 'project') read(homePath); // Refuse an unreadable inherited layer before writing.
   if (revision(before.raw) !== update.revision) throw new SettingsError(409, 'Settings changed; reload before saving');
-  // A repo's account is chosen in the home file (agents can edit the repo's), so it is checked against the home revision.
-  let home: { data: Record<string, unknown>; revision: string } | undefined;
+  // A repo's account and memory opt-in are chosen in the home file (agents can edit the repo's), so they are checked against the
+  // home revision, and share one write of it.
+  const held: { home?: { data: Record<string, unknown>; revision: string } } = {};
+  const homeLayer = () => {
+    if (held.home) return held.home.data;
+    const layer = read(homePath);
+    if (update.homeRevision === undefined || revision(layer.raw) !== update.homeRevision) throw new SettingsError(409, 'Settings changed; reload before saving');
+    held.home = { data: layer.data, revision: update.homeRevision };
+    return layer.data;
+  };
+  const homeDir = dirname(homePath);
   if (Object.hasOwn(changes, 'claude.account')) {
-    checkAccount(dirname(homePath), changes['claude.account']);
+    checkAccount(homeDir, changes['claude.account']);
     if (scope === 'project') {
-      const layer = read(homePath);
-      if (update.homeRevision === undefined || revision(layer.raw) !== update.homeRevision) throw new SettingsError(409, 'Settings changed; reload before saving');
-      moveProject(layer.data, projectPath!, changes['claude.account'] as string | null);
-      home = { data: layer.data, revision: update.homeRevision };
+      moveProject(homeLayer(), projectPath!, changes['claude.account'] as string | null);
       delete changes['claude.account'];
     }
   }
+  const memorySetting = (key: string, value: unknown): MemorySetting => {
+    if (value !== null && typeof value !== 'boolean') throw new SettingsError(400, `${key}: expected true, false or null`);
+    return value === null ? 'inherit' : value ? 'on' : 'off';
+  };
+  if (Object.hasOwn(changes, 'memory.project')) {
+    if (scope !== 'project') throw new SettingsError(400, 'memory.project is a project setting');
+    applyMemorySetting(homeLayer(), homeDir, { project: projectPath! }, memorySetting('memory.project', changes['memory.project']));
+    delete changes['memory.project'];
+  }
+  if (scope === 'home' && Object.hasOwn(changes, 'memory.enabled')) { // the same write as `tl memory on|off|inherit`
+    applyMemorySetting(before.data, homeDir, {}, memorySetting('memory.enabled', changes['memory.enabled']));
+    delete changes['memory.enabled'];
+  }
+  const accountMemory = Object.entries(changes).flatMap(([key, value]) => { const name = MEMORY_ACCOUNT_KEY.exec(key)?.[1]; return name ? [{ key, name, value }] : []; });
+  for (const { key, name, value } of accountMemory) {
+    if (scope !== 'home') throw new SettingsError(400, 'account memory settings are home-only');
+    applyMemorySetting(before.data, homeDir, { account: name }, memorySetting(key, value));
+    delete changes[key];
+  }
   for (const [key, value] of Object.entries(changes)) {
-    if (scope === 'project' && key.startsWith('daemon.')) throw new SettingsError(400, 'daemon settings are home-only');
+    if (scope === 'project' && (key.startsWith('daemon.') || key.startsWith('memory.'))) throw new SettingsError(400, `${key.split('.')[0]} settings are home-only`);
     validate(key, value);
   }
   for (const [key, value] of Object.entries(changes)) {
@@ -158,6 +201,7 @@ export function updateSettings(manager: NodeManager, update: SettingsUpdate): Se
     if (value === null) delete parent[parts.at(-1)!];
     else parent[parts.at(-1)!] = value;
   }
+  const { home } = held;
   if (home) writeConfig(homePath, home.data, home.revision);
   if (!home || Object.keys(changes).length) writeConfig(path, before.data, update.revision);
   return settingsSnapshot(manager, scope, nodeId);
@@ -166,7 +210,7 @@ export function updateSettings(manager: NodeManager, update: SettingsUpdate): Se
 /**
  * Replace claude.accounts in the home file from the Settings form, creating the configDirs asked for. With none configured
  * this seeds the list and claude.account. Otherwise accounts are kept, added or removed by name: there is no rename, a kept
- * account keeps its projects (only its configDir may change), a new one has none, and claude.account's account stays.
+ * account keeps its projects and other fields (only its configDir may change), a new one has none, and claude.account's account stays.
  */
 export function saveClaudeAccounts(manager: NodeManager, save: ClaudeAccountsSave): SettingsSnapshot {
   const { homePath } = target(manager, 'home');
@@ -175,7 +219,7 @@ export function saveClaudeAccounts(manager: NodeManager, save: ClaudeAccountsSav
   const listError = claudeAccountListError(dirname(homePath));
   if (listError) throw new SettingsError(422, `${listError}; fix it in the file`);
   const claude = before.data.claude as Record<string, unknown> | undefined;
-  const existing = (claude?.accounts ?? []) as { name: string; configDir?: string; projects?: string[] }[];
+  const existing = (claude?.accounts ?? []) as { name: string; configDir?: string; [field: string]: unknown }[];
   // The form lists accounts from a WebSocket store, which can lag the HTTP revision: a list from before an added account is stale.
   const names = (list: string[]) => JSON.stringify([...list].sort());
   if (names(existing.map((a) => a.name)) !== names(save.openedWith)) throw new SettingsError(409, 'Settings changed; reload before saving');
@@ -191,7 +235,8 @@ export function saveClaudeAccounts(manager: NodeManager, save: ClaudeAccountsSav
     if (old?.configDir && !configDir) throw new SettingsError(400, `${name}: keep a config directory; without one it would use Claude's default home (~/.claude) and its login`);
     // An unchanged directory keeps its spelling in the file (the form shows it expanded).
     const dir = configDir && old?.configDir && expandHome(configDir) === expandHome(old.configDir) ? old.configDir : configDir;
-    return { name, ...(dir ? { configDir: dir } : {}), ...(old?.projects ? { projects: old.projects } : {}) };
+    const { name: _name, configDir: _configDir, ...kept } = old ?? {}; // projects, memory, gardener and the rest stay as they were
+    return { name, ...(dir ? { configDir: dir } : {}), ...kept };
   });
   const result = ConfigFile.safeParse({ claude: { accounts, account: current } });
   if (!result.success) throw new SettingsError(400, result.error.issues.map((i) => `${i.path.map(String).join('.')}: ${i.message}`).join('; '));
@@ -237,7 +282,7 @@ export function claudeConfigDirCheck(manager: NodeManager, path: string): Claude
 }
 
 /** Atomically replace `path` with `data`, unless the file no longer has `expected` revision. */
-function writeConfig(path: string, data: Record<string, unknown>, expected: string): void {
+export function writeConfig(path: string, data: Record<string, unknown>, expected: string): void {
   // Synchronous read/check/rename serializes this daemon's writers, including different HTTP requests.
   // External editors are detected up to the final check; portable rename has no cross-process CAS.
   fs.mkdirSync(dirname(path), { recursive: true });

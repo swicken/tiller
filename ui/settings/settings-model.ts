@@ -1,9 +1,10 @@
 import { PROFILES, type ClaudeAccountView, type Harness, type UsageSource } from '../../src/shared/protocol';
-import { SETTINGS_FIELDS, type SettingsField } from '../../src/shared/settings';
+import { MEMORY_ACCOUNT_KEY, SETTINGS_FIELDS, type SettingsField } from '../../src/shared/settings';
 export type { SettingsSnapshot } from '../../src/shared/settings';
-import type { SettingsSnapshot } from '../../src/shared/settings';
+import type { SettingsScope, SettingsSnapshot } from '../../src/shared/settings';
 export type { SettingsScope as Scope } from '../../src/shared/settings';
-export type Field = SettingsField & { help?: string };
+/** scope: the only scope that shows the field (UI-only; the daemon enforces the same split). */
+export type Field = SettingsField & { help?: string; scope?: SettingsScope };
 const fieldHelp: Record<string, string> = {
   'notifications.kinds.needsYou': 'An agent is waiting for your input or approval.',
   'notifications.kinds.errored': 'An agent encounters an error.',
@@ -26,8 +27,12 @@ const fieldHelp: Record<string, string> = {
   'daemon.digestAfterMinutes': 'Minutes away from the app before returning shows an activity digest.',
   'daemon.maxLiveNodes': 'Maximum live nodes managed by the daemon.',
   'daemon.maxWorking': 'Maximum Claude agents working at once. Additional spawns queue. Zero means unlimited.',
+  'memory.enabled': 'The global opt-in. Off unless a repository entry or an account turns memory on. Use the default to remove the setting.',
+  'memory.maxMB': 'Size past which each account’s memory file evicts its oldest items. At least 16.',
+  'memory.project': 'Memory for nodes in this repository and below, written to ~/.tiller/config.json, never to the repository. Inherit removes this repository’s own entry.',
 };
-function field(key: string, label: string, extra: { help?: string } = {}): Field {
+const MEMORY_ACCOUNT_HELP = 'Memory for nodes running in this account. Off is a ceiling: no repository setting turns it on.';
+function field(key: string, label: string, extra: { help?: string; scope?: SettingsScope } = {}): Field {
   const metadata = SETTINGS_FIELDS.find((entry) => entry.key === key);
   if (!metadata) throw new Error(`Missing settings metadata: ${key}`);
   return { ...metadata, help: fieldHelp[key], label: label.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase()), ...extra };
@@ -50,6 +55,10 @@ export const groups: { title: string; homeOnly?: boolean; help?: string; fields:
   ] },
   { title: 'Claude', help: 'Settings for Claude nodes.', fields: [field('claude.account', 'Claude account'), field('claude.inheritMcpServers', 'Inherit MCP servers')] },
   { title: 'Pi', help: 'Settings for Pi nodes.', fields: [field('pi.extensions', 'Extensions')] },
+  { title: 'Memory', help: 'Memory is off until you opt in, from here or with tl memory. The first match decides: this repository’s own .tiller/config.json set to off (a repository file can only turn memory off); an account set to off, a ceiling no repository setting lifts; the longest repository entry; an account set to on; then the global switch. Changes apply to nodes launched from now on.', fields: [
+    field('memory.enabled', 'Memory (global)', { scope: 'home' }), field('memory.maxMB', 'Size limit (MB)', { scope: 'home' }),
+    field('memory.project', 'Memory for this repository', { scope: 'project' }),
+  ] },
   { title: 'Approvals & checks', help: 'Control when agents need your approval and what must pass before work is complete.', fields: [
     field('approvals.close', 'Close nodes without approval', { help: 'Choose when agents can close nodes without asking you first.' }),
     field('approvals.merge', 'Merge without approval', { help: 'Allow agents to merge their work without asking you first.' }),
@@ -63,10 +72,15 @@ export function formatValue(value: unknown): string { return value === undefined
 export function inputValue(value: unknown, field: Field): string {
   return value === undefined ? '' : field.type === 'lines' && Array.isArray(value) ? value.join('\n') : String(value);
 }
+/** Drafts for an account's memory whose field is gone (the account was removed, or the list turned invalid): not saved. */
+export const staleDrafts = (drafts: Record<string, string | null>, fields: Field[]) => Object.keys(drafts).filter((key) => MEMORY_ACCOUNT_KEY.test(key) && !fields.some((f) => f.key === key));
+
 // null removes only the explicit target-layer value; untouched inherited fields never enter changes.
 export function buildChanges(snapshot: SettingsSnapshot, drafts: Record<string, string | null>, fields: Field[]): Record<string, unknown | null> {
   const changes: Record<string, unknown | null> = {};
+  const stale = staleDrafts(drafts, fields);
   for (const [key, raw] of Object.entries(drafts)) {
+    if (stale.includes(key)) continue;
     const f = fields.find((f) => f.key === key);
     if (!f) throw new Error(`Unknown field: ${key}`);
     let value: unknown = raw;
@@ -99,6 +113,29 @@ export function accountStatus(snapshot: SettingsSnapshot): string {
   if (project && project === snapshot.projectPath) return `This repository runs in ${effective}.`;
   if (project) return `Currently from ${effective} via ${project}.`;
   return effective ? `Currently from the global default (${effective}).` : 'Currently no account: Claude’s default home.';
+}
+
+/** The Memory section's fields at `scope`: one dynamic field per configured account follows the global switch. */
+export function memoryFields(base: Field[], scope: SettingsScope, accounts?: ClaudeAccountView[]): Field[] {
+  const perAccount: Field[] = accountsError(accounts) ? [] : (accounts ?? []).map((a) => ({
+    key: `claude.accounts.${a.name}.memory`, label: `Memory for ${a.name}`, type: 'boolean', help: MEMORY_ACCOUNT_HELP, scope: 'home',
+  }));
+  return base.flatMap((f) => [f, ...(f.key === 'memory.enabled' ? perAccount : [])]).filter((f) => !f.scope || f.scope === scope);
+}
+/** Whether a field is a memory opt-in with its own three-way control (set on, set off, or no setting). */
+export const isMemoryChoice = (key: string) => key === 'memory.project' || MEMORY_ACCOUNT_KEY.test(key);
+/** The options of that control, as [draft value, label]. The empty value removes the setting. */
+export const memoryChoices = (key: string): [string, string][] => key === 'memory.project'
+  ? [['', 'Inherit'], ['true', 'On'], ['false', 'Off']]
+  : [['', 'No account setting'], ['true', 'On'], ['false', 'Off (a ceiling: no repository setting turns it on)']];
+
+/** The saved memory verdict at this scope, in the daemon's own words for the deciding setting. */
+export function memoryStatus(snapshot: SettingsSnapshot): string | undefined {
+  const m = snapshot.memory;
+  if (!m) return undefined;
+  const state = m.on ? 'on' : 'off';
+  return snapshot.scope === 'home' ? `The global setting is ${state} (${m.source}).`
+    : `Memory is ${state} for root nodes here${m.account ? ` (account ${m.account})` : ''}: ${m.source}.`;
 }
 
 export function cliStatus(source?: Pick<UsageSource, 'installed' | 'executableStatus'>): string {

@@ -704,3 +704,117 @@ it('guards every modal dismissal request until the draft is explicitly discarded
   tree.props.onClose(); render(); confirmDiscard();
   expect(close).toHaveBeenCalledOnce();
 });
+
+const memoryAccounts = [
+  { name: 'personal', projects: [], isDefault: true, loggedIn: true, loginCommand: 'claude auth login' },
+  { name: 'work', configDir: '/c/w', projects: [], isDefault: false, loggedIn: true, loginCommand: 'x' },
+];
+const homeMemory = { ...snapshot, scope: 'home', homeRevision: 'h1', values: { 'claude.accounts.work.memory': false } as Record<string, unknown>, entries: { 'memory.enabled': { value: false, source: 'default' }, 'memory.maxMB': { value: 200, source: 'default' } }, inherited: { 'memory.enabled': { value: false, source: 'default' }, 'memory.maxMB': { value: 200, source: 'default' } }, memory: { on: false, source: 'default', projects: [{ path: '/repo', enabled: true }, { path: '/other', enabled: false }] } };
+const sent = () => JSON.parse(String(fetchMock.mock.calls.find((call) => call[1]?.method === 'POST')![1]?.body));
+const memoryHome = async (extra: Partial<SettingsSnapshot> = {}) => {
+  hooks.store = { ...hooks.store, claudeAccounts: memoryAccounts } as typeof hooks.store;
+  fetchMock.mockImplementationOnce(async () => ({ ok: true, json: async () => ({ ...homeMemory, ...extra }) }));
+  changeScope('home'); await settle(); click('Memory');
+};
+const memoryProject = async (memory: SettingsSnapshot['memory'], values: Record<string, unknown> = {}) => {
+  hooks.store = { ...hooks.store, claudeAccounts: memoryAccounts } as typeof hooks.store;
+  fetchMock.mockImplementationOnce(async () => ({ ok: true, json: async () => ({ ...homeMemory, values: {} }) }));
+  fetchMock.mockImplementationOnce(async () => ({ ok: true, json: async () => ({ ...snapshot, homeRevision: 'h1', values, memory }) }));
+  changeScope('home'); await settle(); changeScope('project'); await settle(); click('Memory');
+};
+
+it('shows the Memory group at home scope: global switch, an account select, the size limit, the entries and the sidebar note', async () => {
+  await memoryHome();
+  expect(elements(tree).some((e) => e.type === 'button' && text(e.props.children) === 'Memory')).toBe(true);
+  expect(input('memory.enabled').props.role).toBe('switch');
+  expect(input('memory.enabled').props['aria-checked']).toBe(false);
+  expect(input('memory.maxMB').props.min).toBe(16);
+  expect(input('memory.maxMB').props.value).toBe('200');
+  const work = input('claude.accounts.work.memory');
+  expect(work.type).toBe(Select);
+  expect(work.props.value).toBe('false');
+  expect(elements(work).filter((e) => e.type === 'option').map((e) => text(e.props.children))).toEqual(['No account setting', 'On', 'Off (a ceiling: no repository setting turns it on)']);
+  expect(input('claude.accounts.personal.memory').props.value).toBe('');
+  expect(elements(tree).some((e) => e.props.id === 'setting-memory.project')).toBe(false);
+  expect(text(tree)).toContain('The global setting is off (default).');
+  expect(elements(tree).filter((e) => e.type === 'li').map(text)).toEqual(['/repo On', '/other Off']);
+  expect(text(tree)).toContain('use the Memory icon in the sidebar footer.');
+});
+
+it('skips a draft for an account that disappeared, says so, and still saves the rest', async () => {
+  await memoryHome();
+  input('claude.accounts.work.memory').props.onChange({ target: { value: 'true' } }); render();
+  input('memory.maxMB').props.onChange({ target: { value: '64' } }); render();
+  hooks.store = { ...hooks.store, claudeAccounts: [memoryAccounts[0]] } as typeof hooks.store; // work was removed meanwhile
+  render();
+  expect(text(tree)).toContain('Not saved: work is no longer a usable Claude account. Other changes still save.');
+  await submit();
+  expect(sent().changes).toEqual({ 'memory.maxMB': 64 });
+});
+
+it('saves each home memory control as its own key, with removal as null', async () => {
+  await memoryHome();
+  input('memory.enabled').props.onClick(); render();
+  input('claude.accounts.personal.memory').props.onChange({ target: { value: 'true' } }); render();
+  input('claude.accounts.work.memory').props.onChange({ target: { value: '' } }); render();
+  input('memory.maxMB').props.onChange({ target: { value: '64' } }); render();
+  expect(text(tree)).toContain('Unsaved');
+  await submit();
+  expect(sent()).toEqual({ scope: 'home', revision: 'r1', homeRevision: 'h1', changes: { 'memory.enabled': true, 'claude.accounts.personal.memory': true, 'claude.accounts.work.memory': null, 'memory.maxMB': 64 } });
+});
+
+it('rejects a non-numeric size limit locally', async () => {
+  await memoryHome();
+  input('memory.maxMB').props.onChange({ target: { value: 'big' } }); render();
+  await elements(tree).find((e) => e.type === 'form')!.props.onSubmit({ preventDefault() {} }); render();
+  expect(fetchMock.mock.calls.some((call) => call[1]?.method === 'POST')).toBe(false);
+  expect(text(tree)).toContain('enter a number');
+});
+
+it('offers no account selects while the account list is invalid, and says why', async () => {
+  const error = 'claude.accounts in /h/config.json is invalid: duplicate account name a';
+  hooks.store = { ...hooks.store, claudeAccounts: [{ name: 'claude.accounts', projects: [], isDefault: false, loggedIn: null, loginCommand: '', error }] } as typeof hooks.store;
+  fetchMock.mockImplementationOnce(async () => ({ ok: true, json: async () => ({ ...homeMemory, values: {} }) }));
+  changeScope('home'); await settle(); click('Memory');
+  expect(elements(tree).some((e) => String(e.props.id ?? '').startsWith('setting-claude.accounts.'))).toBe(false);
+  expect(text(tree)).toContain(error);
+});
+
+it('shows the repository choice and the verdict at project scope, and no home-only fields', async () => {
+  await memoryProject({ on: true, source: 'memory.projects /repo in /home/config.json', account: 'work' }, { 'memory.project': true });
+  const choice = input('memory.project');
+  expect(choice.type).toBe(Select);
+  expect(choice.props.value).toBe('true');
+  expect(elements(choice).filter((e) => e.type === 'option').map((e) => text(e.props.children))).toEqual(['Inherit', 'On', 'Off']);
+  expect(text(tree)).toContain('Memory is on for root nodes here (account work): memory.projects /repo in /home/config.json.');
+  for (const key of ['memory.enabled', 'memory.maxMB', 'claude.accounts.work.memory']) expect(elements(tree).some((e) => e.props.id === `setting-${key}`)).toBe(false);
+  expect(elements(tree).some((e) => e.type === 'li')).toBe(false);
+});
+
+it('names a repository file turning memory off as the deciding setting', async () => {
+  await memoryProject({ on: false, source: 'memory.enabled in /repo/.tiller/config.json' });
+  expect(input('memory.project').props.value).toBe('');
+  expect(text(tree)).toContain('Memory is off for root nodes here: memory.enabled in /repo/.tiller/config.json.');
+});
+
+it('saves the repository choice with the home revision', async () => {
+  await memoryProject({ on: false, source: 'default' }, { 'memory.project': false });
+  input('memory.project').props.onChange({ target: { value: 'true' } }); render();
+  await submit();
+  expect(sent()).toEqual({ scope: 'project', nodeId: 'n1', revision: 'r1', homeRevision: 'h1', changes: { 'memory.project': true } });
+});
+
+it('saves Inherit for the repository as removal', async () => {
+  await memoryProject({ on: true, source: 'x' }, { 'memory.project': true });
+  input('memory.project').props.onChange({ target: { value: '' } }); render();
+  await submit();
+  expect(sent().changes).toEqual({ 'memory.project': null });
+});
+
+it('finds the Memory group by searching its help', async () => {
+  await memoryHome();
+  click('Approvals & checks');
+  search('ceiling');
+  expect(elements(tree).some((e) => e.props.id === 'setting-claude.accounts.work.memory')).toBe(true);
+  expect(elements(tree).some((e) => e.type === 'button' && text(e.props.children) === 'Memory')).toBe(true);
+});

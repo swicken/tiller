@@ -1,0 +1,187 @@
+{
+  "name": "R2a corpus",
+  "claim": 0,
+  "note": "Hand-written targets for the R2a needs, shaped like real outcomes of a fictional local job runner, lantern. Ten are near-miss distractors that no need counts. eval.ts adds every Layer A fixture's items to this repo.",
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "r2a": "git:bench.invalid/r2a" },
+  "episodes": [
+    { "at": "-60d", "repo": "r2a", "node": "n-sock1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Added jittered exponential backoff to the panel websocket client.", "changedFiles": ["ui/socket.ts"] } },
+    { "at": "-60d+1m", "repo": "r2a", "node": "n-sock1", "event": { "type": "close", "archived": { "title": "Panel socket reconnect", "prompt": "Make the web panel reconnect its websocket after the daemon restarts." } } },
+    { "at": "-59d", "repo": "r2a", "node": "n-sock2", "op": { "type": "add", "kind": "pitfall", "text": "Reset the websocket backoff after a successful open, or panel reconnects stay slow.", "label": "sock-pitfall" } },
+
+    { "at": "-58d", "repo": "r2a", "node": "n-mig1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Migrations now run one per BEGIN IMMEDIATE transaction and recheck user_version inside each.", "changedFiles": ["daemon/store/migrate.ts"] } },
+    { "at": "-58d+1m", "repo": "r2a", "node": "n-mig1", "event": { "type": "close", "archived": { "title": "Schema migration runner", "prompt": "Build an ordered migration runner for the sqlite store." } } },
+    { "at": "-57d", "repo": "r2a", "node": "n-mig2", "op": { "type": "add", "kind": "pitfall", "text": "Two daemons opening an old sqlite file at once can both migrate it unless the version is rechecked inside the write lock.", "label": "mig-pitfall" } },
+    { "at": "-57d+1h", "repo": "r2a", "node": "n-mig3", "op": { "type": "add", "kind": "procedure", "text": "To add a schema migration, append it to MIGRATIONS and bump SCHEMA_VERSION; never edit a shipped one.", "label": "mig-proc" } },
+
+    { "at": "-56d", "repo": "r2a", "node": "n-exit1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Commands exit 2 on usage errors, 3 when the daemon is unreachable and 1 otherwise.", "changedFiles": ["cli/main.ts", "docs/cli.md"] } },
+    { "at": "-56d+1m", "repo": "r2a", "node": "n-exit1", "event": { "type": "close", "archived": { "title": "CLI exit codes", "prompt": "Give every lantern CLI command a documented exit code." } } },
+    { "at": "-55d", "repo": "r2a", "actor": "human", "op": { "type": "add", "kind": "note", "text": "Scripts depend on lantern CLI exit status 3 meaning the daemon is down; keep it stable.", "label": "exit-note" } },
+
+    { "at": "-54d", "repo": "r2a", "node": "n-cfg1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Environment variables override the project file, which overrides the user file.", "changedFiles": ["daemon/config.ts"] } },
+    { "at": "-54d+1m", "repo": "r2a", "node": "n-cfg1", "event": { "type": "close", "archived": { "title": "Config layering", "prompt": "Merge user, project and environment configuration in one place." } } },
+    { "at": "-53d", "repo": "r2a", "node": "n-cfg2", "op": { "type": "add", "kind": "pitfall", "text": "A project config.json can only tighten security keys; it must never loosen what the user file set.", "label": "cfg-pitfall" } },
+    { "at": "-53d+1h", "repo": "r2a", "node": "n-cfg3", "op": { "type": "add", "kind": "procedure", "text": "Run lantern config --explain to see which layer set each key.", "label": "cfg-proc" } },
+
+    { "at": "-52d", "repo": "r2a", "node": "n-sign1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "The release job signs with the Developer ID certificate and staples the notarization ticket.", "changedFiles": [".github/workflows/release.yml"] } },
+    { "at": "-52d+1m", "repo": "r2a", "node": "n-sign1", "event": { "type": "close", "archived": { "title": "Notarize macOS builds", "prompt": "Sign and notarize the macOS app in the release workflow." } } },
+    { "at": "-51d", "repo": "r2a", "node": "n-sign2", "op": { "type": "add", "kind": "pitfall", "text": "notarytool rejects the upload when the hardened runtime entitlement is missing.", "label": "sign-pitfall" } },
+
+    { "at": "-50d", "repo": "r2a", "node": "n-flaky1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "The test raced a real timer; it now uses fake timers and advances the clock explicitly.", "changedFiles": ["daemon/scheduler.test.ts"] } },
+    { "at": "-50d+1m", "repo": "r2a", "node": "n-flaky1", "event": { "type": "close", "archived": { "title": "Stabilize scheduler test", "prompt": "The scheduler test fails intermittently on CI; find out why." } } },
+    { "at": "-49d", "repo": "r2a", "node": "n-flaky2", "op": { "type": "add", "kind": "pitfall", "text": "Intermittent CI failures in scheduler tests come from real timers; use fake timers.", "label": "flaky-pitfall" } },
+    { "at": "-49d+1h", "repo": "r2a", "node": "n-flaky3", "op": { "type": "add", "kind": "procedure", "text": "Rerun a suspected intermittent test with vitest --repeat 50 before calling it fixed.", "label": "flaky-proc" } },
+
+    { "at": "-48d", "repo": "r2a", "node": "n-keys1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Cmd+1..9 switch jobs and Cmd+K opens the command palette.", "changedFiles": ["ui/keys.ts"] } },
+    { "at": "-48d+1m", "repo": "r2a", "node": "n-keys1", "event": { "type": "close", "archived": { "title": "UI keyboard shortcuts", "prompt": "Add keyboard shortcuts to the UI for switching jobs." } } },
+    { "at": "-47d", "repo": "r2a", "actor": "human", "op": { "type": "add", "kind": "note", "text": "Keyboard shortcuts in the UI must not steal keys from the embedded terminal.", "label": "keys-note" } },
+
+    { "at": "-46d", "repo": "r2a", "node": "n-dlq1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "After five attempts a job moves to the dead-letter queue and shows in lantern jobs --dead.", "changedFiles": ["daemon/queue.ts"] } },
+    { "at": "-46d+1m", "repo": "r2a", "node": "n-dlq1", "event": { "type": "close", "archived": { "title": "Dead-letter queue", "prompt": "Jobs that keep failing should stop retrying forever." } } },
+    { "at": "-45d", "repo": "r2a", "node": "n-dlq2", "op": { "type": "add", "kind": "pitfall", "text": "Retrying a job without an attempt cap filled the queue when a plugin crashed on every run.", "label": "dlq-pitfall" } },
+    { "at": "-45d+1h", "repo": "r2a", "node": "n-dlq3", "event": { "type": "outcome", "outcome": "succeeded", "openQuestions": ["Should dead-letter jobs expire after a week?"] } },
+
+    { "at": "-44d", "repo": "r2a", "node": "n-log1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "daemon.log rotates at 10 MB and keeps five gzip archives.", "changedFiles": ["daemon/log.ts"] } },
+    { "at": "-44d+1m", "repo": "r2a", "node": "n-log1", "event": { "type": "close", "archived": { "title": "Rotate daemon logs", "prompt": "The daemon log grows without bound." } } },
+    { "at": "-43d", "repo": "r2a", "node": "n-log2", "op": { "type": "add", "kind": "pitfall", "text": "Rotating the log by rename breaks tail -F on some systems; copy then truncate instead.", "label": "log-pitfall" } },
+
+    { "at": "-42d", "repo": "r2a", "node": "n-tok1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Tokens carry an idle deadline; the panel asks for a new pairing code when one lapses.", "changedFiles": ["daemon/auth.ts"] } },
+    { "at": "-42d+1m", "repo": "r2a", "node": "n-tok1", "event": { "type": "close", "archived": { "title": "Session token expiry", "prompt": "Expire panel session tokens after 12 hours idle." } } },
+    { "at": "-41d", "repo": "r2a", "node": "n-tok2", "op": { "type": "add", "kind": "pitfall", "text": "Comparing token expiry with the client clock logged users out early; compare on the daemon.", "label": "tok-pitfall" } },
+    { "at": "-41d+1h", "repo": "r2a", "node": "n-tok3", "op": { "type": "add", "kind": "procedure", "text": "Revoke all session tokens with lantern auth revoke --all after a suspected leak.", "label": "tok-proc" } },
+
+    { "at": "-40d", "repo": "r2a", "node": "n-wt1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "lantern gc removes worktrees whose job is gone and runs git worktree prune.", "changedFiles": ["daemon/worktrees.ts"] } },
+    { "at": "-40d+1m", "repo": "r2a", "node": "n-wt1", "event": { "type": "close", "archived": { "title": "Prune stale worktrees", "prompt": "Remove git worktrees left behind by crashed jobs." } } },
+    { "at": "-39d", "repo": "r2a", "node": "n-wt2", "op": { "type": "add", "kind": "pitfall", "text": "Never delete a worktree directory with rm -rf while git still has it registered; use git worktree remove.", "label": "wt-pitfall" } },
+
+    { "at": "-38d", "repo": "r2a", "node": "n-pty1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "The PTY now receives SIGWINCH with the new rows and columns on every resize.", "changedFiles": ["daemon/pty.ts"] } },
+    { "at": "-38d+1m", "repo": "r2a", "node": "n-pty1", "event": { "type": "close", "archived": { "title": "Terminal resize", "prompt": "Terminal output wraps wrongly after resizing the window." } } },
+    { "at": "-37d", "repo": "r2a", "node": "n-pty2", "op": { "type": "add", "kind": "pitfall", "text": "Resize the PTY before replaying scrollback, or the replay wraps at the old width.", "label": "pty-pitfall" } },
+
+    { "at": "-36d", "repo": "r2a", "node": "n-notif1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Native notifications fire for input-needed jobs; finished jobs stay silent by default.", "changedFiles": ["app/notify.rs"] } },
+    { "at": "-36d+1m", "repo": "r2a", "node": "n-notif1", "event": { "type": "close", "archived": { "title": "Desktop notifications", "prompt": "Notify the human when a job needs input." } } },
+    { "at": "-35d", "repo": "r2a", "actor": "human", "op": { "type": "add", "kind": "note", "text": "The human wants desktop notifications only when input is needed, never for every finished job.", "label": "notif-note" } },
+
+    { "at": "-34d", "repo": "r2a", "node": "n-rl1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "A token bucket allows 20 requests per second per client and answers 429 beyond it.", "changedFiles": ["daemon/http/limit.ts"] } },
+    { "at": "-34d+1m", "repo": "r2a", "node": "n-rl1", "event": { "type": "close", "archived": { "title": "API rate limit", "prompt": "Protect the HTTP API from runaway clients." } } },
+    { "at": "-33d", "repo": "r2a", "node": "n-rl2", "op": { "type": "add", "kind": "pitfall", "text": "The rate limiter keyed on remote address throttled every local client together; key on the session instead.", "label": "rl-pitfall" } },
+
+    { "at": "-32d", "repo": "r2a", "node": "n-cache1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Cache keys now hash the lockfile and the Node version.", "changedFiles": ["ci/cache.ts"] } },
+    { "at": "-32d+1m", "repo": "r2a", "node": "n-cache1", "event": { "type": "close", "archived": { "title": "Build cache keys", "prompt": "Stale build artifacts survive dependency upgrades." } } },
+    { "at": "-31d", "repo": "r2a", "node": "n-cache2", "op": { "type": "add", "kind": "pitfall", "text": "Caching node_modules across Node major versions produced native module crashes; key the cache on the Node version.", "label": "cache-pitfall" } },
+
+    { "at": "-30d", "repo": "r2a", "node": "n-bak1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "lantern backup writes a consistent copy with VACUUM INTO.", "changedFiles": ["cli/backup.ts"] } },
+    { "at": "-30d+1m", "repo": "r2a", "node": "n-bak1", "event": { "type": "close", "archived": { "title": "Store backup command", "prompt": "Let the human back up the sqlite store safely while the daemon runs." } } },
+    { "at": "-29d", "repo": "r2a", "node": "n-bak2", "op": { "type": "add", "kind": "pitfall", "text": "Copying the sqlite file with cp while the daemon writes misses the WAL; use VACUUM INTO.", "label": "bak-pitfall" } },
+
+    { "at": "-28d", "repo": "r2a", "node": "n-plug1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Plugins run in a worker with a permission manifest checked before every file or network call.", "changedFiles": ["daemon/plugins/host.ts"] } },
+    { "at": "-28d+1m", "repo": "r2a", "node": "n-plug1", "event": { "type": "close", "archived": { "title": "Plugin isolation", "prompt": "Plugins can read any file; isolate them." } } },
+    { "at": "-27d", "repo": "r2a", "node": "n-plug2", "op": { "type": "add", "kind": "pitfall", "text": "A plugin manifest that lists network access must name hosts; a bare wildcard is rejected.", "label": "plug-pitfall" } },
+    { "at": "-27d+1h", "repo": "r2a", "node": "n-plug3", "op": { "type": "add", "kind": "procedure", "text": "Test a plugin with lantern plugin run --dry to print the permissions it would use.", "label": "plug-proc" } },
+
+    { "at": "-26d", "repo": "r2a", "node": "n-i18n1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Strings moved to locales/*.json and the panel picks the browser language.", "changedFiles": ["ui/locales/de.json", "ui/locales/ja.json"] } },
+    { "at": "-26d+1m", "repo": "r2a", "node": "n-i18n1", "event": { "type": "close", "archived": { "title": "Translate the panel", "prompt": "Ship German and Japanese strings for the panel." } } },
+    { "at": "-25d", "repo": "r2a", "node": "n-i18n2", "op": { "type": "add", "kind": "pitfall", "text": "Plural rules differ per locale; use Intl.PluralRules instead of appending an s.", "label": "i18n-pitfall" } },
+
+    { "at": "-24d", "repo": "r2a", "node": "n-met1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "GET /metrics serves Prometheus text with job, queue and HTTP histograms.", "changedFiles": ["daemon/http/metrics.ts"] } },
+    { "at": "-24d+1m", "repo": "r2a", "node": "n-met1", "event": { "type": "close", "archived": { "title": "Prometheus metrics", "prompt": "Expose job counts and queue latency for scraping." } } },
+    { "at": "-23d", "repo": "r2a", "actor": "human", "op": { "type": "add", "kind": "note", "text": "The metrics endpoint is local-only; never expose it on a public interface.", "label": "met-note" } },
+
+    { "at": "-22d", "repo": "r2a", "node": "n-watch1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Watcher events are debounced for 150 ms and coalesced per path.", "changedFiles": ["daemon/watch.ts"] } },
+    { "at": "-22d+1m", "repo": "r2a", "node": "n-watch1", "event": { "type": "close", "archived": { "title": "Debounce file watcher", "prompt": "Saving one file triggers five rebuilds." } } },
+    { "at": "-21d", "repo": "r2a", "node": "n-watch2", "op": { "type": "add", "kind": "pitfall", "text": "fs.watch on macOS reports a rename for atomic saves; treat rename as change.", "label": "watch-pitfall" } },
+
+    { "at": "-20d", "repo": "r2a", "node": "n-idx1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "lantern index --rebuild reindexes everything and the daemon checks index health at startup.", "changedFiles": ["daemon/search/index.ts"] } },
+    { "at": "-20d+1m", "repo": "r2a", "node": "n-idx1", "event": { "type": "close", "archived": { "title": "Rebuild search index", "prompt": "Search misses jobs created while the indexer was down." } } },
+    { "at": "-19d", "repo": "r2a", "node": "n-idx2", "op": { "type": "add", "kind": "pitfall", "text": "Running FTS optimize during a rebuild doubled the index size until the next vacuum.", "label": "idx-pitfall" } },
+
+    { "at": "-18d", "repo": "r2a", "node": "n-docs1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Docs build with a small markdown renderer into site/ and deploy from the release job.", "changedFiles": ["docs/build.mjs"] } },
+    { "at": "-18d+1m", "repo": "r2a", "node": "n-docs1", "event": { "type": "close", "archived": { "title": "Docs site build", "prompt": "Publish the docs folder as a static site." } } },
+    { "at": "-17d", "repo": "r2a", "node": "n-docs2", "op": { "type": "add", "kind": "pitfall", "text": "Relative links in docs break on the site unless the renderer rewrites .md to .html.", "label": "docs-pitfall" } },
+
+    { "at": "-16d", "repo": "r2a", "node": "n-red1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Log lines pass through a redactor for bearer tokens, AWS keys and private key blocks.", "changedFiles": ["daemon/redact.ts"] } },
+    { "at": "-16d+1m", "repo": "r2a", "node": "n-red1", "event": { "type": "close", "archived": { "title": "Redact secrets in logs", "prompt": "API keys showed up in job logs." } } },
+    { "at": "-15d", "repo": "r2a", "node": "n-red2", "op": { "type": "add", "kind": "pitfall", "text": "Redacting after truncation let half a token through; redact the whole line first, then cut.", "label": "red-pitfall" } },
+    { "at": "-15d+1h", "repo": "r2a", "node": "n-red3", "op": { "type": "add", "kind": "procedure", "text": "Add a sample to redact.test.ts for every new secret pattern.", "label": "red-proc" } },
+
+    { "at": "-14d", "repo": "r2a", "node": "n-tz1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Schedules are stored with an IANA zone and expanded with Temporal.", "changedFiles": ["daemon/cron.ts"] } },
+    { "at": "-14d+1m", "repo": "r2a", "node": "n-tz1", "event": { "type": "close", "archived": { "title": "Cron schedules in local time", "prompt": "Scheduled jobs fire an hour off after daylight saving changes." } } },
+    { "at": "-13d", "repo": "r2a", "node": "n-tz2", "op": { "type": "add", "kind": "pitfall", "text": "A 02:30 schedule does not exist on spring-forward days; run it at 03:00 instead.", "label": "tz-pitfall" } },
+    { "at": "-13d+1h", "repo": "r2a", "node": "n-tz3", "event": { "type": "outcome", "outcome": "succeeded", "openQuestions": ["Should schedules default to the daemon's zone or UTC?"] } },
+
+    { "at": "-12d", "repo": "r2a", "node": "n-leak1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Closed jobs kept their scrollback buffers; they are now released on close.", "changedFiles": ["daemon/jobs.ts"] } },
+    { "at": "-12d+1m", "repo": "r2a", "node": "n-leak1", "event": { "type": "close", "archived": { "title": "Fix daemon memory leak", "prompt": "Daemon RSS climbs by 50 MB a day." } } },
+    { "at": "-11d", "repo": "r2a", "node": "n-leak2", "op": { "type": "add", "kind": "pitfall", "text": "Event listeners added per job without removal kept closed jobs alive; remove them on close.", "label": "leak-pitfall" } },
+
+    { "at": "-10d", "repo": "r2a", "node": "n-port1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Startup reports which process holds the port and exits with code 4.", "changedFiles": ["daemon/listen.ts"] } },
+    { "at": "-10d+1m", "repo": "r2a", "node": "n-port1", "event": { "type": "close", "archived": { "title": "Port in use at startup", "prompt": "The daemon crashes when port 7700 is taken." } } },
+    { "at": "-9d", "repo": "r2a", "node": "n-port2", "op": { "type": "add", "kind": "pitfall", "text": "EADDRINUSE on restart came from the old daemon still draining; wait for its pid to exit.", "label": "port-pitfall" } },
+
+    { "at": "-8d", "repo": "r2a", "node": "n-upd1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "The updater keeps the previous build and restores it when the new one fails its health check.", "changedFiles": ["daemon/update.ts"] } },
+    { "at": "-8d+1m", "repo": "r2a", "node": "n-upd1", "event": { "type": "close", "archived": { "title": "Updater rollback", "prompt": "A failed self-update left the app unable to start." } } },
+    { "at": "-7d", "repo": "r2a", "node": "n-upd2", "op": { "type": "add", "kind": "pitfall", "text": "A stale update lock from a dead helper silently blocked every later update check.", "label": "upd-pitfall" } },
+    { "at": "-7d+1h", "repo": "r2a", "node": "n-upd3", "op": { "type": "add", "kind": "procedure", "text": "Test the updater by running lantern update --channel canary on a scratch home.", "label": "upd-proc" } },
+
+    { "at": "-6d", "repo": "r2a", "node": "n-appr1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Shell commands outside the allowlist now need the human's approval in the panel.", "changedFiles": ["daemon/approval.ts"] } },
+    { "at": "-6d+1m", "repo": "r2a", "node": "n-appr1", "event": { "type": "close", "archived": { "title": "Command approval policy", "prompt": "Agents run shell commands without asking." } } },
+    { "at": "-5d", "repo": "r2a", "node": "n-appr2", "op": { "type": "add", "kind": "pitfall", "text": "Matching the allowlist by prefix approved npm test --exec rm; match whole argv instead.", "label": "appr-pitfall" } },
+    { "at": "-5d+1h", "repo": "r2a", "node": "n-appr3", "op": { "type": "add", "kind": "procedure", "text": "Grant a one-off command with lantern approve <id>; persistent grants go in approvals.json.", "label": "appr-proc" } },
+
+    { "at": "-4d", "repo": "r2a", "node": "n-up1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Uploads stream to a temp file with a 5 GB cap instead of buffering.", "changedFiles": ["daemon/http/upload.ts"] } },
+    { "at": "-4d+1m", "repo": "r2a", "node": "n-up1", "event": { "type": "close", "archived": { "title": "Stream large uploads", "prompt": "Uploading a 2 GB artifact runs the daemon out of memory." } } },
+    { "at": "-3d", "repo": "r2a", "node": "n-up2", "op": { "type": "add", "kind": "pitfall", "text": "Busboy file streams must be drained on error or the request hangs.", "label": "up-pitfall" } },
+
+    { "at": "-2d", "repo": "r2a", "node": "n-a11y1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Every icon button has an aria-label and the job list is a labelled listbox.", "changedFiles": ["ui/JobList.tsx"] } },
+    { "at": "-2d+1m", "repo": "r2a", "node": "n-a11y1", "event": { "type": "close", "archived": { "title": "Screen reader labels", "prompt": "VoiceOver reads the job list as unlabeled buttons." } } },
+    { "at": "-1d", "repo": "r2a", "node": "n-a11y2", "op": { "type": "add", "kind": "pitfall", "text": "aria-live on the whole log pane made screen readers announce every line; limit it to status.", "label": "a11y-pitfall" } },
+    { "at": "-1d+1h", "repo": "r2a", "node": "n-a11y3", "op": { "type": "add", "kind": "procedure", "text": "Check new panels with the axe audit in npm run a11y before review.", "label": "a11y-proc" } },
+
+    { "at": "-61d", "repo": "r2a", "node": "n-near1", "event": { "type": "outcome", "outcome": "succeeded", "summary": "The panel uses a two-column grid above 900 px.", "changedFiles": ["ui/layout.css"] } },
+    { "at": "-61d+1m", "repo": "r2a", "node": "n-near1", "event": { "type": "close", "archived": { "title": "Panel layout grid", "prompt": "Tidy the panel layout on narrow screens." } } },
+    { "at": "-47d+2h", "repo": "r2a", "actor": "human", "op": { "type": "add", "kind": "note", "text": "Database migration of the marketing site to the new host is the web team's job, not ours." } },
+    { "at": "-33d+2h", "repo": "r2a", "node": "n-near3", "op": { "type": "add", "kind": "pitfall", "text": "The CLI retry flag only applies to network commands." } },
+    { "at": "-29d+2h", "repo": "r2a", "node": "n-near4", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Footer shows prompt and completion tokens per job.", "changedFiles": ["ui/Footer.tsx"] } },
+    { "at": "-29d+2h+1m", "repo": "r2a", "node": "n-near4", "event": { "type": "close", "archived": { "title": "Token counter in footer", "prompt": "Show model token usage in the footer." } } },
+    { "at": "-21d+2h", "repo": "r2a", "node": "n-near5", "op": { "type": "add", "kind": "procedure", "text": "Run lantern doctor to print versions of node, git and the daemon." } },
+    { "at": "-19d+2h", "repo": "r2a", "actor": "human", "op": { "type": "add", "kind": "note", "text": "Keyboard layout settings live in the OS, not in lantern." } },
+    { "at": "-15d+2h", "repo": "r2a", "node": "n-near7", "op": { "type": "add", "kind": "pitfall", "text": "Log timestamps are UTC; convert in the panel, not in the daemon." } },
+    { "at": "-9d+2h", "repo": "r2a", "node": "n-near8", "event": { "type": "outcome", "outcome": "succeeded", "summary": "The sidebar shows a badge with the queued job count.", "changedFiles": ["ui/Sidebar.tsx"] } },
+    { "at": "-9d+2h+1m", "repo": "r2a", "node": "n-near8", "event": { "type": "close", "archived": { "title": "Queue depth badge", "prompt": "Show how many jobs wait in the queue." } } },
+    { "at": "-6d+2h", "repo": "r2a", "node": "n-near9", "op": { "type": "add", "kind": "procedure", "text": "Release notes are drafted from merged pull request titles." } },
+    { "at": "-3d+2h", "repo": "r2a", "actor": "human", "op": { "type": "add", "kind": "note", "text": "Backups of user home directories are out of scope for lantern." } }
+  ],
+  "expectItems": [
+    { "label": "sock-ledger", "kind": "ledger", "textIncludes": ["Panel socket reconnect: "] },
+    { "label": "mig-ledger", "kind": "ledger", "textIncludes": ["Schema migration runner: "] },
+    { "label": "exit-ledger", "kind": "ledger", "textIncludes": ["CLI exit codes: "] },
+    { "label": "cfg-ledger", "kind": "ledger", "textIncludes": ["Config layering: "] },
+    { "label": "sign-ledger", "kind": "ledger", "textIncludes": ["Notarize macOS builds: "] },
+    { "label": "flaky-ledger", "kind": "ledger", "textIncludes": ["Stabilize scheduler test: "] },
+    { "label": "keys-ledger", "kind": "ledger", "textIncludes": ["UI keyboard shortcuts: "] },
+    { "label": "dlq-ledger", "kind": "ledger", "textIncludes": ["Dead-letter queue: "] },
+    { "label": "dlq-open", "kind": "open_question", "textIncludes": ["dead-letter jobs expire"] },
+    { "label": "log-ledger", "kind": "ledger", "textIncludes": ["Rotate daemon logs: "] },
+    { "label": "tok-ledger", "kind": "ledger", "textIncludes": ["Session token expiry: "] },
+    { "label": "wt-ledger", "kind": "ledger", "textIncludes": ["Prune stale worktrees: "] },
+    { "label": "pty-ledger", "kind": "ledger", "textIncludes": ["Terminal resize: "] },
+    { "label": "notif-ledger", "kind": "ledger", "textIncludes": ["Desktop notifications: "] },
+    { "label": "rl-ledger", "kind": "ledger", "textIncludes": ["API rate limit: "] },
+    { "label": "cache-ledger", "kind": "ledger", "textIncludes": ["Build cache keys: "] },
+    { "label": "bak-ledger", "kind": "ledger", "textIncludes": ["Store backup command: "] },
+    { "label": "plug-ledger", "kind": "ledger", "textIncludes": ["Plugin isolation: "] },
+    { "label": "i18n-ledger", "kind": "ledger", "textIncludes": ["Translate the panel: "] },
+    { "label": "met-ledger", "kind": "ledger", "textIncludes": ["Prometheus metrics: "] },
+    { "label": "watch-ledger", "kind": "ledger", "textIncludes": ["Debounce file watcher: "] },
+    { "label": "idx-ledger", "kind": "ledger", "textIncludes": ["Rebuild search index: "] },
+    { "label": "docs-ledger", "kind": "ledger", "textIncludes": ["Docs site build: "] },
+    { "label": "red-ledger", "kind": "ledger", "textIncludes": ["Redact secrets in logs: "] },
+    { "label": "tz-ledger", "kind": "ledger", "textIncludes": ["Cron schedules in local time: "] },
+    { "label": "tz-open", "kind": "open_question", "textIncludes": ["default to the daemon's zone"] },
+    { "label": "leak-ledger", "kind": "ledger", "textIncludes": ["Fix daemon memory leak: "] },
+    { "label": "port-ledger", "kind": "ledger", "textIncludes": ["Port in use at startup: "] },
+    { "label": "upd-ledger", "kind": "ledger", "textIncludes": ["Updater rollback: "] },
+    { "label": "appr-ledger", "kind": "ledger", "textIncludes": ["Command approval policy: "] },
+    { "label": "up-ledger", "kind": "ledger", "textIncludes": ["Stream large uploads: "] },
+    { "label": "a11y-ledger", "kind": "ledger", "textIncludes": ["Screen reader labels: "] }
+  ]
+}

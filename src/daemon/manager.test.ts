@@ -173,7 +173,7 @@ describe('NodeManager completion gates', () => {
     const passed = await m.runGate(id, { ...gate, command: 'echo current' });
     expect(passed).toEqual({ ok: true, tail: '$ echo current\ncurrent', failures: 1 });
     m.setOutcome(id, { outcome: 'succeeded', gate: 'passed', at: Date.now() });
-    expect(events).toEqual(['node:running:-', 'node:failed:-', 'node:running:-', 'node:passed:-', 'outcome', 'node:passed:succeeded', 'log:outcome']);
+    expect(events).toEqual(['node:running:-', 'node:failed:-', 'log:gate', 'node:running:-', 'node:passed:-', 'log:gate', 'outcome', 'node:passed:succeeded', 'log:outcome']);
     expect(await m.runGate(id, gate)).toMatchObject({ ok: false, failures: 1 });
     expect(readFileSync(join(m.nodeDir(id), 'gate.log'), 'utf8')).toContain('previous');
   });

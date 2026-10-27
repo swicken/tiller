@@ -39,6 +39,48 @@ describe('launchArgs', () => {
   });
 });
 
+describe('the memory gardener\'s launch (spike S0, decision 1)', () => {
+  const tools = ['mcp__tiller__garden_list', 'mcp__tiller__garden_get', 'mcp__tiller__garden_merge', 'mcp__tiller__garden_supersede'];
+  const i = {
+    nodeId: 'n-g', nodeDir: '/tmp/n-g', endpoint: 'http://x', path: '/bin', title: 'Memory gardener · repo', parentId: null, home: '/nonexistent', cwd: '/repo',
+    sessionId: 's', model: 'claude-haiku-5-5', effort: 'medium', permissionMode: 'plan', role: 'worker' as const, prompt: 'Garden run r1', gardener: { maxTurns: 20 },
+    // Everything below must be ignored for a gardener.
+    sessionDir: '/sessions/n-g', inheritMcpServers: true, memory: '# Memory\nx', preset: { name: 'p', source: 'p.md', body: 'preset body', tools: ['Bash'] }, resume: true,
+  };
+  it('is exactly the S0 command line, whatever else the input carries', () => {
+    const plugins = launchArgs({ ...i, gardener: undefined }).flatMap((a, k, all) => (a === '--plugin-dir' ? ['--plugin-dir', all[k + 1]] : []));
+    expect(plugins).toHaveLength(4);
+    const system = "You are tiller's memory gardener (node n-g). Your only tools are the four garden tools. Each result reports callsLeft: end your turn before it reaches 0.";
+    const args = launchArgs(i);
+    expect(args.indexOf('--append-system-prompt')).toBe(args.length - 4);
+    expect(args.at(-3)!.startsWith(`${system}\n\n# Memory gardener\n`)).toBe(true);
+    expect([...args.slice(0, -3), ...args.slice(-2)]).toEqual([
+      '--session-id', 's', '--name', 'Memory gardener · repo', '--model', 'claude-haiku-5-5', '--effort', 'medium',
+      '--permission-mode', 'dontAsk', '--restricted', '--tools', '', '--strict-mcp-config', '--disable-slash-commands', ...plugins,
+      '--agents', JSON.stringify({ 'tiller-gardener': { description: 'tiller memory gardener', prompt: '', tools, maxTurns: 20 } }), '--agent', 'tiller-gardener',
+      '--settings', '/tmp/n-g/settings.json', '--mcp-config', '/tmp/n-g/mcp.json', '--append-system-prompt', '--', 'Garden run r1',
+    ]);
+    expect(args.join('\n')).not.toMatch(/TL MESSAGE|handoff\.md|report_outcome|# Memory\n|preset body/);
+  });
+  it('sets both S0 env switches, the node env and the account, and no session directory', () => {
+    const { file, env } = claudeLaunch({ ...i, claudeConfigDir: '/acct/work' });
+    expect(file).toBe('claude');
+    expect(env).toMatchObject({ CLAUDE_CODE_DISABLE_ADVISOR_TOOL: '1', CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1', CLAUDE_CONFIG_DIR: '/acct/work', TL_NODE_ID: 'n-g', TL_ENDPOINT: 'http://x', TL_TOKEN_FILE: '/tmp/n-g/token' });
+    expect(claudeLaunch({ ...i, gardener: undefined }).env).not.toHaveProperty('CLAUDE_CODE_DISABLE_ADVISOR_TOOL');
+  });
+  it('writes settings that allow exactly the four garden tools', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tl-gardener-files-'));
+    try {
+      writeNodeFiles(dir, { nodeId: 'n-g', endpoint: 'http://x', token: 't', allow: tools });
+      const settings = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'));
+      expect(settings.permissions).toEqual({ allow: tools });
+      expect(Object.keys(settings.hooks)).toContain('PreToolUse');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('Claude account environment', () => {
   let dir = '';
   afterEach(() => { vi.unstubAllEnvs(); rmSync(dir, { recursive: true, force: true }); });
@@ -128,6 +170,23 @@ describe('task profile prompts', () => {
     const p = systemPrompt({ ...base, profile: 'reviewer', preset: { name: 'custom', body: 'Custom behavior', source: 'x' } });
     expect(p).toContain('Custom behavior');
     expect(p).not.toContain('Review the supplied change');
+  });
+});
+
+describe('memory digest in the system prompt', () => {
+  const base = { nodeId: 'n', title: 't', parentId: 'p', home: '/nonexistent', cwd: '/nonexistent' };
+  const memory = '# Memory\n\nHeader.\n\n## Pitfalls\n- [m1] 1d ago · n-x claude: gate `npm test` failed: x';
+  it('appends it last, after the role and task profile or a preset body, for every harness', () => {
+    for (const harness of ['claude', 'pi', 'codex'] as const) {
+      for (const o of [{ ...base, harness }, { ...base, harness, preset: { name: 'p', body: 'Custom behavior', source: 'x' } }]) {
+        expect(systemPrompt({ ...o, memory })).toBe(`${systemPrompt(o)}\n\n${memory}`);
+      }
+    }
+  });
+  it('leaves the prompt unchanged when unset or empty', () => {
+    expect(systemPrompt({ ...base, memory: '' })).toBe(systemPrompt(base));
+    expect(launchArgs({ ...base, nodeDir: '/tmp/n', endpoint: 'http://x', path: '', sessionId: 's', memory: undefined }))
+      .toEqual(launchArgs({ ...base, nodeDir: '/tmp/n', endpoint: 'http://x', path: '', sessionId: 's' }));
   });
 });
 

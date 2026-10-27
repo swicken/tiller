@@ -1,0 +1,122 @@
+[
+  { "id": "ws-reconnect", "relevant": ["@sock-ledger", "@sock-pitfall"], "queries": [
+    { "class": "lexical", "text": "panel websocket reconnect backoff" },
+    { "class": "synonym", "text": "dashboard websocket reconnect" },
+    { "class": "harness-phrasing", "text": "exec the websocket reconnect check inside the sandbox" } ] },
+  { "id": "migration", "relevant": ["@mig-ledger", "@mig-pitfall", "@mig-proc"], "queries": [
+    { "class": "lexical", "text": "sqlite schema migration runner" },
+    { "class": "synonym", "text": "sqlite schema upgrade runner" },
+    { "class": "harness-phrasing", "text": "under the workspace-write sandbox, exec the sqlite migration tests" } ] },
+  { "id": "exit-codes", "relevant": ["@exit-ledger", "@exit-note"], "queries": [
+    { "class": "lexical", "text": "lantern cli exit code for an unreachable daemon" },
+    { "class": "synonym", "text": "lantern cli return status when the daemon is unreachable" },
+    { "class": "harness-phrasing", "text": "exec lantern cli in the sandbox and read the exit code" } ] },
+  { "id": "config-precedence", "relevant": ["@cfg-ledger", "@cfg-pitfall", "@cfg-proc"], "queries": [
+    { "class": "lexical", "text": "config precedence between project file, user file and environment" },
+    { "class": "synonym", "text": "config priority between project file and user file" },
+    { "class": "harness-phrasing", "text": "approval policy for project config keys in lantern" } ] },
+  { "id": "release-signing", "relevant": ["@sign-ledger", "@sign-pitfall"], "queries": [
+    { "class": "lexical", "text": "notarize macOS release signing" },
+    { "class": "synonym", "text": "notarize macOS build certificate" },
+    { "class": "harness-phrasing", "text": "exec notarytool outside the sandbox with network approval" } ] },
+  { "id": "flaky-test", "relevant": ["@flaky-ledger", "@flaky-pitfall", "@flaky-proc"], "queries": [
+    { "class": "lexical", "text": "intermittent scheduler test failure on CI" },
+    { "class": "synonym", "text": "flaky scheduler test on CI" },
+    { "class": "harness-phrasing", "text": "exec vitest with repeat in the sandbox to catch the intermittent failure" } ] },
+  { "id": "keyboard-shortcuts", "relevant": ["@keys-ledger", "@keys-note"], "queries": [
+    { "class": "lexical", "text": "ui keyboard shortcuts" },
+    { "class": "synonym", "text": "frontend keyboard shortcuts" },
+    { "class": "harness-phrasing", "text": "approval policy blocks keyboard shortcut tests in the sandbox" } ] },
+  { "id": "dead-letter", "relevant": ["@dlq-ledger", "@dlq-pitfall", "@dlq-open"], "queries": [
+    { "class": "lexical", "text": "dead-letter queue retry attempts" },
+    { "class": "synonym", "text": "dead-letter queue retry limit" },
+    { "class": "harness-phrasing", "text": "exec lantern jobs --dead to list the dead-letter queue" } ] },
+  { "id": "log-rotation", "relevant": ["@log-ledger", "@log-pitfall"], "queries": [
+    { "class": "lexical", "text": "rotate the daemon log by size" },
+    { "class": "synonym", "text": "rotate the daemon logfile at a size limit" },
+    { "class": "harness-phrasing", "text": "exec tail -F on the daemon log inside the sandbox" } ] },
+  { "id": "token-expiry", "relevant": ["@tok-ledger", "@tok-pitfall", "@tok-proc"], "queries": [
+    { "class": "lexical", "text": "session token expiry when idle" },
+    { "class": "synonym", "text": "session token timeout" },
+    { "class": "harness-phrasing", "text": "approval policy for lantern auth revoke of session tokens" } ] },
+  { "id": "worktree-cleanup", "relevant": ["@wt-ledger", "@wt-pitfall"], "queries": [
+    { "class": "lexical", "text": "git worktree prune stale" },
+    { "class": "synonym", "text": "git worktree garbage collection" },
+    { "class": "harness-phrasing", "text": "exec git worktree remove outside the sandbox" } ] },
+  { "id": "pty-resize", "relevant": ["@pty-ledger", "@pty-pitfall"], "queries": [
+    { "class": "lexical", "text": "terminal pty resize rows and columns" },
+    { "class": "synonym", "text": "terminal pty window size change" },
+    { "class": "harness-phrasing", "text": "exec a pty resize test in the sandbox" } ] },
+  { "id": "notifications", "relevant": ["@notif-ledger", "@notif-note"], "queries": [
+    { "class": "lexical", "text": "desktop notifications when a job needs input" },
+    { "class": "synonym", "text": "desktop alerts when a job needs input" },
+    { "class": "harness-phrasing", "text": "an approval prompt should raise desktop notifications" } ] },
+  { "id": "rate-limit", "relevant": ["@rl-ledger", "@rl-pitfall"], "queries": [
+    { "class": "lexical", "text": "http api rate limit token bucket" },
+    { "class": "synonym", "text": "http api request quota" },
+    { "class": "harness-phrasing", "text": "exec curl against the api rate limit in the sandbox" } ] },
+  { "id": "build-cache", "relevant": ["@cache-ledger", "@cache-pitfall"], "queries": [
+    { "class": "lexical", "text": "build cache key from the lockfile and node version" },
+    { "class": "synonym", "text": "build cache hash of the lockfile" },
+    { "class": "harness-phrasing", "text": "exec npm ci with the cache key in the sandbox" } ] },
+  { "id": "backup", "relevant": ["@bak-ledger", "@bak-pitfall"], "queries": [
+    { "class": "lexical", "text": "sqlite backup with vacuum into" },
+    { "class": "synonym", "text": "sqlite store export copy" },
+    { "class": "harness-phrasing", "text": "exec lantern backup in the workspace-write sandbox" } ] },
+  { "id": "plugin-isolation", "relevant": ["@plug-ledger", "@plug-pitfall", "@plug-proc"], "queries": [
+    { "class": "lexical", "text": "plugin permission manifest isolation" },
+    { "class": "synonym", "text": "extension permission manifest" },
+    { "class": "harness-phrasing", "text": "sandbox and approval policy for plugin network access" } ] },
+  { "id": "i18n", "relevant": ["@i18n-ledger", "@i18n-pitfall"], "queries": [
+    { "class": "lexical", "text": "translate panel strings into locales" },
+    { "class": "synonym", "text": "localize panel strings into locales" },
+    { "class": "harness-phrasing", "text": "exec a check for missing locales strings" } ] },
+  { "id": "metrics", "relevant": ["@met-ledger", "@met-note"], "queries": [
+    { "class": "lexical", "text": "prometheus metrics endpoint for queue latency" },
+    { "class": "synonym", "text": "prometheus telemetry endpoint" },
+    { "class": "harness-phrasing", "text": "exec curl on the metrics endpoint inside the sandbox" } ] },
+  { "id": "file-watcher", "relevant": ["@watch-ledger", "@watch-pitfall"], "queries": [
+    { "class": "lexical", "text": "debounce file watcher events" },
+    { "class": "synonym", "text": "throttle file watcher events" },
+    { "class": "harness-phrasing", "text": "exec fs.watch tests in the sandbox" } ] },
+  { "id": "search-index", "relevant": ["@idx-ledger", "@idx-pitfall"], "queries": [
+    { "class": "lexical", "text": "rebuild the search index" },
+    { "class": "synonym", "text": "rebuild the search catalogue" },
+    { "class": "harness-phrasing", "text": "exec lantern index --rebuild outside the sandbox" } ] },
+  { "id": "docs-site", "relevant": ["@docs-ledger", "@docs-pitfall"], "queries": [
+    { "class": "lexical", "text": "docs site build with markdown" },
+    { "class": "synonym", "text": "documentation site build with markdown" },
+    { "class": "harness-phrasing", "text": "exec the docs build in the sandbox" } ] },
+  { "id": "redaction", "relevant": ["@red-ledger", "@red-pitfall", "@red-proc"], "queries": [
+    { "class": "lexical", "text": "redact secrets and api keys in logs" },
+    { "class": "synonym", "text": "scrub secrets from logs" },
+    { "class": "harness-phrasing", "text": "exec redact.test.ts in the sandbox" } ] },
+  { "id": "timezones", "relevant": ["@tz-ledger", "@tz-pitfall", "@tz-open"], "queries": [
+    { "class": "lexical", "text": "cron schedule across daylight saving in a zone" },
+    { "class": "synonym", "text": "cron schedule across summer time" },
+    { "class": "harness-phrasing", "text": "exec the cron schedule tests in the sandbox" } ] },
+  { "id": "memory-leak", "relevant": ["@leak-ledger", "@leak-pitfall"], "queries": [
+    { "class": "lexical", "text": "daemon memory leak from scrollback" },
+    { "class": "synonym", "text": "daemon heap growth from scrollback" },
+    { "class": "harness-phrasing", "text": "exec a heap snapshot of the daemon in the sandbox" } ] },
+  { "id": "port-conflict", "relevant": ["@port-ledger", "@port-pitfall"], "queries": [
+    { "class": "lexical", "text": "port in use eaddrinuse at startup" },
+    { "class": "synonym", "text": "port taken eaddrinuse on launch" },
+    { "class": "harness-phrasing", "text": "sandbox network approval for binding the daemon port" } ] },
+  { "id": "update-rollback", "relevant": ["@upd-ledger", "@upd-pitfall", "@upd-proc"], "queries": [
+    { "class": "lexical", "text": "updater rollback after a failed health check" },
+    { "class": "synonym", "text": "updater revert after a health check" },
+    { "class": "harness-phrasing", "text": "exec lantern update --channel canary in the sandbox" } ] },
+  { "id": "command-approval", "relevant": ["@appr-ledger", "@appr-pitfall", "@appr-proc"], "queries": [
+    { "class": "lexical", "text": "shell command approval allowlist" },
+    { "class": "synonym", "text": "shell command permission allowlist" },
+    { "class": "harness-phrasing", "text": "codex approval policy on-request for exec commands" } ] },
+  { "id": "large-upload", "relevant": ["@up-ledger", "@up-pitfall"], "queries": [
+    { "class": "lexical", "text": "stream large uploads to a temp file" },
+    { "class": "synonym", "text": "stream big uploads to a temp file" },
+    { "class": "harness-phrasing", "text": "exec a 2 GB upload test in the sandbox" } ] },
+  { "id": "accessibility", "relevant": ["@a11y-ledger", "@a11y-pitfall", "@a11y-proc"], "queries": [
+    { "class": "lexical", "text": "screen reader aria labels" },
+    { "class": "synonym", "text": "screen reader accessible names" },
+    { "class": "harness-phrasing", "text": "exec the axe audit with npm run a11y in the sandbox" } ] }
+]

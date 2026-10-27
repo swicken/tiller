@@ -1,0 +1,25 @@
+{
+  "name": "A3 repeat pitfall, different digits",
+  "claim": 1,
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-4d", "repo": "lib", "node": "n-a0000003", "root": "n-r0000003",
+      "event": { "type": "gate", "ok": false, "command": "npm run typecheck",
+        "tail": "src/rates.ts(41,7): error TS2345: Argument of type 'number' is not assignable to parameter of type 'Rate'.\nnpm run typecheck: exited with 2" } },
+    { "at": "-4d+8m", "repo": "lib", "node": "n-a0000003",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Wrapped the raw number in a Rate." } },
+    { "at": "-1d", "repo": "lib", "node": "n-a0000004", "root": "n-r0000003",
+      "event": { "type": "gate", "ok": false, "command": "npm run typecheck",
+        "tail": "src/rates.ts(97,12): error TS2345: Argument of type 'number' is not assignable to parameter of type 'Rate'.\nnpm run typecheck: exited with 2" } },
+    { "at": "-1d+6m", "repo": "lib", "node": "n-a0000004",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Same fix as before." } }
+  ],
+  "expectItems": [
+    { "label": "pit-ts2345", "kind": "pitfall", "author": "agent", "seen": 2, "textIncludes": ["error TS2345", "src/rates.ts("] }
+  ],
+  "exactCounts": { "pitfall": 1 },
+  "queries": [
+    { "id": "worker", "repo": "lib", "role": "worker", "brief": "Add a compound rate helper to src/rates.ts", "must": ["@pit-ts2345"] }
+  ]
+}

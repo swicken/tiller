@@ -49,6 +49,7 @@ function archiveModel(rec: NodeRecord, status?: NodeStatus): string | undefined 
 export function archivedOf(rec: NodeRecord, status: NodeStatus | undefined, outcome: Outcome | undefined, rootId: string, fate: BranchFate, closedAt = Date.now()): ArchivedNode {
   const a: Omit<ArchivedNode, 'brief'> = {
     id: rec.id, rootId, parentId: rec.parentId, title: rec.title, cwd: rec.cwd, model: archiveModel(rec, status), effort: rec.effort, explicit: rec.explicit, account: rec.account,
+    ...(rec.gardener ? { gardener: rec.gardener } : {}),
     role: roleFor(rec.role, rec.parentId), profile: profileFor(rec.profile, rec.parentId, rec.role), ...(rec.harness && rec.harness !== 'claude' ? { harness: rec.harness } : {}),
     prompt: rec.prompt, sessionId: rec.sessionId, previousSessions: rec.previousSessions, sessionHistory: rec.sessionHistory,
     transcriptPath: rec.transcriptPath, lastAssistantMessage: status?.lastAssistantMessage, outcome, spentUsd: rec.spentUsd, spentIncomplete: rec.spentIncomplete, lastCost: rec.lastCost,

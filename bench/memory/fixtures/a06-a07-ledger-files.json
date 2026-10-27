@@ -1,0 +1,37 @@
+{
+  "name": "A6 ledger as file index, A7 follow-up by path",
+  "claim": 4,
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "repeat": 10, "each": [
+      { "at": "-12d+{i}d", "repo": "lib", "node": "n-report{i}", "root": "n-r0000007",
+        "event": { "type": "spawn", "prompt": "Add report {i} to src/reports/r{i}.js" } },
+      { "at": "-12d+{i}d+20m", "repo": "lib", "node": "n-report{i}",
+        "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Added report {i} with tests.",
+          "changedFiles": ["src/reports/r{i}.js", "test/reports/r{i}.test.js"] } },
+      { "at": "-12d+{i}d+25m", "repo": "lib", "node": "n-report{i}",
+        "event": { "type": "close", "archived": { "title": "Report {i}", "branchFate": "merged", "base": "tl/reports" } } }
+    ] },
+    { "at": "-6d", "repo": "lib", "node": "n-rates01", "root": "n-r0000007",
+      "event": { "type": "spawn", "prompt": "Add getRates to src/rates.js" } },
+    { "at": "-6d+15m", "repo": "lib", "node": "n-rates01",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Added getRates with a one-minute cache.",
+        "verified": "`node --test test/` 9 passed", "changedFiles": ["src/rates.js", "test/rates.test.js"] } },
+    { "at": "-6d+20m", "repo": "lib", "node": "n-rates01",
+      "event": { "type": "close", "archived": { "title": "getRates", "branchFate": "merged", "base": "tl/rates" } } }
+  ],
+  "expectItems": [
+    { "label": "ledger-rates", "kind": "ledger", "author": "agent", "textIncludes": ["getRates: succeeded (gate passed)"],
+      "bodyIncludes": ["Files: src/rates.js, test/rates.test.js"] },
+    { "label": "ledger-report3", "kind": "ledger", "textIncludes": ["Report 3: "] }
+  ],
+  "exactCounts": { "ledger": 11 },
+  "searches": [
+    { "repo": "lib", "query": "src/rates.js", "first": "@ledger-rates" },
+    { "repo": "lib", "query": "rates", "first": "@ledger-rates" }
+  ],
+  "queries": [
+    { "id": "follow-up", "repo": "lib", "role": "worker", "brief": "Add setRates to src/rates.js", "must": ["@ledger-rates"] }
+  ]
+}

@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { ReactNode } from 'react';
 import { elements, type Element } from '../test-tree';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -187,6 +188,30 @@ it('keeps Settings, History, and Clear exited reachable without a redundant foot
   buttons[1].props.onClick(); expect(send).toHaveBeenCalledWith({ t: 'prune' });
   buttons[2].props.onClick(); expect(getState().historyOpen).toBe(true);
   expect(JSON.stringify(footer)).not.toContain('New child');
+});
+
+it('opens Memory from the footer for the selected node, or with no node, and closes it again', () => {
+  const memory = () => elements(find(Sidebar({ onSettings: () => {} }), (el) => el.type === 'footer')).find((el) => el.type === 'button' && el.props['aria-label'] === 'Memory')!;
+  memory().props.onClick();
+  expect(getState().memoryView).toEqual({ nodeId: 'child' });
+  expect(memory().props['aria-pressed']).toBe(true);
+  memory().props.onClick();
+  expect(getState().memoryView).toBeNull();
+  update(() => ({ selected: null }));
+  memory().props.onClick();
+  expect(getState().memoryView).toEqual({});
+  update(() => ({ memoryView: null }));
+});
+
+it('keeps the footer within the 240 px minimum sidebar: Memory is icon-only and the row wraps instead of overflowing', () => {
+  // Measured in Chrome: one row at 320 px, two at 240 px, nothing clipped. Here, the rules that make that so.
+  const memory = elements(find(Sidebar({ onSettings: () => {} }), (el) => el.type === 'footer')).find((el) => el.props['aria-label'] === 'Memory')!;
+  expect(memory.props.className).toContain('mem');
+  expect(memory.props.title).toMatch(/^Memory: /);
+  expect(elements(memory.props.children).map((el) => (el.type as { name?: string }).name)).toEqual(['Icon']);
+  const css = readFileSync(new URL('./sidebar.css', import.meta.url), 'utf8');
+  expect(css).toContain('.sidebar .sidefoot { flex-wrap: wrap; }');
+  expect(css).toContain('.sidefoot .btn.mem { flex: none; }');
 });
 
 it('preserves tree keyboard selection and collapse, while ignoring rename input keys', () => {

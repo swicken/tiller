@@ -126,9 +126,19 @@ describe('header views', () => {
     expect(getState().diffOpen).toBe(false); expect(getState().transcriptOpen).toBe(true);
     controls.find((b) => b.props['aria-label'] === 'Toggle last response panel')!.props.onClick!();
     expect(getState().panel).toBe(true); expect(getState().transcriptOpen).toBe(true);
+    controls.find((b) => b.props.children === 'Memory')!.props.onClick!();
+    expect(getState().memoryOpen).toBe(true); expect(getState().transcriptOpen).toBe(false);
     controls.find((b) => b.props.children === 'Terminal')!.props.onClick!();
-    expect(getState().diffOpen).toBe(false); expect(getState().transcriptOpen).toBe(false);
+    expect(getState().diffOpen).toBe(false); expect(getState().transcriptOpen).toBe(false); expect(getState().memoryOpen).toBe(false);
     togglePanel();
+  });
+
+  it('shows the Memory tab for agent nodes, not terminals', () => {
+    const html = (node: ReturnType<typeof mk>) => renderToStaticMarkup(<TitleBar node={node} />);
+    showPane('memory');
+    expect(html(mk('root', null, 0))).toContain('aria-pressed="true">Memory');
+    expect(html({ ...mk('pi', null, 0), kind: 'agent', harness: 'pi' })).toContain('aria-pressed="true">Memory');
+    expect(html({ ...mk('shell', null, 0), kind: 'terminal' })).not.toContain('>Memory<');
   });
 
   it('shows only supported views and never treats a hidden view as active', () => {

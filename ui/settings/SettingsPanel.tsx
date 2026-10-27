@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { MEMORY_ACCOUNT_KEY } from '../../src/shared/settings';
 import { token } from '../url';
 import { refreshUsage, send } from '../conn';
 import { useStore } from '../store';
-import { accountOptionLabel, accountStatus, accountsError, buildChanges, cliStatus, fieldPreview, groups, inputValue, optionLabel, profileFields, type Field, type Scope, type SettingsSnapshot } from './settings-model';
+import { accountOptionLabel, accountStatus, accountsError, buildChanges, cliStatus, fieldPreview, groups, inputValue, isMemoryChoice, memoryChoices, memoryFields, memoryStatus, optionLabel, profileFields, staleDrafts, type Field, type Scope, type SettingsSnapshot } from './settings-model';
 import { HARNESSES, HARNESS_LABELS, PROFILES } from '../../src/shared/protocol';
 import { Modal } from '../controls/Modal';
 import { Select } from '../controls/Select';
@@ -80,12 +81,14 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
       const title = HARNESS_LABELS[harness];
       return { title, help: 'Model and effort resolve independently. Spawn options and presets take precedence over these defaults.', fields: [...profileFields(harness), ...groups.filter((group) => group.title === title).flatMap((group) => group.fields)] };
     }),
-    ...groups.filter((group) => (!group.homeOnly || scope === 'home') && !harnessTitles.includes(group.title)),
+    ...groups.filter((group) => (!group.homeOnly || scope === 'home') && !harnessTitles.includes(group.title))
+      .map((group) => group.title === 'Memory' ? { ...group, fields: memoryFields(group.fields, scope, claudeAccounts) } : group),
   ];
   const matches = (field: Field, title = '', query = search) => !query.trim() || `${title} ${field.label} ${field.key} ${field.help ?? ''}`.toLowerCase().includes(query.trim().toLowerCase());
   const active = sections.find((section) => section.title === category) ?? sections[0];
   const visibleFields = active.fields.filter((field) => matches(field, active.title));
   const fields = sections.flatMap((group) => group.fields);
+  const stale = staleDrafts(drafts, fields);
   useEffect(() => {
     const roots = [document.documentElement, document.body].filter(Boolean);
     const overflow = roots.map((root) => root.style.overflow);
@@ -288,9 +291,26 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
       </div>
     </div>;
   }
+  // A memory opt-in is set on, set off, or not set (inherit), so it is a select rather than a switch.
+  function renderMemoryChoice(field: Field) {
+    if (!snapshot) return null;
+    const { key, label } = field, id = `setting-${key}`;
+    const drafted = Object.hasOwn(drafts, key);
+    const value = drafted ? drafts[key] ?? '' : Object.hasOwn(snapshot.values, key) ? String(snapshot.values[key]) : '';
+    return <div className="settings-field" key={key}>
+      <div className="settings-label"><label id={`${id}-label`} htmlFor={id}>{label}</label><p id={`${id}-help`}>{field.help}</p></div>
+      <div className="settings-control">
+        <Select id={id} disabled={busy} value={value} aria-describedby={`${id}-help`} onChange={(e) => edit(key, e.target.value || null)}>
+          {memoryChoices(key).map(([option, name]) => <option key={option} value={option}>{name}</option>)}
+        </Select>
+        {drafted && <div className="settings-detail"><span className="settings-pending">Unsaved</span></div>}
+      </div>
+    </div>;
+  }
   function renderField(field: Field) {
     if (!snapshot) return null;
     if (field.key === 'claude.account') return renderAccount(field);
+    if (isMemoryChoice(field.key)) return renderMemoryChoice(field);
     const { key, label } = field;
     const { drafted, explicit, entry, raw, previewUnavailable } = fieldPreview(snapshot, drafts, field);
     const action = explicit ? scope === 'project' ? 'Remove repository override' : 'Use inherited default' : scope === 'project' ? 'Customize for this repository' : 'Customize globally';
@@ -334,7 +354,7 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
       <div className="settings-search"><SettingsIcon name="Search" /><input autoFocus type="search" aria-label="Search settings" placeholder="Search settings" value={search} onChange={(event) => { const query = event.target.value; setSearch(query); if (query.trim()) { const first = sections.find((section) => section.fields.some((field) => matches(field, section.title, query))); if (first) setCategory(first.title); } }} /></div>
       <nav className="settings-categories" aria-label="Settings categories">
         <div className="settings-nav-group"><h3>Agents</h3>{['Claude', 'Pi', 'Codex'].map(navButton)}</div>
-        <div className="settings-nav-group"><h3>Workflow</h3>{['Notifications', 'Limits', 'Worktrees', 'Approvals & checks'].map(navButton)}</div>
+        <div className="settings-nav-group"><h3>Workflow</h3>{['Notifications', 'Limits', 'Worktrees', 'Memory', 'Approvals & checks'].map(navButton)}</div>
         <details className="settings-advanced" open={search.trim() ? true : undefined}><summary>Advanced</summary>{['Legacy Claude roles', ...(scope === 'home' ? ['Daemon'] : []), 'CLI diagnostics'].map(navButton)}</details>
       </nav>
     </aside>
@@ -347,6 +367,7 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
     <div className="settings-content" ref={content} aria-busy={busy}>
       {discard && <div className="settings-notice" role="alert"><p>Discard unsaved changes?</p><button className="btn" onClick={() => setDiscard(null)}>Keep editing</button>{' '}<button className="btn danger" onClick={() => { const target = discard; setDiscard(null); setDrafts({}); if (target === 'close') onClose(); else setScope(target); }}>Discard changes</button></div>}
       {(error || conflict) && <div className="settings-notice settings-error" role="alert"><p>{error || 'Settings changed on disk. Reload the latest settings before saving.'}</p>{conflict ? <><p>The file changed since it was loaded. Reload discards your draft and loads the latest values.</p><button className="btn" disabled={busy} onClick={() => setReload((n) => n + 1)}>Reload latest settings</button></> : !snapshot && <button className="btn" disabled={busy} onClick={() => setReload((n) => n + 1)}>Retry</button>}</div>}
+      {stale.length > 0 && <p className="settings-notice" role="status">Not saved: {stale.map((key) => MEMORY_ACCOUNT_KEY.exec(key)![1]).join(', ')} {stale.length === 1 ? 'is' : 'are'} no longer a usable Claude account. Other changes still save.</p>}
       {success && <p className="settings-success" role="status">{success}</p>}
       {!snapshot && busy && <p role="status">Loading settings…</p>}
       {category === 'CLI diagnostics' && <div className="settings-page-heading"><h1>CLI diagnostics</h1><p>Check which supported tools are available to the daemon.</p></div>}
@@ -371,6 +392,15 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
           </> : active.title === 'Approvals & checks' ? <>
             {visibleFields.some((field) => field.key.startsWith('approvals.')) && <section className="settings-subsection"><h2>Approvals</h2>{visibleFields.filter((field) => field.key.startsWith('approvals.')).map(renderField)}</section>}
             {visibleFields.some((field) => field.key.startsWith('gate.')) && <section className="settings-subsection"><h2>Completion checks</h2><p>Require a command to pass before a worker reports success.</p>{visibleFields.filter((field) => field.key.startsWith('gate.')).map(renderField)}</section>}
+          </> : active.title === 'Memory' ? <>
+            {memoryStatus(snapshot) && <p className="settings-account-note" role="status">{memoryStatus(snapshot)}</p>}
+            {accountsError(claudeAccounts) && <p className="settings-account-note" role="alert">{accountsError(claudeAccounts)}</p>}
+            {visibleFields.map(renderField)}
+            {scope === 'home' && <section className="settings-subsection">
+              <h2>Repository settings</h2>
+              {snapshot.memory?.projects?.length ? <ul className="settings-memory-projects">{snapshot.memory.projects.map((p) => <li key={p.path}><code className="mono">{p.path}</code> <span>{p.enabled ? 'On' : 'Off'}</span></li>)}</ul> : <p>No repository has its own memory setting.</p>}
+              <p>Each repository sets its own under Settings with a node selected, or with tl memory. To browse what is stored, use the Memory icon in the sidebar footer.</p>
+            </section>}
           </> : visibleFields.map(renderField)}
           {search.trim() && !visibleFields.length && <p role="status">No matching settings. Try another search.</p>}
         </section>}
@@ -391,6 +421,7 @@ function SettingsIcon({ name }: { name: string }) {
     Notifications: 'M5 17h14l-2-3v-4a5 5 0 0 0-10 0v4l-2 3 M10 21h4 M12 3v2',
     Limits: 'M4 7h16 M4 17h16 M8 4v6 M16 14v6',
     Worktrees: 'M6 3v12a4 4 0 0 0 4 4h8 M6 8h8a4 4 0 0 0 4-4 M3 3h6 M15 3h6 M15 22h6',
+    Memory: 'M12 5c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3 M4 8v8c0 1.7 3.6 3 8 3s8-1.3 8-3V8 M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
     'Approvals & checks': 'M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3 M8 12l3 3 5-6',
   };
   return <svg className="settings-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name] ?? 'M5 7h14 M5 12h14 M5 17h14 M8 5v4 M16 10v4 M10 15v4'} /></svg>;

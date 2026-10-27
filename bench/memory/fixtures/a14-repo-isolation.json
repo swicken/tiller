@@ -1,0 +1,38 @@
+{
+  "name": "A14 repo isolation",
+  "claim": 5,
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib", "other": "git:bench.invalid/other" },
+  "episodes": [
+    { "at": "-2d", "repo": "lib", "node": "n-isolib", "root": "n-r0000014",
+      "event": { "type": "gate", "ok": false, "command": "npm test", "tail": "error: missing export formatCents in src/format.js\nnpm test: exited with 1" } },
+    { "at": "-2d+5m", "repo": "lib", "node": "n-isolib",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Exported formatCents.", "verified": "`npm test` passed", "changedFiles": ["src/format.js"] } },
+    { "at": "-2d+6m", "repo": "lib", "node": "n-isolib", "event": { "type": "close", "archived": { "title": "Export formatCents" } } },
+    { "at": "-1d", "repo": "other", "node": "n-isooth", "root": "n-r0000015",
+      "event": { "type": "gate", "ok": false, "command": "npm test", "tail": "error: missing export formatCents in src/format.js\nnpm test: exited with 1" } },
+    { "at": "-1d+5m", "repo": "other", "node": "n-isooth",
+      "event": { "type": "outcome", "outcome": "succeeded", "gate": "passed", "summary": "Exported formatCents.", "verified": "`npm test` passed", "changedFiles": ["src/format.js"] } },
+    { "at": "-1d+6m", "repo": "other", "node": "n-isooth", "event": { "type": "close", "archived": { "title": "Export formatCents" } } }
+  ],
+  "expectItems": [
+    { "label": "pit-lib", "kind": "pitfall", "repo": "lib", "textIncludes": ["missing export formatCents"] },
+    { "label": "pit-other", "kind": "pitfall", "repo": "other", "textIncludes": ["missing export formatCents"] },
+    { "label": "ledger-lib", "kind": "ledger", "repo": "lib" },
+    { "label": "ledger-other", "kind": "ledger", "repo": "other" },
+    { "label": "proc-lib", "kind": "procedure", "repo": "lib" },
+    { "label": "proc-other", "kind": "procedure", "repo": "other" }
+  ],
+  "exactCounts": { "pitfall": 2, "ledger": 2, "procedure": 2 },
+  "searches": [
+    { "repo": "lib", "query": "formatCents", "includes": ["@pit-lib", "@ledger-lib"], "excludes": ["@pit-other", "@ledger-other"] }
+  ],
+  "queries": [
+    { "id": "lib-worker", "repo": "lib", "role": "worker", "brief": "Fix the formatCents export in src/format.js",
+      "must": ["@pit-lib", "@ledger-lib"], "should": ["@proc-lib"], "forbidden": ["@pit-other", "@ledger-other", "@proc-other"] },
+    { "id": "lib-orchestrator", "repo": "lib", "role": "orchestrator",
+      "must": ["@pit-lib", "@ledger-lib", "@proc-lib"], "forbidden": ["@pit-other", "@ledger-other", "@proc-other"] },
+    { "id": "other-orchestrator", "repo": "other", "role": "orchestrator",
+      "must": ["@pit-other", "@ledger-other", "@proc-other"], "forbidden": ["@pit-lib", "@ledger-lib", "@proc-lib"] }
+  ]
+}

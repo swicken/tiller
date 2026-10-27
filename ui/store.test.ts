@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { claudeAccounts, conversation, mk } from './fixtures';
-import { applyServer, conversationRequested, conversationsRequested, diffRequested, expectSpawn, getState, toggleShowTools, update, transcriptRequested } from './store';
+import { applyServer, conversationRequested, conversationsRequested, diffRequested, expectSpawn, getState, memoryActionRequested, memoryRequested, selectNode, showPane, toggleShowTools, update, transcriptRequested, viewArchived, viewMemory } from './store';
+import type { MemoryPage } from '../src/shared/protocol';
 
 it('the diff panel shows the diff reply\'s own failure, not another error for the same node', () => {
   diffRequested('a');
@@ -142,4 +143,76 @@ it('keeps the latest claudeAccounts reply', () => {
   expect(getState().claudeAccounts).toEqual(claudeAccounts);
   applyServer({ t: 'claudeAccounts', accounts: [] });
   expect(getState().claudeAccounts).toEqual([]);
+});
+
+const memoryPage = (items: number[]): MemoryPage => ({
+  target: { account: null }, file: '_default', state: 'ok', quarantined: [], files: [], repos: [], on: true, source: 's',
+  counts: { ledger: 0, open_question: 0, procedure: 0, pitfall: 0, note: 0, pinned: 0, retracted: 0 },
+  items: items.map((id) => ({ id, kind: 'note', text: `m${id}`, author: 'human', seen: 0, pinned: false, createdAt: 0, updatedAt: 0 })),
+});
+
+it('keeps a memory reply only for the latest rid of its slot, and appends a Load more', () => {
+  const stale = memoryRequested('memory', 0);
+  const latest = memoryRequested('memory', 0);
+  applyServer({ t: 'memory', rid: stale, ...memoryPage([1]) });
+  expect(getState().memory).toEqual({ rid: latest, data: undefined, more: false });
+  applyServer({ t: 'memory', rid: latest, ...memoryPage([2]) });
+  expect(getState().memory?.data?.items.map((i) => i.id)).toEqual([2]);
+  const more = memoryRequested('memory', 0, true);
+  expect(getState().memory?.data?.items.map((i) => i.id)).toEqual([2]); // shown while the next page is out
+  applyServer({ t: 'memory', rid: more, ...memoryPage([3]) });
+  expect(getState().memory?.data?.items.map((i) => i.id)).toEqual([2, 3]);
+  const failed = memoryRequested('memory', 0);
+  applyServer({ t: 'memory', rid: failed, error: 'dir must be the absolute path of a directory: x' });
+  expect(getState().memory).toMatchObject({ rid: failed, error: 'dir must be the absolute path of a directory: x' });
+  expect(getState().memory?.data?.items.map((i) => i.id)).toEqual([2, 3]); // the page stays, to correct the target from
+  memoryRequested('memory', failed); // a pane opened after that reply does not show it
+  expect(getState().memory?.data).toBeUndefined();
+
+  const item = memoryRequested('memoryItem', 0);
+  applyServer({ t: 'memoryItem', rid: item - 1, error: 'stale' });
+  expect(getState().memoryItem).toEqual({ rid: item, data: undefined });
+  applyServer({ t: 'memoryItem', rid: item, error: 'no item m9' });
+  expect(getState().memoryItem).toEqual({ rid: item, error: 'no item m9' });
+  const given = memoryRequested('memoryGiven', 0);
+  applyServer({ t: 'memoryGiven', rid: given, injections: [] });
+  expect(getState().memoryGiven).toEqual({ rid: given, data: [] });
+  const claude = memoryRequested('claudeMemory', 0);
+  applyServer({ t: 'claudeMemory', rid: claude + 1, dir: '/d', files: [], omitted: [] });
+  expect(getState().claudeMemory).toEqual({ rid: claude, data: undefined });
+});
+
+it('a memory action reply toasts its result and bumps the revision the open pane refetches on', () => {
+  const rev = getState().memoryRev;
+  applyServer({ t: 'memoryAction', rid: memoryActionRequested('restore'), item: memoryPage([4]).items[0] });
+  applyServer({ t: 'memoryAction', rid: memoryActionRequested('pin'), error: 'memory is off for /r' });
+  expect(getState().memoryRev).toBe(rev + 2);
+  expect(getState().memoryActed).toEqual({ rid: expect.any(Number), ok: false });
+  expect(getState().toasts.slice(-2).map((t) => [t.text, t.tone])).toEqual([['Restored m4', 'ok'], ['Memory not changed: memory is off for /r', 'bad']]);
+});
+
+it('showPane memory clears the other panes, and the memory view and a closed node replace each other', () => {
+  showPane('transcript');
+  showPane('memory');
+  expect([getState().memoryOpen, getState().transcriptOpen, getState().diffOpen]).toEqual([true, false, false]);
+  showPane('diff');
+  expect(getState().memoryOpen).toBe(false);
+  const closed = { id: 'c', rootId: 'c', parentId: null, title: 'c', cwd: '/w', createdAt: 0, closedAt: 1 };
+  viewArchived(closed);
+  viewMemory({ nodeId: 'c' });
+  expect([getState().archived, getState().memoryView]).toEqual([null, { nodeId: 'c' }]);
+  viewArchived(closed);
+  expect([getState().archived, getState().memoryView]).toEqual([closed, null]);
+  viewMemory({ nodeId: 'c' }, closed);
+  viewMemory(null); // closing a view opened from a closed node's pane shows that pane again
+  expect([getState().archived, getState().memoryView]).toEqual([closed, null]);
+  viewMemory(null);
+  expect(getState().archived).toBe(closed);
+  viewMemory({});
+  viewMemory(null);
+  expect([getState().archived, getState().memoryView]).toEqual([null, null]);
+  viewMemory({});
+  update((s) => ({ nodes: { ...s.nodes, sel: mk('sel', null, 0) } }));
+  selectNode('sel');
+  expect(getState().memoryView).toBeNull();
 });

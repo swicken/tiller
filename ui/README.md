@@ -11,7 +11,12 @@ React + xterm.js front-end for the tiller daemon. It speaks the WebSocket protoc
 
 ## Developing without the daemon
 
-The mock daemon has three sessions (one with a blocked node and a pending command, one with an errored node, one idle), an exited node, and mixed models and context usage. Spawn, rename, resume, close and prune work in memory, and a confirm request arrives 15 seconds after connecting. History has four closed nodes across two trees; every Claude node has a fake transcript ("daemon" and the closed "auth refactor" have two sessions), and follow-up and fork make new nodes. Every agent node also has conversations: a child thread has a brief, tool-call turns, a queued-then-delivered message, a message without recorded text and an outcome; exited and closed children add a daemon notice, the closed "css tokens" a merge event, working children a still-queued message, and "tests" and "ui polish" a peer exchange. The new-session dialog lists three Claude accounts (one logged out, to show its login command); the dotcms-core session runs in the "work" account and its children inherit it.
+The mock daemon has three sessions (one with a blocked node and a pending command, one with an errored node, one idle), an exited node, and mixed models and context usage. Spawn, rename, resume, close and prune work in memory, and a confirm request arrives 15 seconds after connecting. History has five closed nodes across three trees; every Claude node has a fake transcript ("daemon" and the closed "auth refactor" have two sessions), and follow-up and fork make new nodes. Every agent node also has conversations: a child thread has a brief, tool-call turns, a queued-then-delivered message, a message without recorded text and an outcome; exited and closed children add a daemon notice, the closed "css tokens" a merge event, working children a still-queued message, and "tests" and "ui polish" a peer exchange. The new-session dialog lists three Claude accounts (one logged out, to show its login command); the dotcms-core session runs in the "work" account and its children inherit it.
+
+The Memory panel (a node's Memory tab, the sidebar footer's Memory button or a closed node's Memory button) reads account files keyed as the daemon keys them: `_default` (no account, shared by personal, which has no Claude home of its own), work, and a broken one (client) with a quarantined copy. Their repositories hold items in every kind and state: pins, agent and human retractions, a superseded item, evicted and purged tombstones, a search-only item and one hidden by the gardener. tiller and dotcms-core have checkouts with memory on, /tmp/scratch has memory off, and old-site has no known checkout; the closed "old site fix" node's checkout is gone, so its page has no repository. Actions change the items in memory. The Given section has digests for tiller, ui polish (with a resume row), tests (an A/B off-arm row), dotcms-core and the closed "auth refactor". Claude Code memory shows `MEMORY.md`, a file with frontmatter, a hostile file, a truncated file and two omitted names for tiller; a symlink note for dotcms-core; and none for scratch. `TL_MOCK_MEMORY_ITEMS=N` adds N generated items to tiller for timing the panel.
+
+The mock supports **More actions → Change harness…** in memory, including mixed-harness session
+labels. It starts no agent processes and requires no authenticated provider account.
 
     node ui/mock-server.mjs                                  # ws on :7789, token "mock"
     TL_WS=http://127.0.0.1:7789 npm run ui:dev               # then open the printed URL with ?k=mock
@@ -43,6 +48,7 @@ ui/
   dialogs/                      application spawn, lifecycle and update dialogs
   release-notes/                release rendering, parser and historical fixtures
   transcript/                   conversations between nodes, full transcripts and archived node history
+  memory/                       the Memory panel: items, digests given to a node and Claude Code's own memory
   controls/                     shared actions, metadata, rename, modal, select,
                                 Markdown, external links and inline SVG icons
   store.ts, conn.ts             shared client state and daemon connection

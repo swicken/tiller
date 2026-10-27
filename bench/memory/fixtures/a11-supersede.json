@@ -1,0 +1,29 @@
+{
+  "name": "A11 supersede",
+  "claim": 5,
+  "now": "2026-10-20T12:00:00Z",
+  "repos": { "lib": "git:bench.invalid/ledgerlib" },
+  "episodes": [
+    { "at": "-5d", "repo": "lib", "node": "n-s1", "root": "n-r0000011", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Wrote the release notes." } },
+    { "at": "-5d+1m", "repo": "lib", "node": "n-s1", "op": { "type": "add", "kind": "note", "text": "Release notes go in docs/releases.md", "label": "note-old-agent" } },
+    { "at": "-2d", "repo": "lib", "node": "n-s2", "root": "n-r0000011", "event": { "type": "outcome", "outcome": "succeeded", "summary": "Moved the release notes." } },
+    { "at": "-2d+1m", "repo": "lib", "node": "n-s2",
+      "op": { "type": "add", "kind": "note", "text": "Release notes go in CHANGELOG.md under Unreleased", "supersedes": "@note-old-agent", "label": "note-new-agent" } },
+    { "at": "-4d", "repo": "lib", "actor": "human", "op": { "type": "add", "kind": "note", "text": "Ask before bumping the Node version", "label": "note-old-human" } },
+    { "at": "-1d", "repo": "lib", "actor": "human",
+      "op": { "type": "add", "kind": "note", "text": "Node stays on 24 LTS until the human says otherwise", "supersedes": "@note-old-human", "label": "note-new-human" } }
+  ],
+  "expectItems": [
+    { "label": "note-old-agent", "retracted": true },
+    { "label": "note-new-agent", "retracted": false, "author": "agent", "nodeId": "n-s2" },
+    { "label": "note-old-human", "retracted": true },
+    { "label": "note-new-human", "retracted": false, "author": "human" }
+  ],
+  "exactCounts": { "note": 4 },
+  "queries": [
+    { "id": "orchestrator", "repo": "lib", "role": "orchestrator", "must": ["@note-new-agent", "@note-new-human"],
+      "forbidden": ["@note-old-agent", "@note-old-human"] },
+    { "id": "worker", "repo": "lib", "role": "worker", "brief": "Write the release notes for the Node upgrade", "must": ["@note-new-agent"],
+      "forbidden": ["@note-old-agent", "@note-old-human"] }
+  ]
+}

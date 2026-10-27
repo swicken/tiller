@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
+import type { ArchivedNode, ClaudeAccountView, ClaudeMemoryView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, MemoryAction, MemoryInjectionView, MemoryItemDetail, MemoryPage, MemoryTarget, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
 import type { ReviewComment } from './diff';
 import { pickInitial, rootOf } from './sidebar/sessions';
 import { insertSorted, type Nodes } from './sidebar/tree';
@@ -14,6 +14,9 @@ export const ACTIVITY_LIMIT = 200;
 export const appendActivity = (items: Activity[], item: Activity): Activity[] => [item, ...items].slice(0, ACTIVITY_LIMIT);
 export const activityUnread = (items: Activity[]) => items.filter((item) => !item.read).length;
 export interface Confirm { confirmId: string; text: string }
+/** A memory reply slot: the latest request's rid; data stays while a refresh is out, so the view does not flicker. */
+export interface MemoryReply<T> { rid: number; data?: T; error?: string }
+export type MemorySlot = 'memory' | 'memoryItem' | 'memoryGiven' | 'claudeMemory';
 export type Dialog =
   | { kind: 'spawn'; parentId: string | null; cwd: string }
   | { kind: 'kill'; id: string }
@@ -87,6 +90,21 @@ export interface State {
   archived: ArchivedNode | null;
   /** Counts `removed` messages, so an open history asks again when a node is closed. */
   removals: number;
+  /** The Memory tab is showing instead of the terminal (for agent nodes). */
+  memoryOpen: boolean;
+  /** The Memory pane opened from the sidebar footer or a closed node, shown in the main pane over the selected node. */
+  memoryView: MemoryTarget | null;
+  /** The closed node whose pane opened the memory view; closing the view shows it again. */
+  memoryBack: ArchivedNode | null;
+  /** Memory panel replies, each kept only when its rid is the latest asked for. more: a Load more, appended to the page. */
+  memory: (MemoryReply<MemoryPage> & { more?: boolean }) | null;
+  memoryItem: MemoryReply<MemoryItemDetail> | null;
+  memoryGiven: MemoryReply<MemoryInjectionView[]> | null;
+  claudeMemory: MemoryReply<ClaudeMemoryView> | null;
+  /** Counts the human's memory action replies, so the open pane asks again. */
+  memoryRev: number;
+  /** The latest action reply: its rid and whether it succeeded. */
+  memoryActed: { rid: number; ok: boolean } | null;
 }
 
 const stored = readPref('tl.panel') === '1';
@@ -96,6 +114,7 @@ let state: State = {
   nodes: {}, order: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
   connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
   transcriptOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
+  memoryOpen: false, memoryView: null, memoryBack: null, memory: null, memoryItem: null, memoryGiven: null, claudeMemory: null, memoryRev: 0, memoryActed: null,
 };
 const subs = new Set<() => void>();
 let toastSeq = 0;
@@ -147,7 +166,8 @@ export const toggleShowTools = () => update((s) => {
 });
 
 /** What the stage shows for a live node. */
-export const showPane = (pane: 'terminal' | 'diff' | 'transcript') => update(() => ({ diffOpen: pane === 'diff', transcriptOpen: pane === 'transcript' }));
+export const showPane = (pane: 'terminal' | 'diff' | 'transcript' | 'memory') =>
+  update(() => ({ diffOpen: pane === 'diff', transcriptOpen: pane === 'transcript', memoryOpen: pane === 'memory' }));
 /** Note that a diff for `id` was asked for; conn.ts sends the request. */
 export const diffRequested = (id: string) => update((s) => ({ diff: s.diff?.id === id ? s.diff : { id } }));
 /** Note that a transcript for `id` (and `sessionId`, else the current one) was asked for; the caller sends the request. */
@@ -160,7 +180,31 @@ export const conversationsRequested = (id: string) =>
 export const conversationRequested = (id: string, peer?: string) =>
   update((s) => ({ conversation: s.conversation?.id === id && s.conversation.with === peer ? s.conversation : { id, with: peer } }));
 export const toggleHistory = () => update((s) => ({ historyOpen: !s.historyOpen }));
-export const viewArchived = (archived: ArchivedNode | null) => update(() => ({ archived }));
+export const viewArchived = (archived: ArchivedNode | null) => update(() => ({ archived, memoryView: null }));
+/** Open the memory view (from `back`, a closed node's pane, if given), or close it and show `back` again. */
+export const viewMemory = (memoryView: MemoryTarget | null, back: ArchivedNode | null = null) => update((s) => (memoryView
+  ? { memoryView, archived: null, memoryBack: back }
+  : s.memoryView ? { memoryView: null, archived: s.memoryBack, memoryBack: null } : {}));
+
+let memoryRid = 0;
+/** The last memory rid handed out: a pane opened now shows only replies to later requests, not another pane's. */
+export const lastMemoryRid = () => memoryRid;
+const actionKinds = new Map<number, MemoryAction['kind']>();
+const ACTION_DONE: Record<MemoryAction['kind'], string> = { pin: 'Pinned', pinText: 'Pinned', unpin: 'Unpinned', editPin: 'Edited', forget: 'Forgot', restore: 'Restored' };
+/**
+ * Note a memory request for `slot` and return its rid; the caller sends it. An older reply for the slot is then dropped.
+ * The data shown stays until the reply when it answered a request after `since` (the asking pane's own), else it goes.
+ */
+export function memoryRequested(slot: MemorySlot, since: number, more = false): number {
+  const rid = ++memoryRid;
+  update((s) => ({ [slot]: { rid, data: (s[slot]?.rid ?? 0) > since ? s[slot]?.data : undefined, ...(slot === 'memory' && { more }) } }));
+  return rid;
+}
+/** Note the human's memory action and return its rid; the caller sends it. Its reply toasts and makes the pane ask again. */
+export function memoryActionRequested(kind: MemoryAction['kind']): number {
+  actionKinds.set(++memoryRid, kind);
+  return memoryRid;
+}
 export const addComment = (c: ReviewComment) => update((s) => ({ comments: [...s.comments, c] }));
 export const removeComment = (c: ReviewComment) => update((s) => ({ comments: without(s.comments, c) }));
 export const clearComments = (nodeId: string) => update((s) => ({ comments: s.comments.filter((c) => c.nodeId !== nodeId) }));
@@ -177,10 +221,10 @@ function choose(s: State, nodes: Nodes, id: string | null): Partial<State> {
   };
 }
 
-export const selectNode = (id: string) => update((s) => (s.nodes[id] ? { archived: null, ...choose(s, s.nodes, id) } : {}));
+export const selectNode = (id: string) => update((s) => (s.nodes[id] ? { archived: null, memoryView: null, ...choose(s, s.nodes, id) } : {}));
 
 /** Switching session selects its root. */
-export const selectSession = (rootId: string) => update((s) => (s.session === rootId ? {} : { archived: null, ...choose(s, s.nodes, rootId) }));
+export const selectSession = (rootId: string) => update((s) => (s.session === rootId ? {} : { archived: null, memoryView: null, ...choose(s, s.nodes, rootId) }));
 
 /** Reducer for server messages that change state (data/notify are handled by conn.ts). */
 export function applyServer(m: ServerMessage) {
@@ -215,7 +259,7 @@ export function applyServer(m: ServerMessage) {
         const order = isNew ? insertSorted(s.order, s.nodes, m.node) : s.order;
         // The selected node is being looked at, so it never shows as unread.
         if (s.selected === m.node.id) nodes[m.node.id] = { ...m.node, unread: false };
-        if (isNew && s.awaitSpawn) return { order, awaitSpawn: false, archived: null, ...choose(s, nodes, m.node.id) };
+        if (isNew && s.awaitSpawn) return { order, awaitSpawn: false, archived: null, memoryView: null, ...choose(s, nodes, m.node.id) };
         return { nodes, order };
       });
     case 'removed':
@@ -264,6 +308,33 @@ export function applyServer(m: ServerMessage) {
     }
     case 'history':
       return update(() => ({ history: m.items }));
+    case 'memory': {
+      const { t: _, rid, ...data } = m;
+      return update((s) => {
+        const want = s.memory;
+        if (want?.rid !== rid) return {};
+        // An error keeps the page shown, so its pickers stay to correct a bad target.
+        if ('error' in data) return { memory: { rid, error: data.error, data: want.data } };
+        return { memory: { rid, data: want.more && want.data ? { ...data, items: [...want.data.items, ...data.items] } : data } };
+      });
+    }
+    case 'memoryItem': {
+      const { t: _, rid, ...data } = m;
+      return update((s) => (s.memoryItem?.rid !== rid ? {} : { memoryItem: 'error' in data ? { rid, error: data.error } : { rid, data } }));
+    }
+    case 'memoryGiven':
+      return update((s) => (s.memoryGiven?.rid !== m.rid ? {} : { memoryGiven: 'error' in m ? { rid: m.rid, error: m.error } : { rid: m.rid, data: m.injections } }));
+    case 'claudeMemory': {
+      const { t: _, rid, ...data } = m;
+      return update((s) => (s.claudeMemory?.rid !== rid ? {} : { claudeMemory: 'error' in data ? { rid, error: data.error } : { rid, data } }));
+    }
+    case 'memoryAction': {
+      const kind = actionKinds.get(m.rid);
+      actionKinds.delete(m.rid);
+      if ('error' in m) toast(`Memory not changed: ${m.error}`, undefined, 'bad');
+      else toast(`${kind ? ACTION_DONE[kind] : 'Changed'} m${m.item.id}`, undefined, 'ok');
+      return update((s) => ({ memoryRev: s.memoryRev + 1, memoryActed: { rid: m.rid, ok: !('error' in m) } }));
+    }
     case 'sent': {
       const title = state.nodes[m.id]?.title ?? m.id;
       const { outcome, detail } = m.result;
