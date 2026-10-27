@@ -674,7 +674,7 @@ export function startNotices(m: Mgr): void {
     else if (!conflictNoticed.has(v.id)) {
       conflictNoticed.add(v.id);
       childNotice(m, v, 'conflicts with its base', `Merging ${g.base} into ${g.branch} would conflict in ${g.conflicts.join(', ')}. `
-        + `Merge ${g.base} into the branch and resolve; for a stack of branches, tl carry ${g.base} <branch...> merges up the chain.`);
+        + `Send the worker a rebase instruction: rebase ${g.branch} onto ${g.base} (or merge ${g.base} into it), resolve, commit.`);
     }
     if (exited) notice(v, 'exited');
     else if (state === 'done' && errored) {

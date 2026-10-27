@@ -199,7 +199,7 @@ const spawned = new Map<string, { args: string; result: unknown; at: number }>()
 const tools = {
   list_nodes: tool(
     'List nodes',
-    `List the nodes you can see (yourself, ancestors, siblings, descendants) as an indented tree, after a line of your Claude account's usage (5-hour and 7-day windows, shared by every node in the account). States: working, waiting, blocked, done, unknown, none; armed (waiting on spawn dependencies) and queued (waiting on daemon.maxWorking), with the reason as activity. Flags: errored, interrupted, exited, stale, stalled (working with no hook event for limits.stallMinutes). "reported <verdict>" follows report_outcome; the full report is in read what "outcome". [agent X] names the harness. Spend is the node's own, then "tree" with descendants; a trailing +, as in $0.12+, marks a lower bound because some usage had no price. A node with its own worktree shows ⎇ branch from base, ↑ commits not in base, ↓ base commits not on the branch, dirty (uncommitted files) and merged. Use it to find node ids for send, read or close.`,
+    `List the nodes you can see (yourself, ancestors, siblings, descendants) as an indented tree, after a line of your Claude account's usage (5-hour and 7-day windows, shared by every node in the account). States: working, waiting, blocked, done, unknown, none; armed (waiting on spawn dependencies) and queued (waiting on daemon.maxWorking), with the reason as activity. Flags: errored, interrupted, exited, stale, stalled (working with no hook event for limits.stallMinutes). "reported <verdict>" follows report_outcome; the full report is in read what "outcome". [agent X] names the harness. Spend is the node's own, then "tree" with descendants; a trailing +, as in $0.12+, marks a lower bound because some usage had no price. A node with its own worktree shows ⎇ branch from base, ↑ commits not in base, ↓ base commits not on the branch, dirty (uncommitted files), merged, and conflicts:N (files that would conflict with base). Use it to find node ids for send, read or close.`,
     {},
     async (c) => {
       const all = c.manager.list();
@@ -378,7 +378,8 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       const v = requireOwned(c, a.nodeId, false);
       if (!v.worktree) throw new Error(`${v.id} has no worktree of its own to merge`);
       const skip = c.caller === HUMAN || loadConfig(v.worktree.repo, c.manager.home).approvals.merge;
-      if (!skip && !(await c.confirm(`${who(c)} wants to merge ${v.title} (${v.id}): branch ${v.worktree.branch} into ${v.worktree.base}`))) {
+      const later = a.whenIdle && v.status.state === 'working' && !v.status.exited;
+      if (!skip && !(await c.confirm(`${who(c)} wants to merge ${v.title} (${v.id}): branch ${v.worktree.branch} into ${v.worktree.base}${later ? ' when its turn ends' : ''}`))) {
         return { data: { ok: false, reason: 'denied' } };
       }
       const w = v.worktree;
