@@ -45,6 +45,8 @@ interface DeliverOpts {
   inbox?: boolean;
   /** The nodes a daemon notice concerns, recorded on its `send` event so each child's conversation can show it. */
   about?: string[];
+  /** A notice the recipient no longer needs once it closes every node in `about` itself: dropNotices withdraws it while queued. */
+  dropOnClose?: boolean;
 }
 
 // ---- scope (PLAN §5): self, ancestors, siblings, descendants ----
@@ -100,8 +102,8 @@ interface State {
   /** Log a `settle` event when a queued message reaches its final outcome. */
   logSettle: (messageId: string, st: Status, r: SendResult) => void;
 }
-/** `dir`: the target's tree directory at send time, where a settle is logged once the target is closed. `about`: see DeliverOpts. */
-interface Status { from: string; to: string; result: SendResult; at: number; onSettle?: (r: SendResult) => void; dir?: string; about?: string[] }
+/** `dir`: the target's tree directory at send time, where a settle is logged once the target is closed. `dropOnClose`: the `about` of a dropOnClose notice. */
+interface Status { from: string; to: string; result: SendResult; at: number; onSettle?: (r: SendResult) => void; dir?: string; dropOnClose?: string[] }
 type Attempt = { result: SendResult } | { wait: string };
 
 const states = new WeakMap<object, State>();
@@ -543,12 +545,12 @@ export function withdraw(m: Mgr, caller: string, messageId: string): Promise<{ t
 }
 
 /**
- * `caller` closed `ids` itself and needs no word of them: withdraw the daemon's notices to it, still queued, that
- * concern only those nodes. A notice already claimed by its mod goes through.
+ * `caller` closed `ids` itself and needs no word of them: withdraw the daemon's dropOnClose notices to it (child and
+ * notify_when notices, not a merge result), still queued, that concern only those nodes. One already claimed goes through.
  */
 export function dropNotices(m: Mgr, caller: string, ids: string[]): void {
   for (const [messageId, st] of states.get(m)?.status ?? []) {
-    if (st.from === DAEMON && st.to === caller && st.result.outcome === 'queued' && st.about?.every((id) => ids.includes(id))) withdraw(m, DAEMON, messageId).catch(() => {});
+    if (st.from === DAEMON && st.to === caller && st.result.outcome === 'queued' && st.dropOnClose?.every((id) => ids.includes(id))) withdraw(m, DAEMON, messageId).catch(() => {});
   }
 }
 
@@ -566,7 +568,7 @@ export async function deliver(m: Mgr, fromId: string, toId: string, text: string
   for (const [k, v] of s.status) if (now - v.at > STATUS_TTL_MS) s.status.delete(k);
   const out = (r: SendResult): SendResult => {
     const result = { ...r, messageId: id };
-    s.status.set(id, { from: fromId, to: toId, result, at: now, onSettle: opts.onSettle, ...(m.view(toId) ? { dir: m.sessionDirOf?.(toId) } : {}), ...(opts.about?.length ? { about: opts.about } : {}) });
+    s.status.set(id, { from: fromId, to: toId, result, at: now, onSettle: opts.onSettle, ...(m.view(toId) ? { dir: m.sessionDirOf?.(toId) } : {}), ...(opts.dropOnClose && opts.about?.length ? { dropOnClose: opts.about } : {}) });
     setResult(s, id, result);
     if (m.view(toId)) {
       m.logEvent(toId, 'send', { from: fromId, outcome: result.outcome, messageId: id, ...(result.steer ? { steer: true } : {}),
@@ -634,7 +636,7 @@ function loopNotice(m: Mgr, s: State, from: NodeView | undefined, key: string, w
 
 /** A daemon notice to `v`'s parent about `v`. */
 function childNotice(m: Mgr, v: NodeView, why: string, body: string): void {
-  if (v.parentId) deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} "${v.title}" ${why})`, replyTo: null, about: [v.id] }).catch(logError);
+  if (v.parentId) deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} "${v.title}" ${why})`, replyTo: null, about: [v.id], dropOnClose: true }).catch(logError);
 }
 
 // ---- station notices (PLAN §7) ----
@@ -650,6 +652,8 @@ export function startNotices(m: Mgr): void {
   /** The changedAt of the errored turn the child was told to continue from. */
   const retried = new Map<string, number>();
   const stallNoticed = new Set<string>();
+  /** Nodes whose parent heard their branch conflicts with its base; cleared once it merges cleanly again. */
+  const conflictNoticed = new Set<string>();
   const notice = (v: NodeView, reason: string) => {
     if (!v.parentId || notified.has(v.id)) return;
     notified.add(v.id);
@@ -678,6 +682,13 @@ export function startNotices(m: Mgr): void {
       const body = `No hook event for ${fmtAge(Date.now() - v.status.changedAt)} while working${v.status.activity ? `; last activity: ${v.status.activity}` : ''}.`;
       childNotice(m, v, 'no activity', body);
     }
+    const g = v.status.git;
+    if (!g?.conflicts) conflictNoticed.delete(v.id);
+    else if (!conflictNoticed.has(v.id)) {
+      conflictNoticed.add(v.id);
+      childNotice(m, v, 'conflicts with its base', `Merging ${g.base} into ${g.branch} would conflict in ${g.conflicts.join(', ')}. `
+        + `Send the worker a rebase instruction: rebase ${g.branch} onto ${g.base} (or merge ${g.base} into it), resolve, commit.`);
+    }
     if (exited) notice(v, 'exited');
     else if (state === 'done' && errored) {
       const at = retried.get(v.id);
@@ -702,9 +713,18 @@ export function startNotices(m: Mgr): void {
 /** Managers whose node events already re-check their callers' watches. */
 const listening = new WeakSet<NodeManager>();
 
-/** `caller` is closing `id` itself: its notify_when watches leave `id` out (see CompletionWatches.forget). */
-export function unwatch(m: Pick<NodeManager, 'runtimes'>, caller: string, id: string): void {
-  m.runtimes.get(caller)?.watches?.forget(id);
+/**
+ * `caller` closes `id` itself with `close`: its notify_when watches leave `id` out once it has closed, and neither count
+ * the close as finishing nor lose `id` when it fails (see CompletionWatches.hold).
+ */
+export async function closeWatched<T>(m: Pick<NodeManager, 'runtimes' | 'view'>, caller: string, id: string, close: () => Promise<T>): Promise<T> {
+  const watches = () => m.runtimes.get(caller)?.watches;
+  watches()?.hold(id);
+  try {
+    return await close();
+  } finally {
+    watches()?.settle(id, !m.view(id));
+  }
 }
 
 /** Whether `caller` has a pending notify_when that covers `id`. */
@@ -728,6 +748,6 @@ export function notifyWhen(m: NodeManager, caller: string, req: NotifyWhen): { r
   }
   const rt = m.runtimes.get(caller)!;
   rt.watches ??= new CompletionWatches({ view: (id) => m.view(id), turnStartedAt: (id) => m.turnStartedAt(id) },
-    (text, fromLabel, about) => { deliver(m, DAEMON, caller, text, { fromLabel, replyTo: null, about }).catch(logError); });
+    (text, fromLabel, about) => { deliver(m, DAEMON, caller, text, { fromLabel, replyTo: null, about, dropOnClose: true }).catch(logError); });
   return rt.watches.register(req);
 }

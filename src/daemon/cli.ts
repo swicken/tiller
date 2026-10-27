@@ -5,8 +5,9 @@ import type { UpdateStatus } from '../shared/protocol.js';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
-import { configEntries, effectiveProfileEntries } from './config.js';
+import { configEntries, effectiveProfileEntries, loadConfig } from './config.js';
 import { gateFor } from './completion-gate.js';
 import { promptPath } from './launch.js';
 import { listPresets } from './presets.js';
@@ -19,7 +20,7 @@ import { formatEvent, listSessions, parseSince, readEvents, readNewEvents, sessi
 import { fmtAge } from '../shared/format.js';
 import { fmtUsd } from '../shared/spend.js';
 import { HARNESSES, type Harness, type NodeKind } from '../shared/protocol.js';
-import { mainCheckout, runCommands, WORKTREES_DIR } from './worktree.js';
+import { carry, mainCheckout, protectedBranches, runCommands, WORKTREES_DIR } from './worktree.js';
 import { cancelDrain, drainDaemon, restartDaemon, findDaemon, humanEnv, pickOrchestrator, spawnReload, startDaemon, upDir, type OrchestratorCandidate } from './up.js';
 
 const usage = () => `tl: control tiller. With no arguments, start the daemon if needed and open the app; tl . opens it on this directory.
@@ -54,8 +55,13 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl kill [--force] [--keep-branch|--discard] <id...> | close <id...>  close and delete nodes (an orchestrator needs --force);
                                                       a node's worktree must be clean and merged unless --keep-branch
                                                       (commit as WIP, keep the branch) or --discard (delete both)
-  tl merge <id> [--close]                             merge a worktree node's branch into its base (refused on conflict,
-                                                      naming the paths); --close then closes the node
+  tl merge <id> [--close] [--when-idle]               merge a worktree node's branch into its base (refused on conflict,
+                                                      naming the paths); --close then closes the node; --when-idle
+                                                      waits for a working node's turn to end instead of refusing
+                                                      (run by an agent, it queues the merge as the merge tool does)
+  tl carry <from> <branch...> [--cwd P]               merge <from> into the first branch, that into the next, and so on, by merge
+                                                      commits only (no rebase, no push); stops at the first conflict, naming the
+                                                      branch and files; refuses protected branches and ones checked out anywhere
   tl diff <id> [--stat]                               what a worktree node changed since it branched, committed or not
   tl send [--now] <id> "text"                         --now interrupts the target's turn if it is working (a steer)
   tl withdraw <messageId>                             take back a queued message that has not been delivered yet
@@ -64,9 +70,9 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
                                                       title, first prompt or last message
   tl transcript <id> [--session SID]                  a live or closed node's conversation; SID picks one of its earlier sessions
   tl followup <id> --prompt P [--title T]             continue a closed node's session as a new node that starts on P
-  tl spawn --kind claude|agent|terminal [--harness claude|pi|codex] --title T --cwd PATH [--prompt P] [--model M] [--effort low|medium|high|xhigh|max] [--permission-mode M] [--role orchestrator|worker|none] [--profile orchestrator|implementation|explorer|mechanical|reviewer] [--worktree [--base B]] [--preset NAME] [--request-id ID]
+  tl spawn [--kind claude|agent|terminal] [--harness claude|pi|codex] --title T [--cwd PATH] [--prompt P] [--model M] [--effort low|medium|high|xhigh|max] [--permission-mode M] [--role orchestrator|worker|none] [--profile orchestrator|implementation|explorer|mechanical|reviewer] [--worktree [--base B]] [--preset NAME] [--request-id ID]
            [--after ID,ID] [--after-success ID,ID] [--now] [--fork ID] [--account NAME]
-                                                      --harness pi|codex implies --kind agent when --kind is omitted; --after / --after-success
+                                                      --kind defaults to claude, or agent with --harness pi|codex or from a Pi or Codex agent; --cwd to here; --after / --after-success
                                                       arm the node until those finish a turn or report
                                                       succeeded; --now launches past daemon.maxWorking instead of queueing;
                                                       --fork starts from a copy of a live or closed node's conversation (cwd: its);
@@ -138,7 +144,7 @@ const { values: f, positionals: pos } = parseArgs({
   options: {
     kind: { type: 'string' }, title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
     'permission-mode': { type: 'string' }, role: { type: 'string' }, profile: { type: 'string' }, harness: { type: 'string' }, new: { type: 'boolean' }, 'request-id': { type: 'string' }, force: { type: 'boolean' }, lines: { type: 'string' },
-    worktree: { type: 'boolean' }, 'no-app': { type: 'boolean' }, since: { type: 'string' }, follow: { type: 'boolean' }, 'keep-branch': { type: 'boolean' }, discard: { type: 'boolean' }, detached: { type: 'boolean' }, check: { type: 'boolean' }, close: { type: 'boolean' }, stat: { type: 'boolean' }, preset: { type: 'string' },
+    worktree: { type: 'boolean' }, 'no-app': { type: 'boolean' }, since: { type: 'string' }, follow: { type: 'boolean' }, 'keep-branch': { type: 'boolean' }, discard: { type: 'boolean' }, detached: { type: 'boolean' }, check: { type: 'boolean' }, close: { type: 'boolean' }, 'when-idle': { type: 'boolean' }, stat: { type: 'boolean' }, preset: { type: 'string' },
     after: { type: 'string', multiple: true }, 'after-success': { type: 'string', multiple: true }, now: { type: 'boolean' },
     fork: { type: 'string' }, root: { type: 'string' }, session: { type: 'string' }, base: { type: 'string' }, account: { type: 'string' },
   },
@@ -295,9 +301,32 @@ switch (cmd) {
     break;
   case 'merge': {
     if (!pos[0]) fail(usage());
-    const { data } = await call('merge', { nodeId: pos[0] });
-    if (!data?.ok) process.exit(1); // conflicts: printed above
-    if (f.close) await call('close', { nodeIds: [pos[0]] });
+    // --when-idle: an agent queues the merge, as with the tool (each retry would ask the human again); the human's
+    // command retries while the node works, and every other refusal fails at once.
+    const agent = !!(process.env.TL_NODE_ID && process.env.TL_TOKEN_FILE), queue = !!f['when-idle'] && agent;
+    const working = (e?: string) => !!e?.endsWith(' is working; wait until its turn ends');
+    let r = await call('merge', { nodeId: pos[0], ...(queue ? { whenIdle: true } : {}) }, true, f['when-idle'] && !agent);
+    if (working(r.error)) console.log(`tl merge: waiting for ${pos[0]}'s turn to end`);
+    while (working(r.error)) {
+      await sleep(2000);
+      r = await call('merge', { nodeId: pos[0] }, true, true);
+    }
+    if (r.error) fail(r.error);
+    if (!r.data?.ok) process.exit(1); // conflicts: printed above
+    if (f.close && r.data.queued) console.log('tl merge: --close skipped: close the node once the merge message arrives');
+    else if (f.close) await call('close', { nodeIds: [pos[0]] });
+    break;
+  }
+  case 'carry': {
+    if (pos.length < 2) fail(usage());
+    const repo = await mainCheckout(cwdArg());
+    const steps = await carry(repo, pos[0]!, pos.slice(1), await protectedBranches(repo, loadConfig(repo, home).worktrees.protected))
+      .catch((e: Error) => fail(e.message));
+    for (const s of steps) {
+      console.log('sha' in s ? `${s.branch}: merged ${s.from} (${s.sha.slice(0, 10)})` : 'upToDate' in s ? `${s.branch}: already has ${s.from}`
+        : `${s.branch}: stopped, merging ${s.from} conflicts in ${s.conflicts.join(', ')}; ${s.branch} and the branches after it are unchanged`);
+    }
+    if (steps.some((s) => 'conflicts' in s)) process.exit(1);
     break;
   }
   case 'worktrees':

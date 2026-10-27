@@ -16,6 +16,7 @@ import type { Outcome } from '../shared/protocol.js';
 
 let home = '', manager: NodeManager, server: http.Server, base = '', admin = '';
 const confirms: string[] = [];
+const signals: (AbortSignal | undefined)[] = [];
 /** The human's answer to each confirm; a pending promise is a decision still to come. */
 let answer: boolean | undefined | Promise<boolean | undefined> = true;
 const focused: string[][] = [];
@@ -23,7 +24,7 @@ const focused: string[][] = [];
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), 'tl-mcp-'));
   manager = new NodeManager({ home, shell: '/bin/sh' });
-  const { handler, publishAdminToken } = mountMcp(manager, async (t) => { confirms.push(t); return answer; }, (from, id) => focused.push([from, id]));
+  const { handler, publishAdminToken } = mountMcp(manager, async (t, signal) => { confirms.push(t); signals.push(signal); return answer; }, (from, id) => focused.push([from, id]));
   expect(() => readFileSync(join(home, 'admin-token'))).toThrow(); // not written until the server is listening
   server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -168,8 +169,8 @@ describe('mcp api', () => {
       let decide!: (ok: boolean | undefined) => void;
       answer = new Promise((r) => { decide = r; });
       const r = await api('close', { nodeIds: [id] }, p, tok);
-      expect(r.body.data).toEqual({ ok: false, pending: true, requestId: expect.stringMatching(/^close-/) });
-      expect(r.body.text).toContain(`tiller (close ${r.body.data.requestId})`);
+      expect(r.body.data).toEqual({ ok: false, pending: true, requestId: expect.stringMatching(/^[0-9a-f]{8}$/) });
+      expect(r.body.text).toContain(`tiller (close request ${r.body.data.requestId})`);
       expect(manager.view(id)).toBeDefined();
       return { decide, requestId: r.body.data.requestId as string };
     };
@@ -178,19 +179,62 @@ describe('mcp api', () => {
       const k1 = await kid();
       const one = await pending(k1);
       one.decide(true);
-      expect(await notice(1)).toMatchObject({ from: `tiller (close ${one.requestId} approved)`, text: expect.stringContaining(`\nThe human approved closing ck (${k1}).\nClosed: ${k1}.\n`) });
+      expect(await notice(1)).toMatchObject({ from: `tiller (close request ${one.requestId} approved)`, text: expect.stringContaining(`\nThe human approved closing ck (${k1}).\nClosed: ${k1}.\n`) });
       expect(manager.view(k1)).toBeUndefined();
       const k2 = await kid();
       const two = await pending(k2);
       two.decide(false);
-      expect(await notice(2)).toMatchObject({ from: `tiller (close ${two.requestId} denied)`, text: expect.stringContaining(`The human declined closing ck (${k2}); nothing was closed.`) });
+      expect(await notice(2)).toMatchObject({ from: `tiller (close request ${two.requestId} denied)`, text: expect.stringContaining(`The human declined closing ck (${k2}); nothing was closed.`) });
       const three = await pending(k2);
       three.decide(undefined); // the confirm timed out
       expect((await notice(3)).text).toContain('arrived in time; nothing was closed');
       expect(manager.view(k2)).toBeDefined();
-      await manager.close(k2, true);
+      // Closed by the human while the request waited: reported as such, not as closed by this request.
+      const four = await pending(k2);
+      expect((await api('close', { nodeIds: [k2] })).body.data).toMatchObject({ ok: true });
+      four.decide(true);
+      const text = (await notice(4)).text;
+      expect(text).toContain(`Already closed by someone else: ${k2}.`);
+      expect(text).not.toContain('Closed:');
+      // The caller closed while its request waits: the dialog is dismissed and nothing closes.
+      const k3 = await kid();
+      const five = await pending(k3);
+      await manager.close(p, true);
+      expect(signals.at(-1)?.aborted).toBe(true);
+      five.decide(true);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.view(k3)).toBeDefined();
+      await manager.close(k3, true);
     } finally { answer = true; }
-    await manager.close(p, true); // stay under limits.maxLiveNodes for the later tests
+  });
+
+  it('a discard approved later is refused when the worktree now holds more than the human was shown', async () => {
+    const repo = join(home, 'discard-repo'), path = join(repo, '.claude', 'worktrees', 'd');
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' }).trim();
+    mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'root');
+    git(repo, 'worktree', 'add', '-q', '-b', 'tl/d', path);
+    writeFileSync(join(path, 'one.txt'), '1');
+    const p = (await spawnT('dp')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    manager.registry.update(p, { kind: 'claude' });
+    inbox(manager, p);
+    const kid = (await spawnT('dk', p, tok, { cwd: path })).body.data.nodeId as string;
+    manager.registry.update(kid, { worktree: { repo, path, branch: 'tl/d', base: 'main', baseSha: git(repo, 'rev-parse', 'HEAD') } });
+    let decide!: (ok: boolean) => void;
+    answer = new Promise((r) => { decide = r; });
+    try {
+      const r = await api('close', { nodeIds: [kid], worktree: 'discard' }, p, tok);
+      expect(r.body.data).toMatchObject({ pending: true });
+      expect(confirms.at(-1)).toContain('discards 0 commit(s) and 1 changed file(s)');
+      writeFileSync(join(path, 'two.txt'), '2'); // more work lands before the human answers
+      decide(true);
+      await expect.poll(() => inbox(manager, p).map((x) => x.text)).toEqual([expect.stringContaining(`Not closed: ${kid}: refused: it now has 0 commit(s) and 2 changed file(s) to discard, more than the human approved`)]);
+      expect(manager.view(kid)).toBeDefined();
+    } finally { answer = true; }
+    await manager.close(kid, true, 'discard');
+    await manager.close(p, true);
   });
 
   it('fork, read and history reach a closed node only in the caller\'s own tree; fork of a live node needs scope', async () => {

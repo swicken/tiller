@@ -3,8 +3,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import type { GitState, NodeStatus, Worktree } from '../shared/protocol.js';
+import type { GitState, NodeStatus, NodeView, Worktree } from '../shared/protocol.js';
 import { claudeHomes } from './claude-accounts.js';
+import { turnDone } from './completion-watches.js';
 import { loadConfig, type MergeStyle } from './config.js';
 import type { NodeManager } from './manager.js';
 import { buildChildEnv } from './pty.js';
@@ -125,26 +126,38 @@ async function createWorktree(m: NodeManager, id: string, prompt: string | undef
   refreshGit(m, id).catch(logError);
 }
 
-/** See NodeManager.merge. */
-export async function mergeWorktree(m: NodeManager, id: string): Promise<{ base: string; sha: string; style: MergeStyle }> {
+export type MergeResult = { base: string; sha: string; style: MergeStyle };
+
+/** The refusals that hold whatever the node is doing, checked at once: no worktree, setup running. */
+function mergeTarget(m: NodeManager, id: string): Worktree {
   const rec = m.registry.get(id);
   if (!rec) throw new Error(`no such node: ${id}`);
   const w = rec.worktree;
   if (!w) throw new Error(`${id} has no worktree of its own to merge`);
-  const config = loadConfig(w.repo, m.home).worktrees;
-  if ((await wt.protectedBranches(w.repo, config.protected)).includes(w.base)) {
+  if (m.runtimes.get(id)!.setup) throw new Error('worktree setup is running');
+  return w;
+}
+
+async function refuseProtected(m: NodeManager, w: Worktree): Promise<void> {
+  if ((await wt.protectedBranches(w.repo, loadConfig(w.repo, m.home).worktrees.protected)).includes(w.base)) {
     throw new Error(`refusing to merge into protected branch ${w.base}; spawn workers with base <branch> (tl spawn --base, or base on the spawn tool) and open a pull request from it`);
   }
+}
+
+/** See NodeManager.merge. Checks and claims the node before its first await, so a turn starting meanwhile cannot slip in. */
+export async function mergeWorktree(m: NodeManager, id: string): Promise<MergeResult> {
+  const w = mergeTarget(m, id);
+  const rec = m.registry.get(id)!;
   const rt = m.runtimes.get(id)!, s = rt.status!;
   if (s.state === 'working' && !s.exited) throw new Error(`refusing to merge while ${id} is working; wait until its turn ends`);
-  if (rt.setup) throw new Error('worktree setup is running');
   if (rt.busy) throw new Error(`${id} is already ${rt.busy}`);
   rt.busy = 'merging';
   try {
+    await refuseProtected(m, w);
     await gitSettled(rt);
     const dirty = existsSync(w.path) ? await wt.dirtyFiles(w.path) : [];
     if (dirty.length) throw new Error(`merge refused, nothing changed: ${count(dirty.length, 'uncommitted file')} in the worktree; commit them first`);
-    const style = config.mergeStyle;
+    const style = loadConfig(w.repo, m.home).worktrees.mergeStyle;
     const subject = style === 'squash' ? `${rec.title} (squashed from ${w.branch})` : `Merge branch '${w.branch}': ${rec.title}`;
     const sha = await wt.mergeInto(w.repo, w.branch, w.base, style, subject);
     const merged = { tip: (await wt.branchSha(w.repo, w.branch)) ?? '', at: Date.now() };
@@ -155,6 +168,53 @@ export async function mergeWorktree(m: NodeManager, id: string): Promise<{ base:
     rt.busy = undefined;
     await refreshGit(m, id).catch(logError);
   }
+}
+
+interface QueuedMerge { by: string; since: number; settle: (result: Promise<MergeResult>) => void }
+/** Merges waiting for their node's turn to end, by node id. In memory only: shutdown drops them, telling each caller. */
+const queuedMerges = new WeakMap<NodeManager, Map<string, QueuedMerge>>();
+
+/**
+ * Merge `id` once the turn it is working on ends (or it exits), for `by`. Returns false, queueing nothing, when the node is
+ * not working: the caller merges now. Refusals that a turn's end cannot lift throw now; the merge re-checks them all.
+ * `settle` gets the merge, or a rejection when the node is closed or the daemon stops first. One per node: a second throws.
+ */
+export async function queueMerge(m: NodeManager, id: string, by: string, settle: QueuedMerge['settle']): Promise<boolean> {
+  await refuseProtected(m, mergeTarget(m, id));
+  const s = m.view(id)!.status;
+  if (s.state !== 'working' || s.exited) return false;
+  let q = queuedMerges.get(m);
+  if (!q) {
+    queuedMerges.set(m, q = new Map());
+    const all = q;
+    m.on('node', (v: NodeView) => fireQueuedMerge(m, all, v.id));
+    m.on('removed', (gone: string) => {
+      all.get(gone)?.settle(Promise.reject(new Error(`${gone} was closed before its turn ended; nothing was merged`)));
+      all.delete(gone);
+      for (const [k, e] of all) if (e.by === gone) all.delete(k); // nobody is left to tell
+    });
+  }
+  const queued = q.get(id);
+  if (queued) throw new Error(`a merge of ${id} is already queued by ${queued.by}`);
+  q.set(id, { by, since: m.turnStartedAt(id) ?? Date.now(), settle });
+  fireQueuedMerge(m, q, id); // the turn may have ended while the checks ran
+  return true;
+}
+
+/** Runs a queued merge once its turn ends cleanly or the node exits; an errored turn keeps it for the next clean end. */
+function fireQueuedMerge(m: NodeManager, q: Map<string, QueuedMerge>, id: string): void {
+  const e = q.get(id), s = m.view(id)?.status;
+  if (!e || m.stopped || (s?.errored && !s.exited)) return;
+  if (!turnDone({ view: (x) => m.view(x), turnStartedAt: (x) => m.turnStartedAt(x) }, id, e.since)) return;
+  q.delete(id);
+  e.settle(mergeWorktree(m, id));
+}
+
+/** At shutdown, before any node exits: drop the queued merges, telling their callers. */
+export function dropQueuedMerges(m: NodeManager): void {
+  const q = queuedMerges.get(m);
+  for (const [id, e] of q ?? []) e.settle(Promise.reject(new Error(`the daemon stopped before ${id}'s turn ended; nothing was merged, merge again`)));
+  q?.clear();
 }
 
 /** The worktree half of NodeManager.close: refuse an unsafe close, stop setup, kill the node, remove the tree, forget the node. */
@@ -352,23 +412,60 @@ async function readGit(m: NodeManager, id: string): Promise<void> {
   const w = m.registry.get(id)?.worktree;
   if (!w || m.stopped) return;
   const missing = !existsSync(w.path);
-  const [counts, stat, merged] = await Promise.all([
+  const [counts, stat, merged, tips] = await Promise.all([
     // Fails when the branch is gone: then zero counts. Any other failure keeps the last state.
     wt.aheadBehind(w.repo, w.branch, w.base, w.baseSha).catch(async (err: Error) => { if (await wt.branchSha(w.repo, w.branch)) throw err; return undefined; }),
     wt.diffStat(w).catch((err: Error) => err),
     mergedAt(w),
+    wt.branchTips(w.repo).catch(() => undefined),
   ]);
   // A missing worktree with no branch has nothing to diff.
   if (stat instanceof Error && (counts || !missing)) throw stat;
   const { additions, deletions, dirty } = stat instanceof Error ? { additions: 0, deletions: 0, dirty: 0 } : stat;
   const rt = m.runtimes.get(id);
   if (!rt || m.stopped) return; // closed or shut down meanwhile
+  // Merging base can conflict only when both sides have commits; the answer holds until a tip moves. A failed git call
+  // (a timeout under load) keeps the last answer and caches nothing, so the next refresh asks again.
+  const key = tips && tipKey(w, tips), last = tipsSeen.get(rt);
+  const fresh = !key ? undefined : last?.key === key ? last.conflicts : counts?.ahead && counts.behind ? await baseConflicts(w, key) : [];
+  if (m.runtimes.get(id) !== rt || m.stopped) return;
+  if (fresh) tipsSeen.set(rt, { key: key!, conflicts: fresh });
+  const conflicts = fresh ?? last?.conflicts ?? [];
   if (missing) setMissing(m, id, true); // only resume and the worktree sweep clear it: they also check `git worktree list`
   const lines = counts ? { ...counts, additions, deletions } : { ahead: 0, behind: 0, additions: 0, deletions: 0 };
-  const next: GitState = { branch: w.branch, base: w.base, ...lines, dirty, ...(merged ? { mergedAt: merged } : {}) };
+  const next: GitState = { branch: w.branch, base: w.base, ...lines, dirty, ...(merged ? { mergedAt: merged } : {}), ...(conflicts.length ? { conflicts } : {}) };
   if (JSON.stringify(next) === JSON.stringify(rt.git)) return;
   rt.git = next;
   m.emitNode(id);
+}
+
+/** Per node runtime: the base and branch tips its last refresh saw, and the files merging that base would conflict in. */
+const tipsSeen = new WeakMap<object, { key: string; conflicts: string[] }>();
+const tipKey = (w: Worktree, tips: Map<string, string>) => `${tips.get(w.base) ?? w.baseSha} ${tips.get(w.branch) ?? ''}`;
+
+/** The files that would conflict if base were merged into the branch (git merge-tree; nothing is touched); undefined, logged, when git fails. */
+async function baseConflicts(w: Worktree, key: string): Promise<string[] | undefined> {
+  const [base, tip] = key.split(' ') as [string, string];
+  return wt.mergeTree(w.repo, tip, base).then((r) => r.conflicts, (err: Error) => { logError(err); return undefined; });
+}
+
+/**
+ * Refresh every worktree node whose base or branch tip moved since its last refresh, with one git call per repo. Hook
+ * events refresh a node as it works; this catches a base that moves under an idle or exited node, or a branch moved
+ * from outside (tl carry, a manual merge). The daemon's periodic sweep runs it.
+ */
+export async function refreshMovedTips(m: NodeManager): Promise<void> {
+  const byRepo = new Map<string, { id: string; rt: object; w: Worktree }[]>();
+  for (const [id, rt] of m.runtimes) {
+    const w = m.registry.get(id)?.worktree;
+    if (w && !w.missing && tipsSeen.has(rt)) byRepo.set(w.repo, [...(byRepo.get(w.repo) ?? []), { id, rt, w }]);
+  }
+  for (const [repo, nodes] of byRepo) {
+    const tips = await wt.branchTips(repo).catch(() => undefined); // the repo is gone: nothing to compare
+    for (const { id, rt, w } of tips ? nodes : []) {
+      if (tipsSeen.get(rt)!.key !== tipKey(w, tips!)) refreshGit(m, id).catch(logError);
+    }
+  }
 }
 
 export function refreshGitSoon(m: NodeManager, id: string): void {

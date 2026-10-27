@@ -21,6 +21,8 @@ interface Watch extends NotifyWhen { at: number; since: Record<string, number> }
 /** One caller's one-shot watches. Its runtime owns their lifetime; messaging supplies delivery. */
 export class CompletionWatches {
   private readonly all = new Map<string, Watch>();
+  /** Nodes the watcher is closing now (see hold). */
+  private readonly closing = new Set<string>();
 
   constructor(private readonly query: CompletionQuery, private readonly notify: (text: string, label: string, ids: string[]) => void) {}
 
@@ -42,15 +44,31 @@ export class CompletionWatches {
     return { replaced };
   }
 
-  /** The watcher is closing `id` itself, so needs no word of it: drop it from each watch, and a watch left with none. */
-  forget(id: string): void {
+  /** The watcher is closing `id` itself: its watches wait, rather than count the close as finishing, until settle. */
+  hold(id: string): void {
+    this.closing.add(id);
+  }
+
+  /** The watcher's close of `id` ended: if it closed, forget `id`; if not, the node runs on and its watches check again. */
+  settle(id: string, closed: boolean): void {
+    this.closing.delete(id);
+    if (closed) return this.forget(id);
+    for (const [key, w] of [...this.all]) if (w.ids.includes(id)) this.check(key);
+  }
+
+  /**
+   * The watcher closed `id` itself, so needs no word of it: drop it from each watch, and a watch left with none. A watch
+   * on just the rest, waiting for the same thing, already reports them; one waiting for something else is kept beside it.
+   */
+  private forget(id: string): void {
     for (const [key, w] of [...this.all]) {
       if (!w.ids.includes(id)) continue;
       this.all.delete(key);
-      const ids = w.ids.filter((x) => x !== id), next = ids.join(',');
-      if (!ids.length || this.all.has(next)) continue; // a watch on just the rest already exists: it reports them
-      this.all.set(next, { ...w, ids });
-      this.check(next);
+      const ids = w.ids.filter((x) => x !== id), next = ids.join(','), alt = `${next}\0${w.when} ${w.of}`;
+      if (!ids.length || [next, alt].some((k) => this.all.get(k)?.when === w.when && this.all.get(k)?.of === w.of)) continue;
+      const k = this.all.has(next) ? alt : next;
+      this.all.set(k, { ...w, ids });
+      this.check(k);
     }
   }
 
@@ -76,6 +94,7 @@ export class CompletionWatches {
 
   private check(key: string): void {
     const w = this.all.get(key)!;
+    if (w.ids.some((id) => this.closing.has(id))) return;
     const done = w.ids.filter((id) => this.finished(w, id));
     if (w.when === 'all' ? done.length < w.ids.length : !done.length) return;
     this.all.delete(key);
