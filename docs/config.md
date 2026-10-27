@@ -36,7 +36,7 @@ The layer column says where a key may be set: "project, home" means either file,
 | `worktrees.branchPrefix` | string | `tl/` | project, home | A worktree's branch is this prefix followed by the node id. |
 | `worktrees.include` | list of gitignore patterns | `.worktreeinclude` | project, home | Gitignored files copied into a new worktree; when absent, the repo's `.worktreeinclude` file is used. |
 | `worktrees.mergeStyle` | `merge`, `squash`, `ff-only` | `merge` | project, home | How the merge verb brings a branch into its base. |
-| `worktrees.setup` | list of shell commands | `[]` | project, home | Run in a new worktree before the agent starts. |
+| `worktrees.setup` | list of shell commands | `[]` | project, home | Run in a new worktree before the agent starts. See [copied `node_modules/`](#copied-node_modules) for re-installing a stale copy. |
 | `worktrees.teardown` | list of shell commands | `[]` | project, home | Run in a worktree before tiller removes it. |
 | `worktrees.protected` | list of branch names | `["main", "master"]` | project, home | Branches a merge never goes into; the remote's default branch counts too, unless the list is set to `[]`, which protects nothing. A worker spawned from one without a base gets a task branch. |
 | `worktrees.taskBranch` | string containing `{slug}` | `tl/{slug}` | project, home | Name of the task branch made for such a worker; `{slug}` is its title in lower case with dashes. |
@@ -72,6 +72,18 @@ For notification levels, `sound` is a banner with a sound and `silent` sends not
   "limits": { "stallMinutes": 10 }
 }
 ```
+
+### Copied `node_modules/`
+
+A `.worktreeinclude` that lists `node_modules/` gives each worktree a copy of the main checkout's install, stale or not, even when the worktree's `package-lock.json` pins other versions. To re-install only when the copy doesn't match the worktree's lockfile, use this setup command, which compares the lockfile with npm's record of what it installed (`node_modules/.package-lock.json`). Optional packages skipped on this platform don't count as differences:
+
+```json
+"worktrees": {
+  "setup": ["node -e \"const r=require,s=JSON.stringify,a=r('./package-lock.json').packages,b=r('./node_modules/.package-lock.json').packages;delete a[''];process.exit(Object.keys(b).every(k=>s(a[k])===s(b[k]))&&Object.keys(a).every(k=>b[k]||a[k].optional)?0:1)\" 2>/dev/null || npm ci --no-audit --no-fund"]
+}
+```
+
+A matching copy adds about 30 ms before the agent starts. A stale or missing copy runs `npm ci` instead, which takes about 1.5 s for this repo with a warm npm cache. A plain `"npm ci"` is also correct, but it pays that cost every time and replaces the copy-on-write clone with a full copy of the files.
 
 <a id="opt-in-codex-task-defaults"></a>
 
