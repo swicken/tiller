@@ -62,7 +62,7 @@ export const SETTINGS_FIELDS: SettingsField[] = [
   field('claude.account', 'select', { options: [] }),
   field('pi.extensions', 'lines', { keywords: ['all', 'none'] }),
   field('approvals.close', 'select', { options: ['never', 'done', 'always'] }), field('approvals.merge', 'boolean'),
-  field('worktrees.isolation', 'select', { options: ['none', 'worktree', 'detached'] }),
+  field('worktrees.isolation', 'select', { options: ['none', 'worktree'] }),
   field('worktrees.mergeStyle', 'select', { options: ['merge', 'squash', 'ff-only'] }),
   ...['branchPrefix', 'taskBranch'].map(k => field(`worktrees.${k}`, 'text')),
   ...['include', 'setup', 'teardown', 'protected'].map(k => field(`worktrees.${k}`, 'lines')),

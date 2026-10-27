@@ -126,7 +126,7 @@ export function fieldPreview(snapshot: SettingsSnapshot, drafts: Record<string, 
 export function optionLabel(key: string, value: string): string {
   const labels: Record<string, Record<string, string>> = {
     'approvals.close': { never: 'Always ask for approval', done: 'When all nodes are finished', always: 'Always allow' },
-    'worktrees.isolation': { none: 'Shared working directory', worktree: 'Separate worktree', detached: 'Read-only worktree (detached)' },
+    'worktrees.isolation': { none: 'Shared working directory', worktree: 'Separate worktree' },
     'worktrees.mergeStyle': { merge: 'Merge commit', squash: 'Squash merge', 'ff-only': 'Fast-forward only' },
   };
   return labels[key]?.[value] ?? ({ banner: 'Banner', sound: 'Banner and sound', silent: 'Silent', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum' }[value] ?? value);

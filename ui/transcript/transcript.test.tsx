@@ -70,5 +70,7 @@ describe('transcript', () => {
     expect([
       branchLine({ ...a, branchFate: 'merged', base: 'main' }), branchLine({ ...a, branchFate: 'kept' }), branchLine({ ...a, branchFate: 'discarded' }), branchLine(a),
     ]).toEqual(['tl/n-123 merged into main', 'tl/n-123 kept', 'tl/n-123 discarded', 'tl/n-123']);
+    const { branch: _, ...ro } = a;
+    expect([branchLine({ ...a, branchFate: 'empty' }), branchLine({ ...ro, branchFate: 'detached', base: 'main' }), branchLine(ro)]).toEqual(['tl/n-123 no commits', 'detached @ main', undefined]);
   });
 });

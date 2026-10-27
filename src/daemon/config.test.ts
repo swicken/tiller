@@ -18,6 +18,14 @@ describe('loadConfig', () => {
     return { cwd, homeDir };
   };
 
+  it('drops "detached" as the worktrees.isolation default: read-only is per spawn or preset', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { cwd, homeDir } = setup(JSON.stringify({ worktrees: { isolation: 'detached' } }), undefined);
+    expect(loadConfig(cwd, homeDir).worktrees.isolation).toBe('none');
+    expect(err).toHaveBeenCalledWith(expect.stringContaining('worktrees.isolation'));
+    err.mockRestore();
+  });
+
   it('resolves each key from the project file, then the home file, then the default', () => {
     const { cwd, homeDir } = setup(
       JSON.stringify({ roles: { worker: { model: 'haiku' } }, claude: { inheritMcpServers: false }, pi: { extensions: ['npm:pi-web-access'] }, worktrees: { include: ['.env'], mergeStyle: 'squash', taskBranch: 'feat/{slug}' }, gate: { command: 'npm test' }, limits: { maxChildren: 2 }, notifications: { kinds: { done: 'silent' } } }),

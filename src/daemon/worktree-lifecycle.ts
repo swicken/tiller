@@ -270,9 +270,10 @@ async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 's
     const marker = await wt.readMarker(e.path);
     if (!marker || marker.home !== m.home || m.registry.get(marker.nodeId)?.worktree) continue; // not ours, or a node's
     const dirty = await wt.dirtyFiles(e.path);
-    // A detached orphan has no branch to compare; only force removes it.
-    const unmerged = e.branch ? await wt.unmergedCommits(repo, e.branch, marker.base, marker.baseSha) : ['(detached HEAD)'];
-    const safe = !dirty.length && !!e.branch && (clean === 'startup' ? !(await wt.hasCommits(repo, e.branch, marker.baseSha)) : !unmerged.length);
+    // A detached orphan (a read-only node's) is judged at its HEAD: removing it loses the commits there.
+    const tip = e.branch ?? (await wt.headSha(e.path));
+    const unmerged = await wt.unmergedCommits(repo, tip, marker.base, marker.baseSha);
+    const safe = !dirty.length && (clean === 'startup' ? !(await wt.hasCommits(repo, tip, marker.baseSha)) : !unmerged.length);
     const orphan = { nodeId: marker.nodeId, repo, path: e.path, branch: e.branch, base: marker.base, dirty, unmerged };
     if (clean && (clean === 'force' || safe) && !live(e.path)) {
       try {
