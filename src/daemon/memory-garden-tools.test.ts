@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Gardener } from './gardener.js';
 import type { NodeManager } from './manager.js';
 import { switchMemory } from './memory-config.js';
-import { startTestDaemon, type TestDaemon } from './memory-test-daemon.js';
+import { startTestDaemon, type TestDaemon } from './memory-test-daemon.test-helper.js';
 import type { DaemonServer } from './server.js';
 
 // The garden tools and memory_garden over /api and /mcp, against a real store and a Gardener whose host spawns a
