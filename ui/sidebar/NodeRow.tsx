@@ -13,7 +13,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
   const { node, depth, hasChildren, collapsed, descendants } = row;
   const now = useNow();
   const selected = useStore((s) => s.selected === node.id);
-  const renaming = useStore((s) => s.renaming === node.id);
+  const renaming = useStore((s) => s.renaming?.id === node.id && s.renaming.at === 'row');
   const s = node.status;
   const agent = isAgentKind(node.kind);
   const model = shortModel(s.model ?? node.model);

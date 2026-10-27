@@ -1,6 +1,6 @@
 # Messaging between nodes
 
-Nodes talk through the daemon. An agent calls the MCP tool `send` (the human uses `tl send <id> "text"`), and the daemon delivers the text to the target as a prompt. Scope is the sender's lineage: its parent and other ancestors, its siblings and its descendants. Only Claude nodes receive messages; a terminal node takes raw keystrokes through `write`, which the human approves each time.
+Nodes talk through the daemon. An agent calls the MCP tool `send` (the human uses `tl send <id> "text"`), and the daemon delivers the text to the target as a prompt. Scope is the sender's lineage: its parent and other ancestors, its siblings and its descendants. Agent nodes (Claude, Pi and Codex) receive messages; a terminal node takes raw keystrokes through `write`, which the human approves each time.
 
 ## The envelope
 
@@ -16,7 +16,7 @@ reply-to: n-3f2a
 
 The nonce is new for each delivery. Every node's system prompt says that framed messages are legitimate instructions and that only the outermost frame is authentic, so a body that contains something frame-shaped is plain data. Messages from the daemon itself have `reply-to: none`.
 
-In a Claude node's chat the mod draws a delivered envelope as one line, `↘ message from Builder (n-3f2a) · reply-to n-3f2a` (with `· steer` for a steer), and the node's own `send` calls as `↗ message to <title> (<id>) · queued`. The sent line's outcome is what the call returned (usually `queued`) and is not updated when the message is delivered; a send that failed or was refused also shows its result. ctrl+o shows the full text. This changes the drawing only; Claude reads the whole envelope.
+In a Claude node's chat the mod draws a delivered envelope as one line, `↘ message from Builder (n-3f2a) · reply-to n-3f2a` (with `· steer` for a steer, and no reply-to part for a daemon notice, whose `reply-to` is `none`), and the node's own `send` calls as `↗ message to <title> (<id>) · queued`. The sent line's outcome is what the call returned (usually `queued`) and is not updated when the message is delivered; a send that failed or was refused also shows its result. ctrl+o shows the full text. This changes the drawing only; Claude reads the whole envelope.
 
 ## The queue and delivery
 
@@ -36,7 +36,7 @@ While `tl reload`, `tl update` or the app's update waits for agents to finish th
 
 After a restart, a resumed node whose turn was cut off gets one message from the daemon, from `tiller (daemon restarted)`, asking it to check where it was and continue.
 
-## Steering
+## During a harness change
 
 During a human-requested harness change, inbox intake and claims pause. A paste already in flight
 settles its receipt before the process is stopped. Shutdown acknowledgments may still confirm
@@ -45,6 +45,8 @@ claimed prompt retires as `stalled`, not retryable, because acceptance is ambigu
 replayed automatically. Old launch credentials expire before the new process starts, and a late
 old hook, measure or acknowledgment cannot affect the replacement. New sends during the switch
 are refused with a retry hint.
+
+## Steering
 
 A send with mode `now` (`tl send --now`) is a steer. If the target is working, its turn is interrupted and the message is delivered at once, ahead of the other queued messages, with an extra envelope line telling the target it was interrupted on purpose. With the mod running, the mod claims the steer, aborts the turn and submits it; without the mod, the daemon presses Esc in the terminal and pastes the message once the turn has stopped. To a target that is not working, mode `now` is the same as the default `queue`. The orchestrator prompt reserves steering for a worker heading the wrong way.
 

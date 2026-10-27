@@ -46,7 +46,7 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl ps | list                                        show nodes
   tl usage                                            show account-level Claude usage (5-hour and 7-day windows) as nodes last reported it
   tl select <id>                                      show a node in the app (opens the app if it is built)
-  tl resume <id>                                      relaunch an exited Claude node
+  tl resume <id>                                      relaunch an exited agent node
   tl mute <id> | unmute <id>                          stop or restart OS notifications for one node
   tl dnd [on|off|1h|30m]                              do not disturb: no OS notifications until off, or for the time given;
                                                       with no argument, show whether it is on

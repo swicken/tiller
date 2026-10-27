@@ -28,7 +28,7 @@ When the app or a browser tab regains focus after more than `daemon.digestAfterM
 
 Live orchestrators are protected from being closed by accident. Agents cannot close them, the app offers Restart instead of Kill for them, and `tl kill <id>` on a root refuses with a hint; `tl kill --force <id>` overrides that. Once the process has exited, the app's exited card and Restart dialog also offer **Close**, which explicitly closes the root without restarting it. Children are kept. Worktree nodes still require the usual safe-close, Keep branch or Discard choice.
 
-`tl resume <id>` relaunches an exited Claude node with its previous conversation (`claude --resume`). It refuses an armed or queued node, which launches by itself; close it to drop it.
+`tl resume <id>` relaunches an exited agent node with its previous conversation (`claude --resume` for Claude; Pi and Codex resume their own sessions, see [harnesses](harnesses.md)). It refuses an armed or queued node, which launches by itself; close it to drop it.
 
 ## History, follow-up and fork
 
