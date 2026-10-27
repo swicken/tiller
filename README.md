@@ -22,13 +22,13 @@ A real run from Tiller's own development. You type two requests to the orchestra
 3. Two independent reviewers check the diffs. They find a real bug, which goes back to its fixer.
 4. The orchestrator merges the fixed branches into the task branch and hands it to you.
 
-Partway through, the orchestrator's `list_nodes` shows the tree like this (abridged; ids and titles are illustrative):
+Partway through, the orchestrator's `list_nodes` shows the tree like this (abridged; ids and titles are illustrative, the task branch is the real one):
 
 ```
 - n-1a2b "prune audit" [agent claude] working 2h
   - n-3c4d "audit: daemon lifecycle" [agent claude] done (reported succeeded) 1h
-  - n-5e6f "fix: daemon dead code" [agent claude] done (reported succeeded) 20m ⎇ tl/n-5e6f from tl/prune ↑3 merged
-  - n-7a8b "fix: test fixtures" [agent claude] working 3m ⎇ tl/n-7a8b from tl/prune ↑1 dirty
+  - n-5e6f "fix: daemon dead code" [agent claude] done (reported succeeded) 20m ⎇ tl/n-5e6f from tl/prune-audit ↑3 merged
+  - n-7a8b "fix: test fixtures" [agent claude] working 3m ⎇ tl/n-7a8b from tl/prune-audit ↑1 dirty
   - n-9c0d "review: fixer diffs" [agent claude] working 5m
 ```
 
@@ -69,7 +69,7 @@ It checks for the Xcode tools, Node 24+, an agent CLI and Rust, offers to instal
 You rarely need these directly; the orchestrator uses them.
 
 - **Nodes**: each agent session or terminal the daemon runs. A root node is an orchestrator; a node it spawns is a worker ([agent roles](docs/agent-roles.md)).
-- **Roles and profiles**: the orchestrator coordinates and delegates; workers do one scoped task and report an outcome ([agent roles](docs/agent-roles.md)).
+- **Roles and profiles**: the orchestrator does small work itself and delegates parallel work; workers do one scoped task and report an outcome ([agent roles](docs/agent-roles.md)).
 - **Harnesses**: the agent CLI a node runs, Claude Code, Codex or Pi, bridged by a mod, extension or app-server adapter ([harnesses](docs/harnesses.md)).
 - **Messages**: nodes talk through the daemon, which queues, delivers and steers them ([messaging](docs/messaging.md)).
 - **Worktrees and task branches**: parallel workers get their own worktree on a branch from one task branch; merges go into that branch, never into `main` ([worktrees](docs/worktrees.md)).
