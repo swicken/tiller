@@ -152,12 +152,13 @@ describe('due', () => {
     expect(due(target({ recent: [runView({ startedAt: Date.now() - 24 * HOUR })] }), gardener, facts({ usage: 79, cost30d: 2.75 }))).toBeUndefined();
   });
 
-  it.each<[string, Partial<GardenTarget>, Partial<typeof gardener>, Partial<DueFacts>, RegExp]>([
+  // Rows that read the clock are thunks: the table is built at collection time, before beforeEach fakes it.
+  it.each<[string, Partial<GardenTarget> | (() => Partial<GardenTarget>), Partial<typeof gardener>, Partial<DueFacts>, RegExp]>([
     ['disabled', {}, { enabled: false }, {}, /memory\.gardener\.enabled is false/],
     ['memory off', {}, {}, { memory: { on: false, source: 'memory.enabled in /h/config.json' } }, /memory is off for this project \(memory\.enabled in/],
     ['the memory ceiling', {}, {}, { account: { usageKeys: [''], ceiling: { setting: 'memory', reason: 'claude.accounts me.memory is false' } } }, /memory is off .*me\.memory is false/],
     ['the gardener ceiling', {}, {}, { account: { usageKeys: [''], ceiling: { setting: 'gardener', reason: 'claude.accounts me.gardener is false' } } }, /gardener is disabled .*me\.gardener is false/],
-    ['under 24 h', { recent: [runView({ id: 4, startedAt: Date.now() - 23 * HOUR })] }, {}, {}, /r4, started less than 24 h ago/],
+    ['under 24 h', () => ({ recent: [runView({ id: 4, startedAt: Date.now() - 23 * HOUR })] }), {}, {}, /r4, started less than 24 h ago/],
     ['below the threshold', { newItems: 24 }, {}, {}, /24 new items, below memory\.gardener\.minNewItems \(25\)/],
     ['fewer than 3 proposals', { proposals: 2 }, {}, {}, /2 daemon proposals/],
     ['over budget', {}, {}, { cost30d: 2.76 }, /over budget: \$2\.76 spent/],
@@ -165,10 +166,10 @@ describe('due', () => {
     ['a cap too low for one call', {}, { maxUsdPerRun: 0.03 }, {}, /cannot cover one tool call/],
     ['not quiet', {}, {}, { quiet: false }, /the daemon is busy/],
     ['a live run', {}, {}, { running: true }, /already live/],
-    ['paused after 2 failures', { recent: [failed(3, 'capped'), failed(2)] }, {}, {}, /paused after 2 failed runs \(last: capped\)/],
+    ['paused after 2 failures', () => ({ recent: [failed(3, 'capped'), failed(2)] }), {}, {}, /paused after 2 failed runs \(last: capped\)/],
     ['a rate limit at 80 %', {}, {}, { usage: 80 }, /rate limit is at 80%/],
   ])('is not due: %s', (_, t, cfg, f, reason) => {
-    expect(due(target(t), { ...gardener, ...cfg }, facts(f))).toMatch(reason);
+    expect(due(target(typeof t === 'function' ? t() : t), { ...gardener, ...cfg }, facts(f))).toMatch(reason);
   });
 
   it('lets a manual run skip only enabled, the interval, the threshold, the pause and quiet', () => {
