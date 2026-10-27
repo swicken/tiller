@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { flushEvents } from './sessions.js';
-import { ack, claim, deliver, flushInbox, holdDeliveries, inbox, messageStatus, PI_CONFIRM_MS, QUEUE_TTL_MS, release, saveInboxForRestart, startNotices, unconfirmed, withdraw, type Mgr } from './messaging.js';
+import { ack, claim, deliver, dropNotices, flushInbox, holdDeliveries, inbox, messageStatus, PI_CONFIRM_MS, QUEUE_TTL_MS, release, saveInboxForRestart, startNotices, unconfirmed, withdraw, type Mgr } from './messaging.js';
 
 const PROMPT = ['some output', '────────────────── n-b', '❯ ', '──────────────────'];
 
@@ -418,6 +418,29 @@ describe('mod inbox', () => {
     expect(m.sessions.get('p')!.pasted).toHaveLength(0);
   });
 
+  it('dropNotices withdraws only notices marked dropOnClose, so a queued merge result survives the close', async () => {
+    inbox(m.mgr, 'p');
+    const child = await deliver(m.mgr, 'tiller', 'p', 'a stopped', { about: ['a'], dropOnClose: true });
+    const merge = await deliver(m.mgr, 'tiller', 'p', 'merged a', { about: ['a'] });
+    const both = await deliver(m.mgr, 'tiller', 'p', '2 of 2 finished', { about: ['a', 'b'], dropOnClose: true });
+    dropNotices(m.mgr, 'p', ['a']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(messageStatus(m.mgr, 'tiller', child.messageId!)?.outcome).toBe('withdrawn');
+    expect(inbox(m.mgr, 'p').map((x) => x.id)).toEqual([merge.messageId, both.messageId]); // b is still news
+  });
+
+  it('a stopped notice carries the child\'s last message whole, and cuts a very long one visibly', async () => {
+    startNotices(m.mgr);
+    inbox(m.mgr, 'p');
+    const para = 'A full paragraph about what was done. '.repeat(20).trim(); // ~760 characters: carried whole
+    m.set('a', { exited: true, lastAssistantMessage: para });
+    m.set('b', { exited: true, lastAssistantMessage: 'y'.repeat(1600) });
+    await vi.advanceTimersByTimeAsync(0);
+    const [a, b] = inbox(m.mgr, 'p').map((x) => x.text);
+    expect(a).toContain(`\n${para}\n`);
+    expect(b).toContain(`\n${'y'.repeat(1500)}… (read summary for the rest)\n`);
+  });
+
   it('falls back to paste once the mod has not polled for 5 s', async () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect((await deliver(m.mgr, 'a', 'b', 'still live')).outcome).toBe('queued'); // exactly 5 s: still live
@@ -686,6 +709,24 @@ describe('event log', () => {
 });
 
 describe('station notices', () => {
+  it('tells the parent once when a branch starts conflicting with its base, and again only after it merged cleanly', async () => {
+    startNotices(m.mgr);
+    const pasted = () => m.sessions.get('p')!.pasted;
+    const git = (conflicts?: string[]) => ({ branch: 'tl/a', base: 'dev', ahead: 1, behind: 1, dirty: 0, additions: 1, deletions: 0, ...(conflicts ? { conflicts } : {}) });
+    m.set('a', { git: git(['README', 'b.txt']) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pasted()).toHaveLength(1);
+    expect(pasted()[0]).toMatch(/\nfrom: tiller \(child a "T-a" conflicts with its base\)\nreply-to: none\nMerging dev into tl\/a would conflict in README, b\.txt\. /);
+    m.set('a', { git: git(['README']) });
+    m.set('p', { state: 'done', doneSource: 'stop' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pasted()).toHaveLength(1);
+    m.set('a', { git: git() });
+    m.set('a', { git: git(['README']) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pasted()).toHaveLength(2);
+  });
+
   it('first tells an errored child once to continue, then notifies the parent on the next error; a clean Stop re-arms', async () => {
     startNotices(m.mgr);
     const pasted = () => m.sessions.get('p')!.pasted, child = () => m.sessions.get('a')!.pasted;

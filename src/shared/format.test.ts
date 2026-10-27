@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { branchLabel, ctxLevel, fmtAge, fmtTokens, outcomeLine, shortEffort, shortModel, usageLine, usageParts } from './format.js';
+import { branchLabel, ctxLevel, fmtAge, fmtTokens, NOTICE_CHARS, outcomeLine, shortEffort, shortModel, usageLine, usageParts } from './format.js';
 
 describe('format', () => {
   it('renders an outcome as one line, summary before note', () => {
@@ -10,6 +10,12 @@ describe('format', () => {
   it('labels a read-only worktree as detached at its base', () => {
     expect(branchLabel({ branch: 'tl/n-1', base: 'main' })).toBe('tl/n-1');
     expect(branchLabel({ base: 'main' })).toBe('detached @ main');
+  });
+  it('gives a notice the whole summary, cutting only a pathological one, visibly', () => {
+    const para = 'Did the thing and checked it. '.repeat(30).trim();
+    expect(outcomeLine({ outcome: 'succeeded', summary: para })).toHaveLength('succeeded: '.length + 200);
+    expect(outcomeLine({ outcome: 'succeeded', summary: para }, true)).toBe(`succeeded: ${para}`);
+    expect(outcomeLine({ outcome: 'failed', summary: '😀'.repeat(NOTICE_CHARS + 1) }, true)).toBe(`failed: ${'😀'.repeat(NOTICE_CHARS)}… (read outcome for the rest)`);
   });
   it('shortens model ids', () => {
     expect(shortModel('claude-opus-5-5')).toBe('opus 5.5');

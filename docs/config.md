@@ -30,13 +30,13 @@ The layer column says where a key may be set: "project, home" means either file,
 | `claude.inheritMcpServers` | boolean | `true` | project, home | When true, a Claude node loads the user's and plugins' MCP servers as well as tiller's. A project's `.mcp.json` servers stay off in nodes (tiller lists them as `disabledMcpjsonServers` in the node's settings) because Claude would otherwise stop each new node on an approval prompt. Plugin tools are named `mcp__plugin_<plugin>_<server>__*`. When false the node is launched with `--strict-mcp-config` and gets only tiller's server. Read when the node's files are written for a launch, so a resume uses the current value. |
 | `claude.accounts` | array | `[]` | home | Claude accounts nodes can run under, each `{ "name", "configDir"?, "projects"? }`; see [Claude accounts](harnesses.md#claude-accounts). `name` is 1-32 letters, digits, `_` or `-`. `configDir` (absolute or `~/…`) is the account's `CLAUDE_CONFIG_DIR`; an entry without it is Claude's default home (at most one). `projects` lists directories whose root nodes run in the account. A bad entry, an unknown key, a duplicate name or `configDir`, or a `configDir` of `~/.claude` makes the whole list invalid: Claude nodes then fail closed rather than run in the wrong account. A root spawn is refused with an error naming the file and the problem (the spawn dialog shows it too), as is a restart or resume of a node that has an account, until the list is fixed. When none are configured, Settings → Claude → **Claude account** offers a setup form that writes the first list; after that, Settings → Claude → **Configure** adds, removes and re-directs accounts, and Settings → Claude → **Claude account** picks the default. Editing the JSON also works. |
 | `claude.account` | string | unset | home | The default account, by name, for a root node whose project no account's `projects` lists; unset means no account. A name not in `claude.accounts` makes Claude spawns fail closed, as an invalid list does. Settings → Claude → **Claude account** for all repositories. |
-| `approvals.close` | `never`, `done`, `always` | `never` | home, project stricter | Whether an agent's `close` skips the human's approval: always, only when every node in the batch is done, exited or has reported an outcome, or never. |
+| `approvals.close` | `never`, `done`, `always` | `never` | home, project stricter | Whether an agent's `close` skips the human's approval: always, only when every node in the batch is done, exited or has reported an outcome, or never. A close that waits for approval replies pending and the decision arrives as a message ([messaging](messaging.md#notices-from-the-daemon)). |
 | `approvals.merge` | boolean | `false` | home, project stricter | When true, an agent's `merge` does not ask the human. |
 | `worktrees.isolation` | `none`, `worktree` | `none` | project, home | What a spawn of a worker agent node (any harness, not an orchestrator) gets when it does not say. A [read-only worktree](worktrees.md#read-only-worktrees) (`detached`) is chosen per spawn or preset only. |
 | `worktrees.branchPrefix` | string | `tl/` | project, home | A worktree's branch is this prefix followed by the node id. |
 | `worktrees.include` | list of gitignore patterns | `.worktreeinclude` | project, home | Gitignored files copied into a new worktree; when absent, the repo's `.worktreeinclude` file is used. |
 | `worktrees.mergeStyle` | `merge`, `squash`, `ff-only` | `merge` | project, home | How the merge verb brings a branch into its base. |
-| `worktrees.setup` | list of shell commands | `[]` | project, home | Run in a new worktree before the agent starts. |
+| `worktrees.setup` | list of shell commands | `[]` | project, home | Run in a new worktree before the agent starts. See [copied `node_modules/`](#copied-node_modules) for re-installing a stale copy. |
 | `worktrees.teardown` | list of shell commands | `[]` | project, home | Run in a worktree before tiller removes it. |
 | `worktrees.protected` | list of branch names | `["main", "master"]` | project, home | Branches a merge never goes into; the remote's default branch counts too, unless the list is set to `[]`, which protects nothing. A worker spawned from one without a base gets a task branch. |
 | `worktrees.taskBranch` | string containing `{slug}` | `tl/{slug}` | project, home | Name of the task branch made for such a worker; `{slug}` is its title in lower case with dashes. |
@@ -72,6 +72,18 @@ For notification levels, `sound` is a banner with a sound and `silent` sends not
   "limits": { "stallMinutes": 10 }
 }
 ```
+
+### Copied `node_modules/`
+
+A `.worktreeinclude` that lists `node_modules/` gives each worktree a copy of the main checkout's install, stale or not, even when the worktree's `package-lock.json` pins other versions. This repo's [`scripts/worktree-deps.mjs`](../scripts/worktree-deps.mjs) re-installs only when the copy doesn't match the worktree's lockfile. It compares the `packages` of `package-lock.json` with npm's record of what it installed (`node_modules/.package-lock.json`). Optional packages skipped on this platform don't count as differences. On any other difference, or when the record is missing, it runs `npm ci --no-audit --no-fund`. Setup commands run in the new worktree, so the worktree's own copy of the script is the one that runs. A worker whose base branch predates the script has no copy, so the command skips the check when the file is missing instead of failing setup:
+
+```json
+"worktrees": {
+  "setup": ["test ! -f scripts/worktree-deps.mjs || node scripts/worktree-deps.mjs"]
+}
+```
+
+Another repo can copy the script. A matching copy adds about 50 ms before the agent starts. A stale or missing copy runs `npm ci` instead, which takes about 1.5–3.5 s for this repo with a warm npm cache. A plain `"npm ci"` is also correct, but it pays that cost every time and replaces the copy-on-write clone with a full copy of the files.
 
 <a id="opt-in-codex-task-defaults"></a>
 

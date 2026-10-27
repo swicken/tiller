@@ -51,6 +51,57 @@ describe('completion watches', () => {
     expect(notices).toEqual(['1 of 2 finished:\na: done\nb: working']);
   });
 
+  /** The watcher closes `id`: held while the close runs (it removes the node), settled as closed. */
+  const close = (id: string) => { watches.hold(id); nodes.delete(id); watches.sweep(110); watches.settle(id, true); };
+
+  it('forgets a node the watcher closes: the rest still report, and a watch left empty never fires', () => {
+    add('a', 'working', 10);
+    add('b', 'working', 20);
+    add('c', 'working', 30);
+    watches.register({ ids: ['a', 'b'], when: 'all', of: 'turn' });
+    watches.register({ ids: ['c'], when: 'all', of: 'turn' });
+    nodes.get('b')!.status.state = 'done';
+    starts.set('b', 120);
+    close('a'); // b, the only node left, has finished: it reports at once, without a
+    expect(notices).toEqual(['1 of 1 finished:\nb: done']);
+    close('c');
+    watches.sweep(130);
+    expect(notices).toHaveLength(1);
+    expect(watches.covers('c')).toBe(false);
+  });
+
+  it('keeps watching a node whose close failed, and its close never counts as finishing while it runs', () => {
+    add('a', 'working', 10);
+    watches.register({ ids: ['a'], when: 'all', of: 'turn' });
+    watches.hold('a');
+    nodes.get('a')!.status.exited = true; // the close killed it, then refused (a dirty worktree, say)
+    watches.sweep(110);
+    expect(notices).toEqual([]);
+    nodes.get('a')!.status.exited = false;
+    watches.settle('a', false);
+    expect(watches.covers('a')).toBe(true);
+    nodes.get('a')!.status.state = 'done';
+    starts.set('a', 120);
+    watches.sweep(130);
+    expect(notices).toEqual(['1 of 1 finished:\na: done']);
+  });
+
+  it('a watch left on the same nodes as another keeps its own when and of', () => {
+    add('a', 'working', 10);
+    add('b', 'working', 20);
+    watches.register({ ids: ['a', 'b'], when: 'all', of: 'success' });
+    watches.register({ ids: ['b'], when: 'all', of: 'turn' });
+    close('a');
+    nodes.get('b')!.status.state = 'done';
+    starts.set('b', 120);
+    watches.sweep(130);
+    expect(notices).toEqual(['1 of 1 finished:\nb: done']); // the turn watch
+    expect(watches.covers('b')).toBe(true); // the success watch still waits for b's report
+    nodes.get('b')!.outcome = { outcome: 'succeeded', summary: 's', at: 140 };
+    watches.sweep(140);
+    expect(notices).toEqual(['1 of 1 finished:\nb: done', '1 of 1 finished:\nb: succeeded: s']);
+  });
+
   it('passes the label and the watched ids to notify', () => {
     add('a', 'done', 10);
     add('b', 'done', 20);
