@@ -207,7 +207,7 @@ export class NodeManager extends EventEmitter {
   /** projectDir's main checkout of each cwd outside a worktree node. */
   private projectDirs = new Map<string, string>();
   /** repoAccountOf per node, computed on first view; refreshRepoAccounts recomputes it after a config change. */
-  private repoAccounts = new Map<string, string | undefined>();
+  private repoAccounts = new Map<string, string | null | undefined>();
 
   constructor(opts: ManagerOptions = {}) {
     super();
@@ -267,20 +267,20 @@ export class NodeManager extends EventEmitter {
     if (claudeRoot && !this.repoAccounts.has(id)) this.repoAccounts.set(id, this.repoAccountOf(rec));
     const repoAccount = claudeRoot ? this.repoAccounts.get(id) : undefined;
     const shown = rt.busy === 'changing harness' ? { ...s, activity: rt.stoppingAfterFailedChange ? 'waiting for old process exit; harness unchanged' : 'changing harness' } : gate?.state === 'running' ? { ...s, activity: `gate: ${gate.command}` } : s;
-    return { ...rec, status: git ? { ...shown, git } : shown, unread: !!rt.unread, ...(outcome ? { outcome } : {}), ...(gate ? { gate: gate.state } : {}), ...(rt.busy === 'changing harness' ? { changingHarness: true } : {}), ...(repoAccount ? { repoAccount } : {}) };
+    return { ...rec, status: git ? { ...shown, git } : shown, unread: !!rt.unread, ...(outcome ? { outcome } : {}), ...(gate ? { gate: gate.state } : {}), ...(rt.busy === 'changing harness' ? { changingHarness: true } : {}), ...(repoAccount !== undefined ? { repoAccount } : {}) };
   }
 
   /**
    * For a root Claude node (view checks that; children run in their root's account, so only roots warn), the account a
    * new root session in its project would run in now (spawnAccount's mapping), when that is another Claude home than the
-   * node's own; else undefined. Undefined too while the accounts config is invalid or the node's account is no longer
-   * configured: launches report those.
+   * node's own (null: no account, so Claude's default home); else undefined. Undefined too while the accounts config is
+   * invalid or the node's account is no longer configured: launches report those.
    */
-  private repoAccountOf(rec: NodeRecord): string | undefined {
+  private repoAccountOf(rec: NodeRecord): string | null | undefined {
     try {
       const want = accountForProject(this.home, this.projectDir(rec));
       const dirOf = (a?: string) => (a === undefined ? undefined : claudeConfigDir(this.home, a));
-      return want !== undefined && dirOf(want) !== dirOf(rec.account) ? want : undefined;
+      return dirOf(want) !== dirOf(rec.account) ? want ?? null : undefined;
     } catch { return undefined; }
   }
 

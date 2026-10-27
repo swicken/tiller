@@ -63,7 +63,7 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
         <dl className="inspector-facts">
           {row('Live status', <span className={`inspector-state ${kind}`}><StateDot kind={kind} />{KIND_LABEL[kind]}</span>)}
           {row('Harness', kindTag(node))}
-          {agent && (node.account || node.repoAccount) && row('Account', node.repoAccount
+          {agent && (node.account || node.repoAccount !== undefined) && row('Account', node.repoAccount !== undefined
             ? <span className="warn">{accountMismatch(node)}</span>
             : node.account)}
           {agent && row('Role', node.role ?? (node.parentId ? 'worker' : 'orchestrator'))}

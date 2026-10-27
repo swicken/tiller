@@ -8,7 +8,7 @@ import { findArchived } from './archive.js';
 import { gateFor } from './completion-gate.js';
 import { NodeManager, type SpawnRequest } from './manager.js';
 import { PtySession, type SpawnOpts } from './pty.js';
-import { settingsSnapshot, updateSettings } from './settings.js';
+import { saveClaudeAccounts, settingsSnapshot, updateSettings } from './settings.js';
 
 class FakeSession {
   exited = false;
@@ -273,6 +273,21 @@ describe('a root whose repository now uses another account', () => {
     configure();
     m.refreshRepoAccounts();
     expect(repoAccount(id)).toBe('work');
+  });
+
+  it('warns with null when the repo now resolves to no account, so new roots would run in Claude\'s default home', async () => {
+    const { id } = await spawn(); // work, from its projects entry; no claude.account
+    configure([{ name: 'work', configDir: '~/.claude-work' }, { name: 'other', configDir: '~/.claude-other' }]);
+    m.refreshRepoAccounts();
+    expect(m.view(id)!).toHaveProperty('repoAccount', null);
+  });
+
+  it('updates live when the account form seeds accounts', async () => {
+    configure([]);
+    const { id } = await spawn({ cwd: plain }); // no account: Claude's default home
+    const s = settingsSnapshot(m, 'home');
+    saveClaudeAccounts(m, { scope: 'home', revision: s.revision, openedWith: [], claudeAccounts: { account: 'other', accounts: [{ name: 'other', configDir: '~/.claude-other' }] } });
+    expect(repoAccount(id)).toBe('other');
   });
 
   it('never warns for other harnesses, terminals, or while the accounts config is invalid', async () => {

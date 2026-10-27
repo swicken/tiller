@@ -230,8 +230,8 @@ export interface NodeView extends NodeRecord {
   /** The completion gate's last run for this node: running now, or how it ended. */
   gate?: 'running' | 'passed' | 'failed';
   changingHarness?: boolean;
-  /** On a root Claude node: the account a new session in its repository would run in now, when that differs from `account`. A new session is needed to switch. */
-  repoAccount?: string;
+  /** On a root Claude node: the account a new session in its repository would run in now, when that differs from `account`; null for no account (Claude's default home). A new session is needed to switch. */
+  repoAccount?: string | null;
 }
 
 export interface SessionRecord { sessionId: string; harness: Harness; transcriptPath: string }
