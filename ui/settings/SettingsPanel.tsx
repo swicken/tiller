@@ -48,7 +48,7 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
     }),
     ...groups.filter((group) => (!group.homeOnly || scope === 'home') && !harnessTitles.includes(group.title)),
   ];
-  const matches = (field: Field, title = '') => !search.trim() || `${title} ${field.label} ${field.key} ${field.help ?? ''}`.toLowerCase().includes(search.trim().toLowerCase());
+  const matches = (field: Field, title = '', query = search) => !query.trim() || `${title} ${field.label} ${field.key} ${field.help ?? ''}`.toLowerCase().includes(query.trim().toLowerCase());
   const active = sections.find((section) => section.title === category) ?? sections[0];
   const visibleFields = active.fields.filter((field) => matches(field, active.title));
   const fields = sections.flatMap((group) => group.fields);
@@ -176,7 +176,7 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
   return <Modal className="settings-dialog" label="Settings" restoreFocus blockGlobalShortcuts onClose={() => leave('close')}>
     <aside className="settings-sidebar">
       <h2 id="settings-title">Settings</h2>
-      <div className="settings-search"><SettingsIcon name="Search" /><input autoFocus type="search" aria-label="Search settings" placeholder="Search settings" value={search} onChange={(event) => { const query = event.target.value; setSearch(query); if (query.trim()) { const first = sections.find((section) => section.fields.some((field) => `${section.title} ${field.label} ${field.key} ${field.help ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))); if (first) setCategory(first.title); } }} /></div>
+      <div className="settings-search"><SettingsIcon name="Search" /><input autoFocus type="search" aria-label="Search settings" placeholder="Search settings" value={search} onChange={(event) => { const query = event.target.value; setSearch(query); if (query.trim()) { const first = sections.find((section) => section.fields.some((field) => matches(field, section.title, query))); if (first) setCategory(first.title); } }} /></div>
       <nav className="settings-categories" aria-label="Settings categories">
         <div className="settings-nav-group"><h3>Agents</h3>{['Claude', 'Pi', 'Codex'].map(navButton)}</div>
         <div className="settings-nav-group"><h3>Workflow</h3>{['Notifications', 'Limits', 'Worktrees', 'Approvals & checks'].map(navButton)}</div>
