@@ -83,6 +83,61 @@ describe('applying', () => {
   });
 });
 
+describe('app window', () => {
+  beforeEach(() => vi.resetModules());
+
+  /** IN_APP comes from __TAURI_INTERNALS__ when the module loads, so stub window before importing. */
+  async function loadIn(app: boolean, stored: string | null, systemLight = false) {
+    const browser = stubBrowser(stored, systemLight);
+    const invoke = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('window', app ? { __TAURI_INTERNALS__: { invoke } } : {});
+    return { ...browser, invoke, theme: await import('./theme') };
+  }
+
+  it('sends the preference at startup and on each change, System as null', async () => {
+    const { invoke, theme } = await loadIn(true, 'light');
+    theme.startTheme();
+    theme.setThemePref('dark');
+    theme.setThemePref('system');
+    expect(invoke.mock.calls).toEqual([
+      ['set_app_theme', { theme: 'light' }],
+      ['set_app_theme', { theme: 'dark' }],
+      ['set_app_theme', { theme: null }],
+    ]);
+  });
+
+  it('does not send an OS flip, whatever the preference', async () => {
+    const { invoke, theme, flipOs, root } = await loadIn(true, 'light');
+    theme.startTheme();
+    flipOs(true);
+    flipOs(false);
+    expect(root.dataset.theme).toBe('light');
+    theme.setThemePref('system');
+    invoke.mockClear();
+    flipOs(true);
+    expect(root.dataset.theme).toBe('light');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('is not called in the browser', async () => {
+    const { invoke, theme } = await loadIn(false, 'light');
+    theme.startTheme();
+    theme.setThemePref('dark');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('keeps the theme working when the call fails', async () => {
+    const { invoke, theme, root } = await loadIn(true, 'dark');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    invoke.mockRejectedValueOnce(new Error('denied')).mockImplementationOnce(() => { throw new Error('gone'); });
+    theme.startTheme();
+    theme.setThemePref('light');
+    expect(root.dataset.theme).toBe('light');
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(2));
+    warn.mockRestore();
+  });
+});
+
 it('index.html pre-paint script resolves every stored value and OS like theme.ts', () => {
   const script = /<script>([\s\S]*?)<\/script>/.exec(read('./index.html'))?.[1];
   expect(script).toContain(`'${THEME_KEY}'`);

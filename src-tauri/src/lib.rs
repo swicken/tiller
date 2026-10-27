@@ -1,7 +1,7 @@
 mod external_links;
 
 use std::{env, fs, path::PathBuf, process::{Command, Stdio}, thread, time::{Duration, Instant}};
-use tauri::{image::Image, menu::{Menu, MenuItem, PredefinedMenuItem}, tray::TrayIconBuilder, AppHandle, Manager, RunEvent, Url, Wry};
+use tauri::{image::Image, menu::{Menu, MenuItem, PredefinedMenuItem}, tray::TrayIconBuilder, AppHandle, Manager, RunEvent, Theme, Url, WebviewWindow, Wry};
 
 fn home() -> PathBuf {
     env::var_os("TL_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(env::var("HOME").unwrap_or_default()).join(".tiller"))
@@ -77,6 +77,21 @@ fn set_tray(app: AppHandle, color: String, items: Vec<(String, String)>, dnd: bo
     tray.set_menu(Some(tray_menu(&app, &items, dnd).map_err(|e| e.to_string())?)).map_err(|e| e.to_string())
 }
 
+fn parse_theme(theme: Option<&str>) -> Result<Option<Theme>, String> {
+    match theme {
+        None => Ok(None),
+        Some("light") => Ok(Some(Theme::Light)),
+        Some("dark") => Ok(Some(Theme::Dark)),
+        Some(other) => Err(format!("unknown theme {other:?}")),
+    }
+}
+
+// The UI calls this with its theme preference (ui/theme.ts); None follows the OS. The traffic lights take this appearance.
+#[tauri::command]
+fn set_app_theme(window: WebviewWindow, theme: Option<String>) -> Result<(), String> {
+    window.set_theme(parse_theme(theme.as_deref())?).map_err(|e| e.to_string())
+}
+
 // Menu clicks go to the UI (window.__tltray in ui/hooks.ts), which selects the node or toggles do not disturb.
 fn on_tray_menu(app: &AppHandle, id: &str) {
     let Some(w) = app.get_webview_window("main") else { return };
@@ -91,7 +106,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![set_tray, external_links::open_external_url])
+        .invoke_handler(tauri::generate_handler![set_tray, set_app_theme, external_links::open_external_url])
         .setup(|app| {
             TrayIconBuilder::with_id("tl")
                 .icon(dot(GREEN))
@@ -118,4 +133,19 @@ pub fn run() {
             if let Some(w) = app.get_webview_window("main") { show_and_focus(&w); }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_theme, Theme};
+
+    #[test]
+    fn parses_only_known_themes() {
+        assert_eq!(parse_theme(None), Ok(None));
+        assert_eq!(parse_theme(Some("light")), Ok(Some(Theme::Light)));
+        assert_eq!(parse_theme(Some("dark")), Ok(Some(Theme::Dark)));
+        for value in ["system", "Light", ""] {
+            assert!(parse_theme(Some(value)).is_err(), "{value}");
+        }
+    }
 }

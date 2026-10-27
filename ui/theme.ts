@@ -1,4 +1,6 @@
+import type { TauriWindow } from './hooks';
 import { readPref, writePref } from './prefs';
+import { IN_APP } from './url';
 
 // The pre-paint script in index.html repeats the key, the values and the resolution rule; theme.test.ts keeps them in step.
 export type ThemePref = 'system' | 'light' | 'dark';
@@ -26,9 +28,22 @@ export function applyTheme() {
   if (next !== prev) listeners.forEach((fn) => fn(next));
 }
 
+/**
+ * Gives the app window the preference, so the native title bar and traffic lights match; System passes null so the
+ * window follows the OS. Only the preference goes native, never an OS flip, so the OS listener cannot loop through it.
+ */
+function syncAppTheme() {
+  if (!IN_APP) return;
+  try {
+    (window as TauriWindow).__TAURI_INTERNALS__?.invoke('set_app_theme', { theme: pref === 'system' ? null : pref })
+      .catch((e) => console.warn('set_app_theme failed', e));
+  } catch (e) { console.warn('set_app_theme failed', e); }
+}
+
 export function setThemePref(next: ThemePref) {
   pref = next;
   writePref(THEME_KEY, next);
+  syncAppTheme();
   applyTheme();
 }
 
@@ -41,5 +56,6 @@ export function onThemeChange(fn: (theme: Theme) => void) {
 /** Applies the stored preference and follows the OS while it is System. Called once at startup. */
 export function startTheme() {
   matchMedia(SYSTEM_LIGHT).addEventListener('change', () => { if (pref === 'system') applyTheme(); });
+  syncAppTheme();
   applyTheme();
 }
