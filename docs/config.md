@@ -75,11 +75,11 @@ For notification levels, `sound` is a banner with a sound and `silent` sends not
 
 ### Copied `node_modules/`
 
-A `.worktreeinclude` that lists `node_modules/` gives each worktree a copy of the main checkout's install, stale or not, even when the worktree's `package-lock.json` pins other versions. This repo's [`scripts/worktree-deps.mjs`](../scripts/worktree-deps.mjs) re-installs only when the copy doesn't match the worktree's lockfile. It compares the `packages` of `package-lock.json` with npm's record of what it installed (`node_modules/.package-lock.json`). Optional packages skipped on this platform don't count as differences. On any other difference, or when the record is missing, it runs `npm ci --no-audit --no-fund`. Setup commands run in the new worktree, so the worktree's own copy of the script is the one that runs:
+A `.worktreeinclude` that lists `node_modules/` gives each worktree a copy of the main checkout's install, stale or not, even when the worktree's `package-lock.json` pins other versions. This repo's [`scripts/worktree-deps.mjs`](../scripts/worktree-deps.mjs) re-installs only when the copy doesn't match the worktree's lockfile. It compares the `packages` of `package-lock.json` with npm's record of what it installed (`node_modules/.package-lock.json`). Optional packages skipped on this platform don't count as differences. On any other difference, or when the record is missing, it runs `npm ci --no-audit --no-fund`. Setup commands run in the new worktree, so the worktree's own copy of the script is the one that runs. A worker whose base branch predates the script has no copy, so the command skips the check when the file is missing instead of failing setup:
 
 ```json
 "worktrees": {
-  "setup": ["node scripts/worktree-deps.mjs"]
+  "setup": ["test ! -f scripts/worktree-deps.mjs || node scripts/worktree-deps.mjs"]
 }
 ```
 

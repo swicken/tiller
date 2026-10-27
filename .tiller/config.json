@@ -13,7 +13,7 @@
   "worktrees": {
     "protected": [],
     "setup": [
-      "node scripts/worktree-deps.mjs"
+      "test ! -f scripts/worktree-deps.mjs || node scripts/worktree-deps.mjs"
     ]
   },
   "profiles": {
