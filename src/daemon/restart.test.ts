@@ -81,9 +81,10 @@ describe('drainDaemon before a restart', () => {
     const fetch = vi.fn().mockResolvedValue(drain(['a']));
     vi.stubGlobal('fetch', fetch);
     const abort = new AbortController();
-    // This wait lasts until the abort, which may land before drainDaemon reaches it.
-    vi.mocked(sleep).mockImplementationOnce((_ms, _value, o) => new Promise((_, reject) => {
-      const signal = o!.signal!; signal.throwIfAborted(); signal.addEventListener('abort', () => reject(signal.reason));
+    // This wait lasts until the abort, which may land before drainDaemon reaches it. Without the signal it ends at once,
+    // so a drain that stops passing it polls again and fails the test.
+    vi.mocked(sleep).mockImplementationOnce((_ms, value, o) => !o?.signal ? Promise.resolve(value) : new Promise((_, reject) => {
+      const signal = o.signal!; signal.throwIfAborted(); signal.addEventListener('abort', () => reject(signal.reason));
     }));
     const done = drainDaemon(home, 7799, { reason: 'tl reload', signal: abort.signal });
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
