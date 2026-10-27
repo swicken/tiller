@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { token } from '../url';
 import { refreshUsage, send } from '../conn';
 import { useStore } from '../store';
-import { accountOptionLabel, accountStatus, accountsError, buildChanges, cliStatus, efforts, fieldPreview, groups, inputValue, optionLabel, profileFields, profiles, type Field, type Scope, type SettingsSnapshot } from './settings-model';
+import { accountOptionLabel, accountStatus, accountsError, buildChanges, cliStatus, fieldPreview, groups, inputValue, optionLabel, profileFields, type Field, type Scope, type SettingsSnapshot } from './settings-model';
+import { HARNESSES, HARNESS_LABELS, PROFILES } from '../../src/shared/protocol';
 import { Modal } from '../controls/Modal';
 import { Select } from '../controls/Select';
 import './settings.css';
@@ -38,13 +39,14 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
   const content = useRef<HTMLDivElement>(null);
   const [reload, setReload] = useState(0);
   const dirty = Object.keys(drafts).length > 0;
+  const harnessTitles = Object.values(HARNESS_LABELS);
   const sections = [
     // A harness's own group (such as Claude's MCP setting) follows its profile fields in the one section of that title.
-    ...Object.keys(efforts).map((harness) => {
-      const title = harness === 'pi' ? 'Pi' : harness === 'codex' ? 'Codex' : 'Claude';
-      return { title, help: 'Model and effort resolve independently. Spawn options and presets take precedence over these defaults.', fields: [...profileFields(harness as keyof typeof efforts), ...groups.filter((group) => group.title === title).flatMap((group) => group.fields)] };
+    ...HARNESSES.map((harness) => {
+      const title = HARNESS_LABELS[harness];
+      return { title, help: 'Model and effort resolve independently. Spawn options and presets take precedence over these defaults.', fields: [...profileFields(harness), ...groups.filter((group) => group.title === title).flatMap((group) => group.fields)] };
     }),
-    ...groups.filter((group) => (!group.homeOnly || scope === 'home') && !['Claude', 'Pi', 'Codex'].includes(group.title)),
+    ...groups.filter((group) => (!group.homeOnly || scope === 'home') && !harnessTitles.includes(group.title)),
   ];
   const matches = (field: Field, title = '') => !search.trim() || `${title} ${field.label} ${field.key} ${field.help ?? ''}`.toLowerCase().includes(search.trim().toLowerCase());
   const active = sections.find((section) => section.title === category) ?? sections[0];
@@ -206,10 +208,10 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
       {snapshot && <form id="settings-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
         <datalist id="settings-claude-models">{['opus', 'sonnet', 'haiku'].map((model) => <option key={model} value={model} />)}</datalist>
         {category !== 'CLI diagnostics' && <section className="settings-section" aria-labelledby="settings-category-title">
-          <div className="settings-page-heading"><h1 id="settings-category-title">{active.title}{['Claude', 'Codex', 'Pi'].includes(active.title) ? ' task profiles' : ''}</h1>
+          <div className="settings-page-heading"><h1 id="settings-category-title">{active.title}{harnessTitles.includes(active.title) ? ' task profiles' : ''}</h1>
           {active.help && <p>{active.help}</p>}</div>
-          {['Claude', 'Codex', 'Pi'].includes(active.title) ? <>
-            {profiles.filter((profile) => visibleFields.some((field) => field.key.includes(`.${profile}.`))).map((profile) => <fieldset className="settings-profile" key={profile}><legend>{profile.charAt(0).toUpperCase() + profile.slice(1)}</legend>{visibleFields.filter((field) => field.key.includes(`.${profile}.`)).map(renderField)}</fieldset>)}
+          {harnessTitles.includes(active.title) ? <>
+            {PROFILES.filter((profile) => visibleFields.some((field) => field.key.includes(`.${profile}.`))).map((profile) => <fieldset className="settings-profile" key={profile}><legend>{profile.charAt(0).toUpperCase() + profile.slice(1)}</legend>{visibleFields.filter((field) => field.key.includes(`.${profile}.`)).map(renderField)}</fieldset>)}
             {visibleFields.some((field) => !field.key.startsWith('profiles.')) && <section className="settings-subsection"><h2>{active.title} nodes</h2>{visibleFields.filter((field) => !field.key.startsWith('profiles.')).map(renderField)}</section>}
           </> : active.title === 'Approvals & checks' ? <>
             {visibleFields.some((field) => field.key.startsWith('approvals.')) && <section className="settings-subsection"><h2>Approvals</h2>{visibleFields.filter((field) => field.key.startsWith('approvals.')).map(renderField)}</section>}

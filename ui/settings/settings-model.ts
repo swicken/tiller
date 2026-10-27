@@ -1,11 +1,9 @@
-import type { ClaudeAccountView, UsageSource } from '../../src/shared/protocol';
-import { SETTINGS_FIELDS, SETTINGS_EFFORTS, SETTINGS_PROFILES, type SettingsField } from '../../src/shared/settings';
+import { PROFILES, type ClaudeAccountView, type Harness, type UsageSource } from '../../src/shared/protocol';
+import { SETTINGS_FIELDS, type SettingsField } from '../../src/shared/settings';
 export type { SettingsSnapshot } from '../../src/shared/settings';
 import type { SettingsSnapshot } from '../../src/shared/settings';
 export type { SettingsScope as Scope } from '../../src/shared/settings';
 export type Field = SettingsField & { help?: string };
-export const profiles = SETTINGS_PROFILES;
-export const efforts = SETTINGS_EFFORTS;
 const fieldHelp: Record<string, string> = {
   'notifications.kinds.needsYou': 'An agent is waiting for your input or approval.',
   'notifications.kinds.errored': 'An agent encounters an error.',
@@ -34,7 +32,7 @@ function field(key: string, label: string, extra: { help?: string } = {}): Field
   if (!metadata) throw new Error(`Missing settings metadata: ${key}`);
   return { ...metadata, help: fieldHelp[key], label: label.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase()), ...extra };
 }
-export const profileFields = (harness: keyof typeof efforts): Field[] => profiles.flatMap((profile) => [
+export const profileFields = (harness: Harness): Field[] => PROFILES.flatMap((profile) => [
   field(`profiles.${harness}.${profile}.model`, `${profile} model`, { help: harness === 'pi' ? 'Provider/model ID accepted by Pi.' : 'Model ID accepted by this harness.' }),
   field(`profiles.${harness}.${profile}.effort`, `${profile} effort`),
 ]);

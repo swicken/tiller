@@ -1,7 +1,7 @@
 import { Select } from '../controls/Select';
 import { useEffect, useRef, useState } from 'react';
 import { PROFILES, PROFILE_LABELS, harnessFor, profileFor, type InstalledReleaseNotes, type Profile, type Effort, isAgentKind, type ClaudeAccountView, type ClientMessage, type Harness, type NodeKind, type Role } from '../../src/shared/protocol';
-import { SETTINGS_HARNESSES, SETTINGS_EFFORTS } from '../../src/shared/settings';
+import { HARNESSES, HARNESS_EFFORTS } from '../../src/shared/harness-policy';
 import { send } from '../conn';
 import type { TauriWindow } from '../hooks';
 import { Modal } from '../controls/Modal';
@@ -89,7 +89,7 @@ function SpawnDialog({ d }: { d: Spawn }) {
     <Modal title={parent ? `New child of ${parent.title}` : 'New session'} onClose={close}>
       <form className="form" onSubmit={submit}>
         <div className="seg" role="radiogroup" aria-label="Kind">
-          {([...SETTINGS_HARNESSES, 'terminal'] as const).map((k) => (
+          {([...HARNESSES, 'terminal'] as const).map((k) => (
             <button type="button" key={k} role="radio" aria-checked={choice === k} className={choice === k ? 'on' : ''} onClick={() => { setChoice(k); if (k === 'codex' && effort === 'max') setEffort(''); }}>{k}</button>
           ))}
         </div>
@@ -120,7 +120,7 @@ function SpawnDialog({ d }: { d: Spawn }) {
         {agent && <label>Initial prompt<textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional" /></label>}
         {agent && <label>Task profile<Select value={profile} onChange={(e) => setProfile(e.target.value as Profile)}>{PROFILES.map((p) => <option key={p} value={p}>{PROFILE_LABELS[p]}</option>)}</Select></label>}
         <label>Model<input className="mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Default" /></label>
-        {agent && <label>Effort<Select value={effort} onChange={(e) => setEffort(e.target.value as Effort | '')}><option value="">Default</option>{SETTINGS_EFFORTS[choice === 'terminal' ? 'claude' : choice].map((e) => <option key={e}>{e}</option>)}</Select></label>}
+        {agent && <label>Effort<Select value={effort} onChange={(e) => setEffort(e.target.value as Effort | '')}><option value="">Default</option>{HARNESS_EFFORTS[choice === 'terminal' ? 'claude' : choice].map((e) => <option key={e}>{e}</option>)}</Select></label>}
         {agent && <label>Coordination role<Select value={role} onChange={(e) => setRole(e.target.value as Role)}>{(['orchestrator', 'worker', 'none'] as const).map((r) => <option key={r}>{r}</option>)}</Select></label>}
         {agent && (
           <label className="check"><input type="checkbox" checked={isolate} onChange={(e) => setIsolate(e.target.checked)} />Isolate in a git worktree
@@ -233,7 +233,7 @@ function ChangeHarnessDialog({ id }: { id: string }) {
         <p>The current {current} process will stop. The selected harness starts with a fresh context; it will not resume this conversation.</p>
         <p>Earlier transcripts stay readable. This node keeps its title, children, working directory and worktree.</p>
         <label>Harness<Select value={target} onChange={(e) => setTarget(e.target.value as Harness)} aria-describedby="harness-defaults">
-          {SETTINGS_HARNESSES.map((h) => <option key={h} value={h}>{h}{h === current ? ' (current)' : ''}</option>)}
+          {HARNESSES.map((h) => <option key={h} value={h}>{h}{h === current ? ' (current)' : ''}</option>)}
         </Select></label>
         <p id="harness-defaults">Model, effort, preset and Claude permission overrides are cleared. The selected harness uses its task profile defaults and configured permission and approval settings.</p>
         <label>First prompt<textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional: by default it is pointed at its handoff.md, if there is one" /></label>

@@ -1,5 +1,4 @@
-import { HARNESSES as SETTINGS_HARNESSES, PROFILES as SETTINGS_PROFILES, HARNESS_EFFORTS as SETTINGS_EFFORTS, EFFORTS } from './harness-policy.js';
-export { SETTINGS_HARNESSES, SETTINGS_PROFILES, SETTINGS_EFFORTS };
+import { HARNESSES, PROFILES, HARNESS_EFFORTS, EFFORTS } from './harness-policy.js';
 
 /** Human/admin Settings HTTP contract. null removes an explicit override. */
 export type SettingsScope = 'project' | 'home';
@@ -31,7 +30,7 @@ export interface SettingsField {
  * Sonnet/Haiku aliases can resolve to older provider models without effort support:
  * https://code.claude.com/docs/en/model-config#adjust-effort-level
  */
-export const SETTINGS_PROFILE_DEFAULTS: { [Harness in typeof SETTINGS_HARNESSES[number]]: Record<typeof SETTINGS_PROFILES[number], { model?: string; effort?: (typeof SETTINGS_EFFORTS)[Harness][number] }> } = {
+export const SETTINGS_PROFILE_DEFAULTS: { [Harness in typeof HARNESSES[number]]: Record<typeof PROFILES[number], { model?: string; effort?: (typeof HARNESS_EFFORTS)[Harness][number] }> } = {
   claude: {
     orchestrator: { model: 'opus' }, implementation: { model: 'sonnet' },
     explorer: { model: 'haiku' }, mechanical: { model: 'haiku' }, reviewer: { model: 'opus' },
@@ -44,7 +43,7 @@ export const SETTINGS_PROFILE_DEFAULTS: { [Harness in typeof SETTINGS_HARNESSES[
 };
 const field = (key: string, type: SettingsField['type'], extra: Partial<SettingsField> = {}): SettingsField => ({ key, label: key.split('.').at(-1)!, type, ...extra });
 export const SETTINGS_FIELDS: SettingsField[] = [
-  ...SETTINGS_HARNESSES.flatMap(h => SETTINGS_PROFILES.flatMap(p => [field(`profiles.${h}.${p}.model`, 'text'), field(`profiles.${h}.${p}.effort`, 'select', { options: SETTINGS_EFFORTS[h] })])),
+  ...HARNESSES.flatMap(h => PROFILES.flatMap(p => [field(`profiles.${h}.${p}.model`, 'text'), field(`profiles.${h}.${p}.effort`, 'select', { options: HARNESS_EFFORTS[h] })])),
   ...['orchestrator', 'worker'].flatMap(r => [field(`roles.${r}.model`, 'text'), field(`roles.${r}.effort`, 'select', { options: EFFORTS })]),
   field('claude.inheritMcpServers', 'boolean'),
   // Options are the configured claude.accounts names. Home scope sets claude.account; project scope lists the repo under that account's projects, in the home file.
