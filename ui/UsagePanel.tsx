@@ -1,4 +1,4 @@
-import { fmtAge, usageParts } from '../src/shared/format';
+import { fmtAge, limitResetPassed, limitStale, usageParts } from '../src/shared/format';
 import type { RateLimit, UsageSource } from '../src/shared/protocol';
 import { groupUsageObservations, usageStale, usageToolName } from '../src/shared/usage';
 import { useNow } from './hooks';
@@ -23,7 +23,7 @@ const windowNames: Record<string, string> = {
 function QuotaWindow({ limit, title, now }: { limit: RateLimit; title?: string; now: number }) {
   const name = windowNames[limit.kind] ?? limit.kind;
   const reset = limit.resetsAt ? Date.parse(limit.resetsAt) : NaN;
-  const expired = reset <= now;
+  const expired = limitResetPassed(limit, now);
   const valid = Number.isFinite(limit.percentUsed) && limit.percentUsed >= 0;
   const percent = Math.round(limit.percentUsed);
   const resetText = !Number.isFinite(reset) ? 'Reset time unavailable'
@@ -32,7 +32,7 @@ function QuotaWindow({ limit, title, now }: { limit: RateLimit; title?: string; 
   return <div className="usage-quota">
     <div className="usage-quota-heading"><span>{title ?? name}</span><span className="usage-percent">{valid && !expired ? `${percent}% used` : 'Awaiting update'}</span></div>
     {valid && !expired && <progress className={percent > 95 ? 'usage-critical' : percent > 80 ? 'usage-warning' : ''} aria-label={`${title ?? name}: ${name}`} max={100} value={Math.min(100, limit.percentUsed)} aria-valuetext={`${percent}% used`} />}
-    <p className="usage-caption">{title && <>{name} · </>}{resetText}{limit.observedAt !== undefined && now - limit.observedAt > 300_000 && ' · Stale reading'}</p>
+    <p className="usage-caption">{title && <>{name} · </>}{resetText}{limitStale(limit, now) && ' · Stale reading'}</p>
   </div>;
 }
 
