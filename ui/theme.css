@@ -48,6 +48,32 @@
   }
 }
 
+/* Light, tuned for WCAG AA text and state contrast. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --surface: #f5f7fa;
+  --surface-2: #eaeef3;
+  --hover: #e8edf3;
+  --sel: #d6e6fd;
+  --fg: #1f2933;
+  --dim: #56606e;
+  --line: #d3dae3;
+  --accent: #0b64d8;
+  --accent-fg: #ffffff;
+  --working: #00707d;
+  --needs: #7d4e00;
+  --done: #17692f;
+  --bad: #a40e26;
+  --idle: #6e7781;
+  --shadow: 0 8px 32px rgb(31 41 51 / 0.2);
+  --shadow-sm: 0 1px 2px rgb(31 41 51 / 0.15);
+  --shadow-lg: 0 16px 64px rgb(31 41 51 / 0.15);
+  --scrim: rgb(0 0 0 / 0.5);
+  --on-bad: #ffffff;
+  --logo-invert: 0;
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--fg); font: 13px/1.4 var(--ui); -webkit-font-smoothing: antialiased; }
