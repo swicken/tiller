@@ -963,9 +963,10 @@ export class NodeManager extends EventEmitter {
     }
     this.setStatus(nodeId, next);
     const e = event.hook_event_name;
-    if ((e === 'Stop' || e === 'StopFailure') && rec.gardener) this.gardener.turnDone(nodeId);
-    if (e === 'Stop' || e === 'StopFailure') refreshGit(this, nodeId).catch(logError);
-    else if (e === 'PostToolUse' && GIT_EDIT_TOOLS.includes(String(event.tool_name)) && rec.worktree) refreshGitSoon(this, nodeId);
+    if (e === 'Stop' || e === 'StopFailure') {
+      if (rec.gardener) this.gardener.turnDone(nodeId);
+      refreshGit(this, nodeId).catch(logError);
+    } else if (e === 'PostToolUse' && GIT_EDIT_TOOLS.includes(String(event.tool_name)) && rec.worktree) refreshGitSoon(this, nodeId);
   }
 
   /** Lifecycle events from a harness bridge; starts and final settlement drive the shared state machine. */

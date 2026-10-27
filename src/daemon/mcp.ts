@@ -1,13 +1,13 @@
 import { fmtAge, shortEffort, shortModel, usageLine } from '../shared/format.js';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import type http from 'node:http';
 import { isAbsolute, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { dndActive, EFFORTS, finished, isAgentKind, ISOLATIONS, NODE_KINDS, ROLES, type ArchivedNode, type Diff, type Dnd, type NodeView, type Outcome } from '../shared/protocol.js';
+import { dndActive, EFFORTS, finished, isAgentKind, ISOLATIONS, NODE_KINDS, ROLES, type ArchivedNode, type Diff, type Dnd, type MemoryItemView, type NodeView, type Outcome } from '../shared/protocol.js';
 import { updateLine, type Updater } from './update.js';
 import { fmtUsd, subtreeSpend } from '../shared/spend.js';
 import { treeOrder } from '../shared/tree.js';
@@ -22,14 +22,14 @@ import { memoryOn, switchMemory } from './memory-config.js';
 import { oneLine } from './memory-digest.js';
 import {
   accountKey, itemRef, LIMITS, MEMORY_TOOL_SHAPES, parseItemRef, parseRunRef, runRef, type Actor, type GardenRefused, type GardenRunView, type GardenTarget,
-  type ItemView, type MemoryScope,
+  type MemoryScope,
 } from './memory-schema.js';
 import { gardenAccount, GARDENER_TOOLS, pausedBy, runSummary, type GardenCall, type GardenerTool } from './gardener.js';
 import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS } from './spawnfields.js';
 import { readMessages, renderMessage, sessionMessages } from './transcript.js';
 import { DAEMON, deliver, HUMAN, inScope, isDescendant, messageStatus, notifyWhen, QUEUE_CAP, QUEUE_TTL_MS, RATE_MS, startNotices, withdraw } from './messaging.js';
-import { logError, PREVIEW_CHARS, readBody, safeEqual } from './util.js';
+import { logError, PREVIEW_CHARS, readBody, requireDir, safeEqual } from './util.js';
 
 const MAX_WRITE_CHARS = 2000;
 const IDEMPOTENCY_MS = 24 * 3600_000;
@@ -124,13 +124,14 @@ function diffText(d: Diff, stat: boolean): string {
   return [head, ...body, ...tail].join('\n');
 }
 
+const ago = (ms: number) => { const a = fmtAge(ms); return a === 'now' ? 'just now' : `${a} ago`; };
+
 /** read "outcome": a node's report_outcome fields as plain text. */
 function outcomeText(id: string, o: Outcome | undefined, gate?: NodeView['gate']): string {
   if (!o) return `${id} has not reported an outcome${gate === 'running' ? ' (its completion gate is running)' : ''}`;
   const list = (label: string, xs?: string[]) => (xs?.length ? [`${label}:`, ...xs.map((x) => `  - ${x}`)] : []);
-  const age = fmtAge(Date.now() - o.at);
   return [
-    `${id} reported ${o.outcome}${o.gate ? ` (gate ${o.gate})` : ''} ${age === 'now' ? 'just now' : `${age} ago`}`,
+    `${id} reported ${o.outcome}${o.gate ? ` (gate ${o.gate})` : ''} ${ago(Date.now() - o.at)}`,
     o.note && `note: ${o.note}`, o.summary && `summary: ${o.summary}`, ...list('changed files', o.changedFiles),
     o.verified && `verified: ${o.verified}`, ...list('open questions', o.openQuestions),
   ].filter(Boolean).join('\n');
@@ -160,8 +161,7 @@ async function requireArchived(c: Ctx, id: string): Promise<ArchivedNode> {
 
 /** `n-x "title" closed 2h ago: succeeded: ... (merged into main) ⎇ tl/n-x $0.42` for the history tool. */
 function historyLine(a: ArchivedNode, now: number): string {
-  const age = fmtAge(now - a.closedAt);
-  return [`${a.id} "${a.title}" closed ${age === 'now' ? 'just now' : `${age} ago`}${a.brief ? `: ${a.brief}` : ''}`, a.branch && `⎇ ${a.branch}`, (a.spentUsd || a.spentIncomplete) && fmtUsd(a.spentUsd ?? 0, a.spentIncomplete)].filter(Boolean).join(' ');
+  return [`${a.id} "${a.title}" closed ${ago(now - a.closedAt)}${a.brief ? `: ${a.brief}` : ''}`, a.branch && `⎇ ${a.branch}`, (a.spentUsd || a.spentIncomplete) && fmtUsd(a.spentUsd ?? 0, a.spentIncomplete)].filter(Boolean).join(' ');
 }
 
 const requireOwned = (c: Ctx, id: string, allowSelf: boolean): NodeView => {
@@ -197,8 +197,6 @@ async function runGate(m: NodeManager, id: string, gate: NonNullable<Config['gat
 
 // ---- memory ----
 
-const ago = (ms: number) => { const a = fmtAge(ms); return a === 'now' ? 'just now' : `${a} ago`; };
-
 /**
  * The scope a memory tool acts on, once memory is on there. An agent's is its own node's; the human names a directory
  * of the repository (repo) and may pick the account, else the project's (projectAccount).
@@ -208,9 +206,7 @@ function memoryScopeOf(c: Ctx, a: { repo?: string; account?: string }): MemorySc
   let repoPath: string, account: string | undefined;
   if (c.caller === HUMAN) {
     if (!a.repo) throw new Error('repo is required for the human: a directory of the repository (tl memory passes its own)');
-    if (!isAbsolute(a.repo) || !statSync(a.repo, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`repo must be the absolute path of a directory: ${a.repo}`);
-    repoPath = m.projectDir({ cwd: a.repo });
-    account = a.account ?? accountForProject(m.home, repoPath);
+    ({ repoPath, account } = humanRepo(c, a.repo, a.account));
   } else {
     if (a.repo !== undefined || a.account !== undefined) throw new Error("refused: repo and account are the human's to choose; your memory is your own repository's");
     const rec = m.registry.get(c.caller);
@@ -264,19 +260,19 @@ function runIdOf(ref: string): number {
 }
 
 /** `m12 · pitfall · 3d · n-ab12 codex[ · daemon] · <text>`, a human item as `human`. */
-function itemLine(v: ItemView, now: number): string {
+function itemLine(v: MemoryItemView, now: number): string {
   const who = v.author === 'human' ? 'human' : `${[v.nodeId, v.harness].filter(Boolean).join(' ') || v.author}${v.author === 'daemon' && v.nodeId ? ' · daemon' : ''}`;
   return oneLine(`${itemRef(v.id)} · ${v.kind} · ${fmtAge(now - v.updatedAt)} · ${who}${v.invalid ? ' · retracted' : ''} · ${v.text}`);
 }
 
 /** The run ("r12") that hid an item merged or superseded by the gardener (invalid.by "gardener:r12"); undefined otherwise. */
-function gardenRunOf(v: ItemView): string | undefined {
+function gardenRunOf(v: MemoryItemView): string | undefined {
   const by = v.invalid && (v.invalid.kind === 'merged' || v.invalid.kind === 'gardener') ? v.invalid.by : undefined;
   return by?.startsWith('gardener:') ? by.slice('gardener:'.length) : undefined;
 }
 
 /** memory_get's text: a provenance line, its state, then text and body. */
-function itemText(v: ItemView, now: number): string {
+function itemText(v: MemoryItemView, now: number): string {
   const by = v.author === 'human' ? 'the human' : `${[v.nodeId, v.harness, v.model].filter(Boolean).join(' ') || 'unknown'}${v.author === 'daemon' ? ' (daemon facts)' : ''}`;
   const head = `${itemRef(v.id)} · ${v.kind}${v.pinned ? ' · pinned by the human' : ''} · recorded by ${by} ${ago(now - v.createdAt)}, last seen ${ago(now - v.updatedAt)} (${v.seen}×)`;
   const run = gardenRunOf(v);
@@ -338,10 +334,14 @@ const refs = (ids: number[]) => ids.map(itemRef).join(', ');
 
 /** The human's repository and account for memory_garden, without memory's on gate: status and undo work while it is off. */
 function gardenTarget(c: Ctx, a: { repo?: string; account?: string }): { repoPath?: string; account?: string } {
-  if (a.repo === undefined) return { account: a.account };
-  if (!isAbsolute(a.repo) || !statSync(a.repo, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`repo must be the absolute path of a directory: ${a.repo}`);
-  const repoPath = c.manager.projectDir({ cwd: a.repo });
-  return { repoPath, account: a.account ?? accountForProject(c.manager.home, repoPath) };
+  return a.repo === undefined ? { account: a.account } : humanRepo(c, a.repo, a.account);
+}
+
+/** The main checkout of the human's directory `repo`, and the account: `account`, else the project's. */
+function humanRepo(c: Ctx, repo: string, account: string | undefined): { repoPath: string; account?: string } {
+  requireDir(repo, 'repo');
+  const repoPath = c.manager.projectDir({ cwd: repo });
+  return { repoPath, account: account ?? accountForProject(c.manager.home, repoPath) };
 }
 
 /** One account file's gardener: its 30-day spend, its newest runs and its paused repositories (pausedBy). */
@@ -826,10 +826,9 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     async (c, a) => {
       const m = c.manager;
       // A closed node's account and directory come from its archive line; a node wins over repo.
-      const rec = a.nodeId ? m.registry.get(a.nodeId) ?? await findArchived(m.home, a.nodeId) : undefined;
-      if (a.nodeId && !rec) throw new Error(`no such node: ${a.nodeId}`);
+      const rec = a.nodeId ? await m.transcriptNode(a.nodeId) : undefined;
       const live = !!a.nodeId && !!m.registry.get(a.nodeId);
-      if (a.repo !== undefined && !rec && (!isAbsolute(a.repo) || !statSync(a.repo, { throwIfNoEntry: false })?.isDirectory())) throw new Error(`repo must be the absolute path of a directory: ${a.repo}`);
+      if (a.repo !== undefined && !rec) requireDir(a.repo, 'repo');
       // Without the opt-in gate: the project is the main checkout, as memoryScopeOf resolves it.
       const project = rec ? m.projectDir(rec) : a.repo !== undefined ? m.projectDir({ cwd: realpathSync(a.repo) }) : null;
       const days = a.days ?? LIMITS.tools.statusDays.default;
@@ -849,7 +848,8 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       const pct = (x: number | null) => (x === null ? '-' : `${Math.round(x * 100)}%`);
       const onOff = (on: boolean) => (on ? 'on' : 'off');
       const projects = config.memory.projects.map((p) => `${p.path} ${onOff(p.enabled)}`);
-      const accounts = config.claude.accounts.flatMap((x) => (x.memory === undefined ? [] : [`${x.name} ${onOff(x.memory)}${x.memory ? '' : ' (ceiling)'}`]));
+      const own = config.claude.accounts.flatMap((x) => (x.memory === undefined ? [] : [{ name: x.name, memory: x.memory }]));
+      const accounts = own.map((x) => `${x.name} ${onOff(x.memory)}${x.memory ? '' : ' (ceiling)'}`);
       const lines = [
         project === null
           ? `memory.enabled (global): ${onOff(config.memory.enabled)} (${configEntries(null, m.home)['memory.enabled'].source === join(m.home, 'config.json') ? `set in ${join(m.home, 'config.json')}` : 'default'})`
@@ -864,7 +864,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         arms ? `digest arms over ${days} days: ${Object.entries(arms).map(([arm, s]) => `${arm} ${s.nodes} nodes, first-pass gate ${pct(s.firstPassGate)}, failed outcomes ${pct(s.failedOutcomes)}`).join('; ')}` : `digest arms: ${armsError}`,
         ...(injections ? [`injections of ${a.nodeId}: ${injections.length}`, ...injections.map((j) => `  ${new Date(j.ts).toISOString()} ${j.arm} ${j.cause} ${j.itemIds.length} items, session ${j.sessionId}`)] : []),
       ];
-      return { text: lines.join('\n'), data: { memory, ...(project === null ? { projects: config.memory.projects, accounts: config.claude.accounts.flatMap((x) => (x.memory === undefined ? [] : [{ name: x.name, memory: x.memory }])) } : { project }), maxMB, days, dbs, garden, ...(arms ? { arms } : { armsError }), ...(injections ? { injections } : {}) } };
+      return { text: lines.join('\n'), data: { memory, ...(project === null ? { projects: config.memory.projects, accounts: own } : { project }), maxMB, days, dbs, garden, ...(arms ? { arms } : { armsError }), ...(injections ? { injections } : {}) } };
     }, true),
 
   memory_switch: tool(

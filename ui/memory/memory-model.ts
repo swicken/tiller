@@ -1,6 +1,6 @@
 import type { MemoryItemKind, MemoryItemView, MemoryPage, MemoryTarget } from '../../src/shared/protocol';
 
-/** The pane's sections, in order. Given needs a node; v3 may add its own here. */
+/** The pane's sections, in order. Given needs a node. */
 export const SECTIONS = [
   { key: 'items', label: 'Items' },
   { key: 'given', label: 'Given to this node', needsNode: true },
@@ -18,7 +18,7 @@ export const CHIPS: { kind?: MemoryItemKind | 'pinned'; label: string }[] = [
 export const chipCount = (counts: MemoryPage['counts'], kind?: MemoryItemKind | 'pinned') =>
   kind ? counts[kind] : (Object.keys(KIND_LABEL) as MemoryItemKind[]).reduce((n, k) => n + counts[k], 0);
 
-/** Invalid kinds this UI can describe and restore; any other kind (v3's) gets a generic badge and no Restore. */
+/** Invalid kinds this UI can describe and restore; any other kind (a newer daemon's) gets a generic badge and no Restore. */
 const INVALID_LABEL: Record<string, string> = {
   human: 'Retracted by the human (permanent)',
   agent: 'Hidden by an agent until recorded again',

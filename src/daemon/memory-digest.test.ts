@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { buildDigest, DIGEST_HEADER, DIGEST_SECTIONS, digestArm, digestFor, digestRole, oneLine } from './memory-digest.js';
-import type { DigestCandidates, DigestRole, DigestSource, ItemKind, ItemView, MemoryScope } from './memory-schema.js';
+import type { MemoryItemView } from '../shared/protocol.js';
+import type { DigestCandidates, DigestRole, DigestSource, ItemKind, MemoryScope } from './memory-schema.js';
 
 const NOW = Date.UTC(2026, 9, 24);
 const DAY = 86_400_000;
 const scope: MemoryScope = { repoKey: 'git:github.com/swicken/tiller', repoPath: '/repo', nodeId: 'n-1', rootId: 'n-0' };
 
 let nextId = 1;
-function item(kind: ItemKind, text: string, o: Partial<ItemView> = {}): ItemView {
+function item(kind: ItemKind, text: string, o: Partial<MemoryItemView> = {}): MemoryItemView {
   return {
     id: nextId++, kind, text, author: 'agent', nodeId: 'n-a68e3db1', harness: 'claude', seen: 1, pinned: false, cites: 0, gets: 0,
     createdAt: NOW - DAY, updatedAt: NOW - DAY, ...o,
@@ -173,13 +174,13 @@ describe('digestArm', () => {
 });
 
 // A fake store over a fixture pool: a worker's matched items are those containing every word of some term, in pool order.
-function fakeSource(pool: ItemView[]) {
+function fakeSource(pool: MemoryItemView[]) {
   const calls: Parameters<DigestSource['candidates']>[] = [];
   const of = (kind: ItemKind) => pool.filter((i) => i.kind === kind && !i.pinned);
   const source: DigestSource = {
     candidates(s, q) {
       calls.push([s, q]);
-      const hit = (i: ItemView) => q.terms.some((t) => t.split(' ').every((w) => i.text.toLowerCase().includes(w)));
+      const hit = (i: MemoryItemView) => q.terms.some((t) => t.split(' ').every((w) => i.text.toLowerCase().includes(w)));
       return {
         pins: pool.filter((i) => i.pinned), ledger: of('ledger'), openQuestions: of('open_question'), procedures: of('procedure'),
         pitfalls: of('pitfall'), notes: of('note'), matched: q.role === 'worker' ? pool.filter((i) => !i.pinned && hit(i)) : [],
