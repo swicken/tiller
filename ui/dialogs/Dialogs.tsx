@@ -142,7 +142,9 @@ function KillDialog({ id }: { id: string }) {
   const wt = node.worktree;
   if (wt) return (
     <Modal title={`Close ${node.title}?`} onClose={close}>
-      <p>It works in its own git worktree on branch <code>{wt.branch}</code>. Close stops it and removes the worktree only when the tree is clean and merged into {wt.base}; otherwise the close is refused and the node keeps running.</p>
+      {wt.branch
+        ? <p>It works in its own git worktree on branch <code>{wt.branch}</code>. Close stops it and removes the worktree only when the tree is clean and merged into {wt.base}; otherwise the close is refused and the node keeps running.</p>
+        : <p>It works in a read-only git worktree detached at <code>{wt.base}</code>. Close stops it and removes the worktree only when it has no uncommitted files and no commits of its own; otherwise the close is refused and the node keeps running.</p>}
       <p>Keep branch commits uncommitted work as a WIP commit, removes the directory and keeps the branch. Discard deletes the worktree and the branch, including uncommitted work.</p>
       <div className="btns">
         <button className="btn" autoFocus onClick={close}>Cancel</button>

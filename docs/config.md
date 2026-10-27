@@ -32,7 +32,7 @@ The layer column says where a key may be set: "project, home" means either file,
 | `claude.account` | string | unset | home | The default account, by name, for a root node whose project no account's `projects` lists; unset means no account. A name not in `claude.accounts` makes Claude spawns fail closed, as an invalid list does. Settings → Claude → **Claude account** for all repositories. |
 | `approvals.close` | `never`, `done`, `always` | `never` | home, project stricter | Whether an agent's `close` skips the human's approval: always, only when every node in the batch is done, exited or has reported an outcome, or never. |
 | `approvals.merge` | boolean | `false` | home, project stricter | When true, an agent's `merge` does not ask the human. |
-| `worktrees.isolation` | `none`, `worktree` | `none` | project, home | What a spawn of a worker agent node (any harness, not an orchestrator) gets when it does not say. |
+| `worktrees.isolation` | `none`, `worktree`, `detached` | `none` | project, home | What a spawn of a worker agent node (any harness, not an orchestrator) gets when it does not say. `detached` is a read-only worktree; see [worktrees.md](worktrees.md#read-only-worktrees). |
 | `worktrees.branchPrefix` | string | `tl/` | project, home | A worktree's branch is this prefix followed by the node id. |
 | `worktrees.include` | list of gitignore patterns | `.worktreeinclude` | project, home | Gitignored files copied into a new worktree; when absent, the repo's `.worktreeinclude` file is used. |
 | `worktrees.mergeStyle` | `merge`, `squash`, `ff-only` | `merge` | project, home | How the merge verb brings a branch into its base. |

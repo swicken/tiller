@@ -3,6 +3,7 @@ import type { DiffFile, NodeView } from '../src/shared/protocol';
 import { Counts } from './controls/Bits';
 import { send } from './conn';
 import { formatComments, parsePatch, type DiffLine, type ReviewComment } from './diff';
+import { branchLabel } from '../src/shared/format';
 import { addComment, diffRequested, removeComment, useStore } from './store';
 
 const STATUS_MARK = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' } as const;
@@ -82,12 +83,12 @@ export function DiffPane({ node }: { node: NodeView }) {
 
   const files = diff?.data?.files ?? [];
   const file = files.find((f) => f.path === path) ?? files[0];
-  const sendComments = () => send({ t: 'send', id: node.id, text: formatComments(node.worktree!.branch, comments) });
+  const sendComments = () => send({ t: 'send', id: node.id, text: formatComments(branchLabel(node.worktree!), comments) });
 
   return (
     <div className="diffpane">
       {diff?.error ? <p className="hint">{diff.error}</p> : !diff?.data ? <p className="hint">Loading diff…</p> : !files.length ? (
-        <p className="hint">No changes on {diff.data.branch} against {diff.data.base}.</p>
+        <p className="hint">No changes on {branchLabel(diff.data)} against {diff.data.base}.</p>
       ) : (
         <div className="diffbody">
           <nav className="files" aria-label="Changed files">

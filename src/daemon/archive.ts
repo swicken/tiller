@@ -11,15 +11,18 @@ import { appendLine, flushEvents, listSessions, sessionDir } from './sessions.js
 const ARCHIVE = 'archive.jsonl';
 const BRIEF_CHARS = 200;
 
-/** What close decided about a worktree node's branch; empty for a node without one. */
-export type BranchFate = Pick<ArchivedNode, 'branchFate' | 'base'>;
+/** What close decided about a worktree node's branch; empty for a node without one. `branch` names one close made. */
+export type BranchFate = Pick<ArchivedNode, 'branchFate' | 'base' | 'branch'>;
 
 const firstLine = (s?: string) => s?.split('\n').map((l) => l.trim()).find(Boolean);
 const firstSentence = (s?: string) => {
   const t = s?.replace(/\s+/g, ' ').trim();
   return t && (/^.*?[.!?](?=\s|$)/.exec(t)?.[0] ?? t);
 };
-const FATE_TEXT = { merged: (base?: string) => `merged into ${base ?? 'its base'}`, kept: () => 'branch kept, unmerged', discarded: () => 'branch discarded' };
+const FATE_TEXT = {
+  merged: (base?: string) => `merged into ${base ?? 'its base'}`, empty: () => 'no commits', kept: () => 'branch kept, unmerged',
+  discarded: () => 'branch discarded', detached: () => 'read-only',
+};
 
 /**
  * One line of at most 200 characters on what the node did and how it ended: the outcome ("succeeded: ...") with its

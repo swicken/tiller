@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { ctxLevel, fmtAge, fmtTokens, outcomeLine, shortEffort, shortModel, usageLine, usageParts } from './format.js';
+import { branchLabel, ctxLevel, fmtAge, fmtTokens, outcomeLine, shortEffort, shortModel, usageLine, usageParts } from './format.js';
 
 describe('format', () => {
   it('renders an outcome as one line, summary before note', () => {
     expect(outcomeLine({ outcome: 'succeeded', gate: 'passed', summary: 'did\n  it', note: 'n' })).toBe('succeeded (gate passed): did it');
     expect(outcomeLine({ outcome: 'failed', note: 'broke' })).toBe('failed: broke');
     expect(outcomeLine({ outcome: 'succeeded' })).toBe('succeeded');
+  });
+  it('labels a read-only worktree as detached at its base', () => {
+    expect(branchLabel({ branch: 'tl/n-1', base: 'main' })).toBe('tl/n-1');
+    expect(branchLabel({ base: 'main' })).toBe('detached @ main');
   });
   it('shortens model ids', () => {
     expect(shortModel('claude-opus-5-5')).toBe('opus 5.5');

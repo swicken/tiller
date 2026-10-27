@@ -74,7 +74,8 @@ export type Role = (typeof ROLES)[number];
 export const profileFor = (profile: Profile | undefined, parentId: string | null, role?: Role): Profile =>
   profile ?? ((role ?? (parentId ? 'worker' : 'orchestrator')) === 'orchestrator' ? 'orchestrator' : 'implementation');
 
-export const ISOLATIONS = ['none', 'worktree'] as const;
+/** "detached": a read-only worktree with HEAD detached at its base and no branch of its own, for reviewers and auditors. */
+export const ISOLATIONS = ['none', 'worktree', 'detached'] as const;
 export type Isolation = (typeof ISOLATIONS)[number];
 
 /** A worker's own git worktree: <repo>/.claude/worktrees/<nodeId> on branch tl/<nodeId>, branched from base at baseSha. */
@@ -82,7 +83,8 @@ export interface Worktree {
   /** The main checkout root; the PTY starts here with `claude --worktree <nodeId>`. */
   repo: string;
   path: string;
-  branch: string;
+  /** Absent on a read-only worktree (isolation "detached"), whose HEAD is detached at baseSha. */
+  branch?: string;
   /** Symbolic base ref at spawn time (for example main), or the sha when HEAD was detached. */
   base: string;
   baseSha: string;
@@ -94,7 +96,8 @@ export interface Worktree {
 
 /** A worktree node's branch against its base, refreshed when its turn ends, after edits, on exit, merge and close. */
 export interface GitState {
-  branch: string;
+  /** Absent for a read-only worktree, which is detached. */
+  branch?: string;
   base: string;
   /** Commits on the branch that are not in base, and in base that are not on the branch. */
   ahead: number;
@@ -120,7 +123,7 @@ export interface DiffFile {
 }
 
 /** Everything a worktree node changed since it branched: its commits and its uncommitted and untracked files, as one diff. */
-export interface Diff { base: string; branch: string; files: DiffFile[]; truncated?: boolean }
+export interface Diff { base: string; /** Absent for a read-only (detached) worktree. */ branch?: string; files: DiffFile[]; truncated?: boolean }
 
 /** What an armed or queued node still waits for before it launches; persisted so a restarted daemon re-arms it. */
 export interface Pending {
@@ -162,7 +165,7 @@ export interface NodeRecord {
   profile?: Profile;
   /** The spawn preset (.tiller/agents/<name>.md); its body and tool lists are re-read at each launch. */
   preset?: string;
-  /** Set on a node that owns a git worktree (spawned with isolation "worktree"); its cwd is the worktree path. */
+  /** Set on a node that owns a git worktree (spawned with isolation "worktree" or "detached"); its cwd is the worktree path. */
   worktree?: Worktree;
   createdAt: number;
   /** When the node last launched or changed state on a hook; resume on start skips nodes idle longer than daemon.resumeMaxAgeDays. */
@@ -268,11 +271,15 @@ export interface ArchivedNode {
   spentIncomplete?: boolean;
   /** The session's cumulative cost at its last measure (NodeRecord.lastCost), so a follow-up resuming that session does not count it again. */
   lastCost?: { sessionId?: string; usd: number };
-  /** The worktree branch it worked on, when it had one. */
+  /** The worktree branch it worked on, when it had one (a read-only node's only when close kept its stray commits on one). */
   branch?: string;
-  /** What became of that branch at close, decided by the close check itself: merged into `base`, kept with a WIP commit (unmerged), or discarded with unmerged work. */
-  branchFate?: 'merged' | 'kept' | 'discarded';
-  /** The branch it merged into, when branchFate is merged. */
+  /**
+   * What became of its worktree at close, decided by the close check itself: merged into `base` (it had commits, now in
+   * base), empty (no commits beyond where it branched), kept with a WIP commit (unmerged), discarded with unmerged work,
+   * or detached (a read-only worktree removed with nothing in it). Archives from before "empty" say merged for those too.
+   */
+  branchFate?: 'merged' | 'empty' | 'kept' | 'discarded' | 'detached';
+  /** The branch it merged into, when branchFate is merged; the base it was checked out at, when detached. */
   base?: string;
   createdAt: number;
   closedAt: number;

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { isAgentKind, PROFILE_LABELS, profileFor, type NodeView } from '../../src/shared/protocol';
-import { fmtTokens, shortModel } from '../../src/shared/format';
+import { branchLabel, fmtTokens, shortModel } from '../../src/shared/format';
 import { CtxBar, DiffCounts, outcomeLabel, StateDot } from '../controls/Bits';
 import { Icon } from '../controls/icons';
 import { KIND_LABEL, kindTag, statusKind } from './tree';
@@ -78,7 +78,7 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
         <h3>Workspace</h3>
         <dl className="inspector-facts">
           {row('Directory', <span className="inspector-path">{node.cwd}</span>)}
-          {row('Branch', <span className="inspector-path">{node.worktree?.branch ?? git?.branch ?? 'Not reported'}</span>)}
+          {row('Branch', <span className="inspector-path">{node.worktree ? branchLabel(node.worktree) : git?.branch ?? 'Not reported'}</span>)}
           {node.worktree && row('Base', <span className="inspector-path">{node.worktree.base}</span>)}
           {node.worktree?.missing && row('Worktree', <span className="warn">Missing — resume unavailable</span>)}
           {git && <>

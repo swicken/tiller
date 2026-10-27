@@ -10,9 +10,9 @@ import { getState, openDialog, useStore, viewArchived } from '../store';
 import { OutcomeGlyph } from './parts';
 import { TranscriptPane } from './TranscriptPane';
 
-/** "tl/n-123 merged into main", "tl/n-123 kept", "tl/n-123 discarded", or the bare branch when its fate is unknown. */
+/** "tl/n-123 merged into main", "tl/n-123 no commits", "tl/n-123 kept", "tl/n-123 discarded", or the bare branch when its fate is unknown. */
 export const branchLine = (a: ArchivedNode) =>
-  !a.branchFate ? a.branch : `${a.branch} ${a.branchFate === 'merged' && a.base ? `merged into ${a.base}` : a.branchFate}`;
+  !a.branchFate ? a.branch : `${a.branch} ${a.branchFate === 'merged' && a.base ? `merged into ${a.base}` : a.branchFate === 'empty' ? 'no commits' : a.branchFate}`;
 
 /** Closed nodes of this tree or all trees, newest first, filtered by the daemon; picking one shows it in the main pane. */
 export function HistoryPanel() {

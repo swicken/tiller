@@ -83,7 +83,7 @@ export function resolveSpawn(i: SpawnPolicyInput): SpawnPolicy {
   if (permissionMode === 'bypassPermissions' && !req.byHuman) throw new Error('refused: only the human may spawn a node with permissionMode bypassPermissions');
   if (adapterId) i.validate(permissionMode, p);
   const isolation = req.isolation ?? p.isolation ?? (!adapterId || isOrchestrator ? 'none' : config.worktrees.isolation);
-  if (isolation === 'worktree' && !adapterId) throw new Error('isolation "worktree" is for agent nodes only');
+  if (isolation !== 'none' && !adapterId) throw new Error(`isolation "${isolation}" is for agent nodes only`);
   return { role, profile, model, effort, explicit, account, permissionMode, isolation };
 }
 

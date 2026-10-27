@@ -95,6 +95,9 @@ function rolePrompt(home: string, cwd: string, role: Role, harness: Harness = 'c
 
 function worktreeText(o: { worktree?: Worktree; sharesWorktreeOf?: string }): string {
   const w = o.worktree;
+  if (w && !w.branch) {
+    return `\n\nYou are working in a read-only git worktree at ${w.path}: HEAD is detached at ${w.base} (${w.baseSha.slice(0, 7)}) and there is no branch. The main checkout at ${w.repo} belongs to the user and to other nodes; never edit files there. Read, build and run checks here, but do not commit, and leave \`git status\` clean: closing refuses a worktree with uncommitted files or commits, and the human must then decide what to keep. Do not merge, push, switch branches or rebase.`;
+  }
   if (w) {
     return `\n\nYou are working in a git worktree at ${w.path} on branch ${w.branch}, branched from ${w.base} at ${w.baseSha.slice(0, 7)}. The main checkout at ${w.repo} belongs to the user and to other nodes. Never edit files there, even if your brief names paths under it: use the same repo-relative path inside your worktree. Commit your work on your branch with clear messages before you report success, and leave \`git status\` clean. Do not merge, push, switch branches or rebase unless asked; your parent integrates your branch.`;
   }
