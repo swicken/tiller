@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { ctxLevel, fmtAge, fmtTokens, outcomeLine, shortEffort, shortModel, usageLine, usageParts } from './format.js';
+import { ctxLevel, fmtAge, fmtTokens, NOTICE_CHARS, outcomeLine, shortEffort, shortModel, usageLine, usageParts } from './format.js';
 
 describe('format', () => {
   it('renders an outcome as one line, summary before note', () => {
     expect(outcomeLine({ outcome: 'succeeded', gate: 'passed', summary: 'did\n  it', note: 'n' })).toBe('succeeded (gate passed): did it');
     expect(outcomeLine({ outcome: 'failed', note: 'broke' })).toBe('failed: broke');
     expect(outcomeLine({ outcome: 'succeeded' })).toBe('succeeded');
+  });
+  it('gives a notice the whole summary, cutting only a pathological one, visibly', () => {
+    const para = 'Did the thing and checked it. '.repeat(30).trim();
+    expect(outcomeLine({ outcome: 'succeeded', summary: para })).toHaveLength('succeeded: '.length + 200);
+    expect(outcomeLine({ outcome: 'succeeded', summary: para }, true)).toBe(`succeeded: ${para}`);
+    expect(outcomeLine({ outcome: 'failed', summary: '😀'.repeat(NOTICE_CHARS + 1) }, true)).toBe(`failed: ${'😀'.repeat(NOTICE_CHARS)}… (read outcome for the rest)`);
   });
   it('shortens model ids', () => {
     expect(shortModel('claude-opus-5-5')).toBe('opus 5.5');
