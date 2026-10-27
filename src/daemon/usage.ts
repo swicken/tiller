@@ -22,7 +22,7 @@ function executable(tool: UsageTool, path: string): string | undefined {
 }
 
 /** Filesystem evidence only; config-file presence does not establish authentication. claudeDirs: the configured Claude accounts' homes. */
-export function discoverUsage(path: string, home = homedir(), env = process.env, now = Date.now(), claudeDirs: string[] = []): UsageSource[] {
+export function discoverUsage(path: string, { home = homedir(), env = process.env, now = Date.now(), claudeDirs = [] as string[] } = {}): UsageSource[] {
   const configs: Record<UsageTool, string[]> = {
     claude: [join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'settings.json'), join(home, '.claude.json'), ...claudeDirs.map((d) => join(d, '.claude.json'))],
     codex: [join(env.CODEX_HOME || join(home, '.codex'), 'config.toml'), join(env.CODEX_HOME || join(home, '.codex'), 'auth.json')],
@@ -40,12 +40,12 @@ export function discoverUsage(path: string, home = homedir(), env = process.env,
 }
 
 /** Three bounded read-only version probes; never starts an interactive or inference session. */
-async function probeVersions(sources: UsageSource[], path: string): Promise<UsageSource[]> {
+async function probeVersions(sources: UsageSource[], path: string, timeout: number): Promise<UsageSource[]> {
   return Promise.all(sources.map(async (source) => {
     const file = source.installed ? executable(source.tool, path) : undefined;
     if (!file) return source;
     return new Promise<UsageSource>((resolve) => {
-      execFile(file, ['--version'], { env: { ...process.env, PATH: path }, timeout: 1500, killSignal: 'SIGKILL', maxBuffer: 16_384 }, (error, stdout, stderr) => {
+      execFile(file, ['--version'], { env: { ...process.env, PATH: path }, timeout, killSignal: 'SIGKILL', maxBuffer: 16_384 }, (error, stdout, stderr) => {
         const version = stripVTControlCharacters(stdout || stderr).trim().split('\n')[0]?.slice(0, 160);
         resolve({ ...source, executableStatus: error || !version ? 'broken' : 'ready', version: error ? undefined : version || undefined });
       });
@@ -60,13 +60,13 @@ export class UsageRegistry {
   private windowTimes = new Map<string, Map<string, number>>();
   private probedAt?: number;
   private scanning?: Promise<void>;
-  constructor(private path: string, private claudeDirs: () => string[] = () => []) { this.discovery = discoverUsage(path, undefined, undefined, undefined, claudeDirs()); }
+  constructor(private path: string, private claudeDirs: () => string[] = () => [], private probeTimeoutMs = 1500) { this.discovery = discoverUsage(path, { claudeDirs: claudeDirs() }); }
   /** Coalesce concurrent viewers and cap subprocess discovery to one scan per minute. */
   refresh(now = Date.now()): Promise<void> {
     if (this.scanning) return this.scanning;
     if (this.probedAt !== undefined && now - this.probedAt < 60_000) return Promise.resolve();
     this.probedAt = now;
-    this.scanning = probeVersions(discoverUsage(this.path, undefined, undefined, now, this.claudeDirs()), this.path)
+    this.scanning = probeVersions(discoverUsage(this.path, { now, claudeDirs: this.claudeDirs() }), this.path, this.probeTimeoutMs)
       .then((sources) => { this.discovery = sources; })
       .finally(() => { this.scanning = undefined; });
     return this.scanning;
