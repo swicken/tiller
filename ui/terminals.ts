@@ -1,7 +1,8 @@
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { openExternalUrl } from './controls/externalLink';
-import { toast } from './store';
+import { getState, toast } from './store';
+import { isAgentKind } from '../src/shared/protocol';
 import { IN_APP } from './url';
 
 export interface Term { term: Terminal; fit: FitAddon }
@@ -45,12 +46,26 @@ export function createTerm(id: string, el: HTMLElement): Term {
       },
     },
   });
+  term.attachCustomKeyEventHandler((e) => shiftEnterKey(e, isAgentNode(id), (data) => term.input(data)));
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(el);
   const t = { term, fit };
   terms.set(id, t);
   return t;
+}
+
+const isAgentNode = (id: string) => { const n = getState().nodes[id]; return !!n && isAgentKind(n.kind); };
+
+/**
+ * xterm sends CR for Shift+Enter, which submits an agent's prompt. In an agent node send LF (Ctrl+J)
+ * instead: Claude Code, Pi and Codex all read it as "insert newline". Returns false when it handled the key.
+ */
+export function shiftEnterKey(e: KeyboardEvent, agent: boolean, input: (data: string) => void): boolean {
+  if (!agent || e.key !== 'Enter' || !e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return true;
+  if (e.isComposing || e.keyCode === 229) return true; // IME composition owns Enter
+  if (e.type === 'keydown') { e.preventDefault(); input('\n'); }
+  return false; // also swallow the keypress/keyup so xterm sends no CR
 }
 
 export function disposeTerm(id: string) {

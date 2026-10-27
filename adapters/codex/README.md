@@ -51,8 +51,10 @@ It authenticates using the node's token, read from `TL_TOKEN_FILE`, through an e
 placed on the command line. Tiller's existing tools and lineage restrictions are reused.
 
 The bridge serializes lifecycle reports from `turn/started`, `turn/completed`, item events,
-and token-usage notifications through `/hook` and `/mod-event`. Context usage is reported;
-dollar cost and account rate limits are not available from this adapter.
+and token-usage notifications through `/hook` and `/mod-event`. Context usage is reported, and so
+are account quota windows, read once when the native UI attaches and updated from Codex's
+rate-limit notifications (see [USAGE-INTEGRATION.md](USAGE-INTEGRATION.md)); dollar cost is not
+available from this adapter.
 A report the daemon cannot take, for example during `tl reload` or `tl update`, is retried
 every second for up to 60 seconds, holding later events so reports stay in order. After that
 the report is logged and dropped, and later reports are tried once each until the daemon

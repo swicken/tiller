@@ -1,14 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import type http from 'node:http';
-import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
-import { MEMORY_ACCOUNT_KEY, SETTINGS_FIELDS, type SettingsScope, type SettingsSnapshot, type SettingsUpdate } from '../shared/settings.js';
+import { MEMORY_ACCOUNT_KEY, SETTINGS_FIELDS, type ClaudeAccountsSave, type ClaudeConfigDirCheck, type SettingsScope, type SettingsSnapshot, type SettingsUpdate } from '../shared/settings.js';
 import { canonicalProject, projectAccount } from './claude-accounts.js';
-import { ConfigFile, DEFAULTS, claudeAccountListError, configEntries, effectiveProfileEntries, loadConfig } from './config.js';
+import { ConfigFile, DEFAULTS, claudeAccountListError, claudeAccountsError, configEntries, effectiveProfileEntries, loadConfig } from './config.js';
 import type { NodeManager } from './manager.js';
 import { applyMemorySetting, memoryOn, type MemorySetting } from './memory-config.js';
-import { readBody } from './util.js';
+import { expandHome, inside, readBody } from './util.js';
 
 export class SettingsError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -206,6 +207,79 @@ export function updateSettings(manager: NodeManager, update: SettingsUpdate): Se
   return settingsSnapshot(manager, scope, nodeId);
 }
 
+/**
+ * Replace claude.accounts in the home file from the Settings form, creating the configDirs asked for. With none configured
+ * this seeds the list and claude.account. Otherwise accounts are kept, added or removed by name: there is no rename, a kept
+ * account keeps its projects and memory setting (only its configDir may change), a new one has none, and claude.account's account stays.
+ */
+export function saveClaudeAccounts(manager: NodeManager, save: ClaudeAccountsSave): SettingsSnapshot {
+  const { homePath } = target(manager, 'home');
+  const before = read(homePath);
+  if (revision(before.raw) !== save.revision) throw new SettingsError(409, 'Settings changed; reload before saving');
+  const listError = claudeAccountListError(dirname(homePath));
+  if (listError) throw new SettingsError(422, `${listError}; fix it in the file`);
+  const claude = before.data.claude as Record<string, unknown> | undefined;
+  const existing = (claude?.accounts ?? []) as { name: string; configDir?: string; projects?: string[]; memory?: boolean }[];
+  // The form lists accounts from a WebSocket store, which can lag the HTTP revision: a list from before an added account is stale.
+  const names = (list: string[]) => JSON.stringify([...list].sort());
+  if (names(existing.map((a) => a.name)) !== names(save.openedWith)) throw new SettingsError(409, 'Settings changed; reload before saving');
+  // Once accounts exist, a claude.account naming none of them is refused too (with none, the first save replaces it).
+  const accountError = existing.length ? claudeAccountsError(dirname(homePath)) : undefined;
+  if (accountError) throw new SettingsError(422, `${accountError}; fix it in the file`);
+  const { account } = save.claudeAccounts, current = existing.length ? claude?.account : account;
+  if (!existing.length && account === undefined) throw new SettingsError(400, 'claude.account: name the default account');
+  if (existing.length && account !== undefined) throw new SettingsError(400, 'claude.account: change the default account with its own setting');
+  if (existing.some((a) => a.name === current) && !save.claudeAccounts.accounts.some((a) => a.name === current)) throw new SettingsError(400, `${current} is the default account (claude.account); choose another default before removing it`);
+  const accounts = save.claudeAccounts.accounts.map(({ name, configDir }) => {
+    const old = existing.find((a) => a.name === name);
+    if (old?.configDir && !configDir) throw new SettingsError(400, `${name}: keep a config directory; without one it would use Claude's default home (~/.claude) and its login`);
+    // An unchanged directory keeps its spelling in the file (the form shows it expanded).
+    const dir = configDir && old?.configDir && expandHome(configDir) === expandHome(old.configDir) ? old.configDir : configDir;
+    return { name, ...(dir ? { configDir: dir } : {}), ...(old?.projects ? { projects: old.projects } : {}), ...(old?.memory !== undefined ? { memory: old.memory } : {}) };
+  });
+  const result = ConfigFile.safeParse({ claude: { accounts, account: current } });
+  if (!result.success) throw new SettingsError(400, result.error.issues.map((i) => `${i.path.map(String).join('.')}: ${i.message}`).join('; '));
+  if (account !== undefined && !accounts.some((a) => a.name === account)) throw new SettingsError(400, `claude.account: ${JSON.stringify(account)} is not one of the accounts`);
+  // Only a new or changed directory is checked; a kept one may not exist yet (logged out).
+  const dirs = save.claudeAccounts.accounts.flatMap((a, i) => (accounts[i].configDir && accounts[i].configDir !== existing.find((e) => e.name === a.name)?.configDir ? [{ dir: expandHome(accounts[i].configDir!), create: a.create }] : []));
+  for (const { dir, create } of dirs) {
+    const reserved = reservedConfigDir(manager, dir);
+    if (reserved) throw new SettingsError(400, reserved);
+    const stat = fs.statSync(dir, { throwIfNoEntry: false });
+    if (stat ? !stat.isDirectory() : !create) throw new SettingsError(400, stat ? `${dir} is not a directory` : `${dir} does not exist; choose to create it`);
+  }
+  // ponytail: no rollback, so a 409/500 from writeConfig leaves the new (empty, 0700) directories behind; harmless on retry.
+  for (const { dir, create } of dirs) if (create) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  before.data.claude = { ...claude, accounts, ...(account === undefined ? {} : { account }) };
+  writeConfig(homePath, before.data, save.revision);
+  return settingsSnapshot(manager, 'home');
+}
+
+/** Why `dir` (expanded) can never be an account's configDir, or undefined. */
+function reservedConfigDir(manager: NodeManager, dir: string): string | undefined {
+  // The schema compares strings; a symlink to ~/.claude is the same keychain mistake, and the Tiller home is not Claude's.
+  // realpath.native gives each existing part its on-disk spelling (~/.CLAUDE is ~/.claude on macOS); a missing tail is
+  // joined back onto the nearest existing ancestor, so a symlinked parent still resolves for a directory not yet created.
+  const real = (p: string): string => {
+    let tail: string[] = [], cur = resolve(p);
+    for (;;) {
+      try { return join(fs.realpathSync.native(cur), ...tail); } catch { if (dirname(cur) === cur) return resolve(p); tail = [basename(cur), ...tail]; cur = dirname(cur); }
+    }
+  };
+  if (real(dir) === real(join(homedir(), '.claude'))) return `${dir} is Claude's default home (~/.claude); give that account no config directory`;
+  if ([dir, real(dir)].some((d) => inside(d, real(manager.home)) || inside(d, resolve(manager.home)))) return `${dir} is inside the Tiller home; choose another directory`;
+  return undefined;
+}
+
+/** What is at a prospective configDir, for the accounts form. Only stats. */
+export function claudeConfigDirCheck(manager: NodeManager, path: string): ClaudeConfigDirCheck {
+  if (!isAbsolute(path) && !path.startsWith('~/')) return { exists: false, directory: false, error: 'Use an absolute path or one starting with ~/' };
+  const dir = expandHome(path), error = reservedConfigDir(manager, dir);
+  let stat: fs.Stats | undefined;
+  try { stat = fs.statSync(dir, { throwIfNoEntry: false }); } catch { /* unreadable: reported as missing; the save stats again */ }
+  return { exists: !!stat, directory: !!stat?.isDirectory(), ...(error ? { error } : {}) };
+}
+
 /** Atomically replace `path` with `data`, unless the file no longer has `expected` revision. */
 export function writeConfig(path: string, data: Record<string, unknown>, expected: string): void {
   // Synchronous read/check/rename serializes this daemon's writers, including different HTTP requests.
@@ -228,7 +302,12 @@ export function writeConfig(path: string, data: Record<string, unknown>, expecte
 }
 const selection = { scope: z.enum(['project', 'home']), nodeId: z.string().min(1).optional() };
 const querySchema = z.object(selection).strict();
+const dirQuerySchema = z.object({ claudeConfigDir: z.string().min(1) }).strict();
 const updateSchema = z.object({ ...selection, revision: z.string().min(1), homeRevision: z.string().min(1).optional(), changes: z.record(z.string(), z.unknown()) }).strict();
+const accountsSchema = z.object({
+  scope: z.literal('home'), revision: z.string().min(1), openedWith: z.array(z.string()),
+  claudeAccounts: z.object({ account: z.string().optional(), accounts: z.array(z.object({ name: z.string(), configDir: z.string().optional(), create: z.boolean().optional() }).strict()).min(1) }).strict(),
+}).strict();
 /** This route deliberately uses the admin bearer token alone, never node authentication or MCP. */
 export function settingsApi(manager: NodeManager, isAdmin: (token: string) => boolean) {
   return async (req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> => {
@@ -236,7 +315,9 @@ export function settingsApi(manager: NodeManager, isAdmin: (token: string) => bo
     if (!isAdmin(/^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1] ?? '')) return reply(401, { error: 'Admin bearer token required' });
     try {
       if (req.method === 'GET') {
-        const args = querySchema.parse(Object.fromEntries(url.searchParams));
+        const query = Object.fromEntries(url.searchParams);
+        if (Object.hasOwn(query, 'claudeConfigDir')) return reply(200, claudeConfigDirCheck(manager, dirQuerySchema.parse(query).claudeConfigDir));
+        const args = querySchema.parse(query);
         return reply(200, settingsSnapshot(manager, args.scope, args.nodeId));
       }
       if (req.method === 'POST') {
@@ -244,8 +325,8 @@ export function settingsApi(manager: NodeManager, isAdmin: (token: string) => bo
         if (body === undefined) return;
         let data: unknown;
         try { data = JSON.parse(body); } catch { throw new SettingsError(400, 'Expected JSON request body'); }
-        const args = updateSchema.parse(data);
-        return reply(200, updateSettings(manager, args));
+        if (object(data) && Object.hasOwn(data, 'claudeAccounts')) return reply(200, saveClaudeAccounts(manager, accountsSchema.parse(data)));
+        return reply(200, updateSettings(manager, updateSchema.parse(data)));
       }
       res.setHeader('Allow', 'GET, POST');
       reply(405, { error: 'Method not allowed' });

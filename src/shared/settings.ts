@@ -29,6 +29,18 @@ export interface SettingsSnapshot {
 /** The pseudo-key for one account's memory opt-in, `claude.accounts.<name>.memory`: home scope, true/false/null. */
 export const MEMORY_ACCOUNT_KEY = /^claude\.accounts\.([A-Za-z0-9][A-Za-z0-9_-]{0,31})\.memory$/;
 export interface SettingsUpdate { scope: SettingsScope; nodeId?: string; revision: string; changes: Record<string, unknown | null>; /** Required for a project-scope claude.account change. */ homeRevision?: string }
+/**
+ * POST /api/settings body that replaces claude.accounts in the home file, matched by name: a kept account keeps its projects.
+ * account (claude.account) is required when none are configured yet, and refused after: it has its own setting. create: the
+ * daemon makes a new or changed configDir (mode 0700) first; otherwise it must already be a directory. openedWith: the account
+ * names the form was opened with; a file listing other names (added or removed since) is a 409, as a stale revision is.
+ */
+export interface ClaudeAccountsSave { scope: 'home'; revision: string; openedWith: string[]; claudeAccounts: { account?: string; accounts: { name: string; configDir?: string; create?: boolean }[] } }
+/** A Claude account name (claude.accounts[].name, claude.account), checked by the daemon and the setup form alike. */
+export const CLAUDE_ACCOUNT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+export const CLAUDE_ACCOUNT_NAME_RULE = 'a name is 1-32 letters, digits, _ or -, starting with a letter or digit';
+/** GET /api/settings?claudeConfigDir=PATH: what is there (~/ expanded), and why it can never be a configDir (error). */
+export interface ClaudeConfigDirCheck { exists: boolean; directory: boolean; error?: string }
 export interface SettingsField {
   key: string; label: string; type: 'text' | 'number' | 'boolean' | 'select' | 'lines';
   options?: readonly string[]; min?: number; integer?: boolean; description?: string;

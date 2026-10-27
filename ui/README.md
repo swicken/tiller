@@ -20,14 +20,14 @@ The Memory panel (a node's Memory tab, the sidebar footer's Memory button or a c
 
 After `npm run ui:build` the mock also serves the built UI: open `http://127.0.0.1:7789/?k=mock`. Set `TL_MOCK_PORT` to change the port.
 
+The mock supports **More actions → Change harness…** in memory, including mixed-harness session
+labels. It starts no agent processes and requires no authenticated provider account.
+
 ## Usage readings
 
 Claude session measurements currently provide limits without account identity. The Usage panel shows the newest unidentified session reading and keeps other readings in an expandable list, grouped only within the same provider, pool and model scope. This is a presentation of observations, not a claim that they share an account; windows are never combined across unidentified sessions. Readings the daemon stamps with a Tiller Claude account (home config `claude.accounts`) form one group headed "Account: <name>", and a node in that account shows it in the status bar before its own first report. Known accounts and pools stay separate, and the selected-node status bar keeps its own session readings. Each retained reading keeps its timestamps and unavailable/stale state. This presentation also works with existing daemons that send unidentified usage sources.
 
 ## URL and keyboard
-
-The mock supports **More actions → Change harness…** in memory, including mixed-harness session
-labels. It starts no agent processes and requires no authenticated provider account.
 
 - `?k=<token>` is stored in localStorage and removed from the address bar. `?node=<id>` selects that node and its session; the UI keeps it in step with the selection.
 - Cmd+K jump to any node, Cmd+1..9 select the Nth row of the current session, Cmd+0 focus the sidebar tree.
