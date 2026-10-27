@@ -99,9 +99,9 @@ export interface Preflight { items: number; digest: string; digestIds: number[];
 /**
  * The $0 preflight (B0 and the repo checks) in a temp dir laid out like a trial: B0's targets in the digest (or, for a
  * b0Report scenario, recorded), R1's gate as expected, the scripts logging to the arm's call log, the solved overlay
- * passing the gate and the trapped one failing it.
+ * passing the gate and the trapped one failing it. With repoChecks false, B0 alone: no gate runs.
  */
-export function preflight(s: Scenario): Preflight {
+export function preflight(s: Scenario, repoChecks = true): Preflight {
   const dir = mkdtempSync(join(tmpdir(), 'tl-bench-b0-'));
   const checks: Preflight['checks'] = [];
   const check = (ok: boolean, what: string) => checks.push({ ok, what });
@@ -112,6 +112,7 @@ export function preflight(s: Scenario): Preflight {
     b0.case.close();
     const miss = b0.missing.join('; ');
     check(!miss || !!s.b0Report, `B0: targets in the digest${miss ? `: ${miss}${s.b0Report ? ' (recorded, not required)' : ''}` : ''}`);
+    if (!repoChecks) return { items, digest: b0.text, digestIds: b0.shadow, checks };
     const r1 = runGate(join(dir, 'r1', 'repo'));
     check((r1.code === 0) === (s.r1Gate === 'pass'), `R1's gate ${r1.code === 0 ? 'passes' : 'fails'} (expected: ${s.r1Gate})`);
     const calls = existsSync(join(dir, 'r1', 'calls.jsonl')) ? readFileSync(join(dir, 'r1', 'calls.jsonl'), 'utf8') : '';
