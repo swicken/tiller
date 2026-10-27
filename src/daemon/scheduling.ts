@@ -119,7 +119,7 @@ function release(m: NodeManager, id: string): void {
     else m.emitNode(id);
     return;
   }
-  m.logEvent(id, 'launch', p.isolation === 'worktree' ? { isolation: 'worktree' } : {});
+  m.logEvent(id, 'launch', p.isolation && p.isolation !== 'none' ? { isolation: p.isolation } : {});
   const fail = (err: Error) => {
     if (!m.registry.get(id)) return;
     m.logEvent(id, 'launch-failed', { error: err.message });
@@ -128,10 +128,10 @@ function release(m: NodeManager, id: string): void {
     m.emit('removed', id);
   };
   try {
-    if (p.isolation === 'worktree') {
+    if (p.isolation && p.isolation !== 'none') {
       if (p.prompt) rt.starting = true; // the worktree takes a while; hold its maxWorking slot meanwhile
       m.setStatus(id, { ...rt.status!, state: 'unknown', activity: 'creating worktree', changedAt: Date.now() }, false);
-      addWorktree(m, id, p.prompt, p.base).then(() => m.emitNode(id), fail);
+      addWorktree(m, id, p.prompt, p.base, p.isolation === 'detached').then(() => m.emitNode(id), fail);
       return;
     }
     m.writeFiles(id);

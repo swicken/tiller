@@ -427,3 +427,10 @@ async function copyEntry(src: string, dst: string): Promise<void> {
 export async function isListed(w: Pick<Worktree, 'repo' | 'path'>): Promise<boolean> {
   return existsSync(w.path) && (await listWorktrees(w.repo)).some((e) => samePath(e.path, w.path));
 }
+
+/** A read-only worktree: HEAD detached at `sha`, no branch created. */
+export const addDetached = (repo: string, path: string, sha: string) =>
+  git(repo, ['worktree', 'add', '-q', '--detach', path, sha], SLOW_TIMEOUT_MS);
+
+/** The commit checked out in a worktree. */
+export const headSha = async (path: string) => (await git(path, ['rev-parse', 'HEAD'])).trim();

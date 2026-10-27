@@ -1,7 +1,7 @@
 import { ActionButtons } from '../controls/ActionButtons';
 import { CtxBar, GateMark, outcomeLabel, StateDot } from '../controls/Bits';
 import { hasChanges } from '../worktree';
-import { fmtAge, shortEffort, shortModel } from '../../src/shared/format';
+import { branchLabel, fmtAge, shortEffort, shortModel } from '../../src/shared/format';
 import { useNow } from '../hooks';
 import { Icon } from '../controls/icons';
 import { RenameInput } from '../controls/RenameInput';
@@ -18,7 +18,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
   const agent = isAgentKind(node.kind);
   const model = shortModel(s.model ?? node.model);
   const effort = s.effort ?? node.effort;
-  const branch = node.worktree?.branch ?? s.git?.branch;
+  const branch = node.worktree ? branchLabel(node.worktree) : s.git?.branch;
   const needs = descendants.filter((d) => needsYou(d.status)).length;
   const blocked = s.state === 'blocked' && !s.exited;
   const kind = statusKind(node);
@@ -27,7 +27,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
 
   return (
     <div className={`row${selected ? ' sel' : ''}`} role="treeitem" aria-selected={selected} aria-level={depth + 1} aria-expanded={hasChildren ? !collapsed : undefined}
-      title={`${node.title}${node.worktree ? ` · ${node.worktree.branch}` : ''}${s.model ?? node.model ? ` · ${s.model ?? node.model}` : ''}`}
+      title={`${node.title}${branch ? ` · ${branch}` : ''}${s.model ?? node.model ? ` · ${s.model ?? node.model}` : ''}`}
       data-id={node.id} tabIndex={(tabStop ?? selected) ? 0 : -1}
       onFocus={(e) => { if (e.target === e.currentTarget && !selected) selectNode(node.id); }} onClick={() => selectNode(node.id)}>
       {row.guides.map((g, i) => <span key={i} className={`g${g ? ' v' : ''}`} />)}
@@ -56,7 +56,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
             {node.outcome.outcome === 'failed' ? outcome : `outcome ${outcome}`}</span>}
           {node.worktree?.missing && <span className="count warn" title="The worktree directory is gone; resume is refused">worktree missing</span>}
           {node.gate && <GateMark gate={node.gate} />}
-          {hasChanges(node) && <span className="count" title={`unmerged work on ${node.status.git!.branch}: merge or close it`}>changes · {node.status.git!.ahead} ahead · {node.status.git!.dirty} dirty</span>}
+          {hasChanges(node) && <span className="count" title={`unmerged work on ${branchLabel(node.status.git!)}: merge or close it`}>changes · {node.status.git!.ahead} ahead · {node.status.git!.dirty} dirty</span>}
           {collapsed && <span className="count" title={`${descendants.length} hidden`}>+{descendants.length}</span>}
           {collapsed && descendants.some((d) => d.unread) && <span className="count" title="Hidden nodes have unread activity">unread</span>}
           {collapsed && descendants.some((d) => d.status.stalled && !d.status.exited) && <span className="count warn">stalled below</span>}

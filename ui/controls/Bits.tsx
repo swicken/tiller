@@ -1,5 +1,5 @@
 import { PROFILE_LABELS, profileFor, isAgentKind, type GitState, type NodeView, type Outcome } from '../../src/shared/protocol';
-import { ctxLevel, fmtTokens, shortEffort, shortModel } from '../../src/shared/format';
+import { branchLabel, ctxLevel, fmtTokens, shortEffort, shortModel } from '../../src/shared/format';
 import { fmtUsd, INCOMPLETE_NOTE, type Spend } from '../../src/shared/spend';
 import { KIND_LABEL, type StatusKind } from '../sidebar/tree';
 
@@ -28,7 +28,7 @@ export function NodeMeta({ node, detail, subtree }: { node: NodeView; detail?: b
   const s = node.status, wt = node.worktree, g = s.git;
   const model = shortModel(s.model ?? node.model), effort = s.effort ?? node.effort;
   const parts = [
-    wt && <span className="branch" title={`branch ${wt.branch} from ${wt.base}`}>⎇ {wt.branch}</span>,
+    wt && <span className="branch" title={wt.branch ? `branch ${wt.branch} from ${wt.base}` : `read-only worktree, ${branchLabel(wt)}`}>⎇ {branchLabel(wt)}</span>,
     g && g.additions + g.deletions > 0 && <DiffCounts git={g} />,
     g && g.ahead > 0 && <span title={`${g.ahead} commit(s) not in ${g.base}${g.behind ? `; ${g.base} has ${g.behind} not on the branch` : ''}`}>↑{g.ahead}</span>,
     g && g.dirty > 0 && <span title={`${g.dirty} uncommitted file(s) in the worktree`}>●{g.dirty}</span>,

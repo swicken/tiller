@@ -253,7 +253,7 @@ describe('NodeManager.spawn refusal precedence', () => {
       [{}, 'terminal nodes cannot select a harness'],
       [{ harness: undefined }, 'a preset is for agent nodes only'],
       [{ preset: undefined }, 'isolation "worktree" is for agent nodes only'],
-      [{ isolation: undefined }, 'base is for isolation "worktree" only'],
+      [{ isolation: undefined }, 'base is for isolation "worktree" or "detached" only'],
       [{ kind: 'claude', harness: 'codex' }, 'use kind "agent" for a non-Claude harness'],
       [{ kind: 'agent', preset: 'missing', effort: 'max', account: 'x', permissionMode: 'bypassPermissions' }, 'no preset "missing"'],
       [{ preset: undefined }, 'unsupported Codex effort: max'],
@@ -267,7 +267,7 @@ describe('NodeManager.spawn refusal precedence', () => {
     m.applyHook(parent.id, { hook_event_name: 'UserPromptSubmit', permission_mode: 'bypassPermissions' });
     await expect(spawn(req)).rejects.toThrow('refused: only the human may spawn a node with permissionMode bypassPermissions');
     await expect(spawn({ ...req, permissionMode: 'plan' })).rejects.toThrow('Codex does not support Claude permissionMode');
-    await expect(spawn({ ...req, permissionMode: undefined })).rejects.toThrow('base is for isolation "worktree" only');
+    await expect(spawn({ ...req, permissionMode: undefined })).rejects.toThrow('base is for isolation "worktree" or "detached" only');
     expect(m.list()).toHaveLength(before);
   });
 });

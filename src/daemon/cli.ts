@@ -38,7 +38,7 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
                                                       spawns meanwhile), unless --now; Ctrl-C stops waiting and cancels
   tl autostart on|off|status                          a launchd agent that starts the daemon at login and after a crash
   tl doctor [--no-app] [--harness claude|pi|codex]     check what tiller needs (bin/setup --check) and print the fix for anything missing
-  tl new <title> [--cwd P] [--preset NAME] [--model M] [--effort E] [--prompt T] [--role R] [--profile P] [--harness claude|pi|codex] [--worktree [--base B]] [--account NAME]
+  tl new <title> [--cwd P] [--preset NAME] [--model M] [--effort E] [--prompt T] [--role R] [--profile P] [--harness claude|pi|codex] [--worktree|--detached [--base B]] [--account NAME]
                                                       start an agent node and show it in the app; --harness picks the agent CLI;
                                                       --account picks a Claude account from claude.accounts (default: by project)
   tl ps | list                                        show nodes
@@ -64,13 +64,14 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
                                                       title, first prompt or last message
   tl transcript <id> [--session SID]                  a live or closed node's conversation; SID picks one of its earlier sessions
   tl followup <id> --prompt P [--title T]             continue a closed node's session as a new node that starts on P
-  tl spawn --kind claude|agent|terminal [--harness claude|pi|codex] --title T --cwd PATH [--prompt P] [--model M] [--effort low|medium|high|xhigh|max] [--permission-mode M] [--role orchestrator|worker|none] [--profile orchestrator|implementation|explorer|mechanical|reviewer] [--worktree [--base B]] [--preset NAME] [--request-id ID]
+  tl spawn --kind claude|agent|terminal [--harness claude|pi|codex] --title T --cwd PATH [--prompt P] [--model M] [--effort low|medium|high|xhigh|max] [--permission-mode M] [--role orchestrator|worker|none] [--profile orchestrator|implementation|explorer|mechanical|reviewer] [--worktree|--detached [--base B]] [--preset NAME] [--request-id ID]
            [--after ID,ID] [--after-success ID,ID] [--now] [--fork ID] [--account NAME]
                                                       --harness pi|codex implies --kind agent when --kind is omitted; --after / --after-success
                                                       arm the node until those finish a turn or report
                                                       succeeded; --now launches past daemon.maxWorking instead of queueing;
                                                       --fork starts from a copy of a live or closed node's conversation (cwd: its);
                                                       --base names the branch the worktree forks from and merges into;
+                                                      --detached gives a read-only worktree at its base with no branch;
                                                       --account picks a Claude account for a root node (human only; children inherit)
   tl prompts                                          show the role prompt files and any override for this directory
   tl presets [--cwd P]                                list the spawn presets in effect for a directory and the file each comes from
@@ -147,7 +148,7 @@ const { values: f, positionals: pos } = parseArgs({
 const ids = (v: string[] | undefined) => v?.flatMap((x) => x.split(',')).map((x) => x.trim()).filter(Boolean);
 
 if (f.harness && !(HARNESSES as readonly string[]).includes(f.harness)) fail(`unknown harness: ${f.harness} (expected claude, pi or codex)`);
-const isolation = () => (f.worktree ? 'worktree' : undefined);
+const isolation = () => (f.worktree && f.detached ? fail('--worktree and --detached exclude each other') : f.worktree ? 'worktree' : f.detached ? 'detached' : undefined);
 const cwdArg = () => realpathSync(resolve(f.cwd ?? process.cwd()));
 
 /**
