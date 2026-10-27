@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { isAgentKind, PROFILE_LABELS, profileFor, type NodeView } from '../../src/shared/protocol';
 import { fmtTokens, shortModel } from '../../src/shared/format';
-import { CtxBar, DiffCounts, StateDot } from '../controls/Bits';
+import { CtxBar, DiffCounts, outcomeLabel, StateDot } from '../controls/Bits';
 import { Icon } from '../controls/icons';
 import { KIND_LABEL, kindTag, statusKind } from './tree';
 import { readPreference, useResizeHandle } from './useResizeHandle';
@@ -92,7 +92,7 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
         </p></>}
         <h3>Completion</h3>
         <dl className="inspector-facts">
-          {row('Reported outcome', node.outcome ? <span title="Reported task outcome">{node.outcome.outcome === 'failed' ? 'Needs changes' : 'succeeded'}</span> : 'Not reported')}
+          {row('Reported outcome', node.outcome ? <span title="Reported task outcome">{outcomeLabel(node.outcome)}</span> : 'Not reported')}
           {row('Completion gate', node.gate ?? node.outcome?.gate ?? 'Not reported')}
         </dl>
         {node.outcome?.summary && <p className="inspector-text">{node.outcome.summary}</p>}
