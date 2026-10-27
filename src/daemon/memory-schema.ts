@@ -721,14 +721,16 @@ export function gateExit(tail: string): string | undefined {
 }
 
 /**
- * The line of a failed gate's output most likely to name the error: the first matching error|fail|✗|×|TS<digits>, else
- * the last non-empty output line. Never the daemon's exit line. It is gate output, so agent text.
+ * The line of a failed gate's output most likely to name the error: the first matching error|fail|✗|✖|×|not ok|TS<digits>,
+ * else the last non-empty output line. Never the daemon's exit line, nor node:test's run summary ("ℹ fail 0", "# fail 0",
+ * "✖ failing tests:"). It is gate output, so agent text.
  */
 export function firstErrorLine(tail: string): string | undefined {
-  const lines = tail.replace(ANSI, '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = tail.replace(ANSI, '').split('\n').map((l) => l.trim())
+    .filter((l) => l && !/^(?:[ℹ#] \w+ [\d.]+|✖ failing tests:)$/.test(l));
   if (gateExit(tail) !== undefined) lines.pop();
   // prune: keyword heuristic; parse per-tool formats if pitfalls show the wrong line.
-  return lines.find((l) => /error|fail|✗|×|TS\d{4}/i.test(l)) ?? lines.at(-1);
+  return lines.find((l) => /error|fail|✗|✖|×|^not ok|TS\d{4}/i.test(l)) ?? lines.at(-1);
 }
 
 /** The first structural error code in the tail (TS2345, E0308): one token that cannot carry an instruction. */

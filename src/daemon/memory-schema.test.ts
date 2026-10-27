@@ -152,6 +152,28 @@ describe('gate tail helpers', () => {
     expect(firstErrorLine('npm test: stopped by SIGTERM (time limit 10 minutes)')).toBeUndefined();
   });
 
+  // Real `node --test` output (Node 24) for one failing and one passing test, paths shortened.
+  const nodeSpec = [
+    '✖ adds numbers (0.57725ms)', '✔ passes (0.072042ms)', 'ℹ tests 2', 'ℹ suites 0', 'ℹ pass 1', 'ℹ fail 1',
+    'ℹ cancelled 0', 'ℹ skipped 0', 'ℹ todo 0', 'ℹ duration_ms 46.064458', '', '✖ failing tests:', '',
+    'test at a.test.mjs:3:1', '✖ adds numbers (0.57725ms)',
+    '  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:', '  ', '  2 !== 3', '  ',
+    '      at TestContext.<anonymous> (file:///tmp/nt/a.test.mjs:3:37)', '  }', 'npm test: exited with 1',
+  ].join('\n');
+  const nodeTap = [
+    'TAP version 13', '# Subtest: adds numbers', 'not ok 1 - adds numbers', '  ---', '  duration_ms: 0.85575',
+    '  type: \'test\'', '  location: \'/tmp/nt/a.test.mjs:3:1\'', '  failureType: \'testCodeFailure\'',
+    '  error: |-', '    Expected values to be strictly equal:', '  ...', '1..2', '# tests 2', '# suites 0', '# pass 1',
+    '# fail 1', '# cancelled 0', '# duration_ms 48.856333', 'npm test: exited with 1',
+  ].join('\n');
+
+  it('firstErrorLine names the failing node:test test, never its run summary', () => {
+    expect(firstErrorLine(nodeSpec)).toBe('✖ adds numbers (0.57725ms)');
+    // A tail cut after the first ✖ line still skips the summary block and the "failing tests:" header.
+    expect(firstErrorLine(nodeSpec.slice(nodeSpec.indexOf('ℹ tests')))).toBe('✖ adds numbers (0.57725ms)');
+    expect(firstErrorLine(nodeTap)).toBe('not ok 1 - adds numbers');
+  });
+
   it('gateExit reads the last line only', () => {
     expect(gateExit(tsc)).toBe('npm run typecheck: exited with 2');
     expect(gateExit(vitest)).toBe('npm test: exited with 1');
