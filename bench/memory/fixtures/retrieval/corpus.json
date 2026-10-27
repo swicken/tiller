@@ -1,7 +1,7 @@
 {
   "name": "R2a corpus",
   "claim": 0,
-  "note": "Hand-written targets for the R2a needs (memory-v4 plan §2.2), shaped like real outcomes of a fictional local job runner, lantern. Ten are near-miss distractors that no need counts. eval.ts adds every Layer A fixture's items to this repo.",
+  "note": "Hand-written targets for the R2a needs, shaped like real outcomes of a fictional local job runner, lantern. Ten are near-miss distractors that no need counts. eval.ts adds every Layer A fixture's items to this repo.",
   "now": "2026-10-20T12:00:00Z",
   "repos": { "r2a": "git:bench.invalid/r2a" },
   "episodes": [

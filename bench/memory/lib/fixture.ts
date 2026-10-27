@@ -1,6 +1,6 @@
 // The Layer A fixture format (bench plan §2.1) and its replay through the real memory modules on a temp home: Case
 // seeds a MemoryStore from a fixture's episodes and resolves "@label" references to item ids. Shared by Layer A and the
-// retrieval bench (memory-v4 plan §4 C0).
+// retrieval bench.
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
