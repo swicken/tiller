@@ -14,7 +14,7 @@ import {
   keepRank, LIMITS, SCHEMA_V1, type Actor, type GardenActionInput, type GardenApplyResult, type ItemRow, type MemoryScope,
 } from '../../../src/daemon/memory-schema.js';
 import { MemoryStore } from '../../../src/daemon/memory-store.js';
-import { startTestDaemon } from '../../../src/daemon/memory-test-daemon.js';
+import { startTestDaemon } from '../../../src/daemon/memory-test-daemon.test-helper.js';
 import { PtySession } from '../../../src/daemon/pty.js';
 import { digestMeasure, loadFixture, Seeded, type GardenLabel } from './fixture.js';
 

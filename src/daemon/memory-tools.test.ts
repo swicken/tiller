@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryInjectionView } from '../shared/protocol.js';
 import type { NodeManager } from './manager.js';
 import { memoryOn, switchMemory } from './memory-config.js';
-import { startTestDaemon, type TestDaemon } from './memory-test-daemon.js';
+import { startTestDaemon, type TestDaemon } from './memory-test-daemon.test-helper.js';
 import type { DaemonServer } from './server.js';
 
 // The memory tools over POST /api/<tool>, as the CLI calls them, with a node's token and the admin token.
