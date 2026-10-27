@@ -920,7 +920,10 @@ export class MemoryStore implements DigestSource, GardenStore {
           && refuse('kind', `${ref(by)} is a ${by.kind}: a supersede's by is the same kind, a ledger line, daemon-written or seen twice`))
         || (by.created_at <= item.created_at && refuse('newer', `${ref(by)} is not newer than ${ref(item)}`))
         || (ftsTerms(item.text, Infinity).length < g.minSupersedeTerms && refuse('terms', `${ref(item)} has under ${g.minSupersedeTerms} terms`))
-        || cover(item, by) || immune(item, by)
+        || cover(item, by)
+        || (by.kind === item.kind && contained(item.text, by.text) >= g.copyContained
+          && refuse('copy', `${ref(by)} is a near-copy of ${ref(item)}; merge them instead`))
+        || immune(item, by)
         || (done.hidesLeft < 1 && refuse('hides', 'this run may hide no more items'))
         || (done.supersedesLeft < 1 && refuse('supersedes', 'this run may supersede no more items'));
       if (refused) return refused;

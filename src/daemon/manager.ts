@@ -466,6 +466,7 @@ export class NodeManager extends EventEmitter {
   }
 
   private async spawnNode(req: SpawnRequest): Promise<NodeView> {
+    if (req.parentId && this.registry.get(req.parentId)?.gardener) throw new Error('refused: a memory gardener node cannot have children');
     if (!req.byHuman && req.parentId && this.runtimes.get(req.parentId)?.busy === 'changing harness') throw new Error('parent is changing harness');
     req = spawnTarget(req, req.parentId ? this.registry.get(req.parentId) : undefined);
     const adapter = isAgentKind(req.kind) ? adapterFor(req) : undefined;
@@ -557,7 +558,7 @@ export class NodeManager extends EventEmitter {
     if (!adapterFor(req).capabilities.fork) throw new Error('this harness does not support session forking');
     const src = this.registry.get(req.fork!) ?? await findArchived(this.home, req.fork!, req.parentId ? this.rootIdOf(req.parentId) : undefined);
     if (!src) throw new Error(`no such node to fork: ${req.fork}`);
-    if ('gardener' in src && src.gardener) throw new Error(GARDENER_REFUSAL);
+    if (src.gardener) throw new Error(GARDENER_REFUSAL);
     if ((src.harness ?? 'claude') !== harnessFor(req)) throw new Error('cannot fork a session across harnesses');
     // transcriptPath comes with SessionStart: without it the session has not started and there is nothing to fork.
     if (!src.sessionId || !src.transcriptPath) throw new Error(`refused: ${req.fork} has no session yet to fork`);
@@ -575,6 +576,7 @@ export class NodeManager extends EventEmitter {
   async followup(id: string, prompt: string, title?: string): Promise<NodeView> {
     const a = await findArchived(this.home, id);
     if (!a) throw new Error(`no archived node ${id}`);
+    if (a.gardener) throw new Error(GARDENER_REFUSAL);
     if (!a.sessionId || !a.transcriptPath) throw new Error(`${id} never started a session to follow up`);
     if (!existsSync(a.transcriptPath)) throw new Error(`the transcript of ${id} is gone (${a.transcriptPath})`);
     const twin = this.registry.list().find((n) => n.followupOf === id || n.sessionId === a.sessionId);
@@ -1105,6 +1107,7 @@ export class NodeManager extends EventEmitter {
     this.drainState = undefined;
     holdDeliveries(this);
     scheduleSoon(this);
+    if (!this.shutDown) this.gardener.resume(); // drain stopped it; a shutdown stops it for good
     this.emit('drain', undefined);
   }
 
@@ -1118,7 +1121,7 @@ export class NodeManager extends EventEmitter {
    * already queued have landed. No git refresh starts once it is called, and no registry save after it resolves.
    */
   async shutdown(opts: { clearLive?: boolean } = {}): Promise<void> {
-    const gardening = this.gardener.stop().catch(logError); // its live run's lease flips now; it settles before the store closes
+    const gardening = this.gardener.stop().catch(logError); // its live run's lease flips now; it settles before the registry and store close
     if (!this.shutDown) this.registry.setStopped(this.drainState?.reason ?? 'the daemon was stopped');
     this.shutDown = true;
     clearTimeout(this.drainState?.lease);
@@ -1137,11 +1140,11 @@ export class NodeManager extends EventEmitter {
     this.registry.flush(); // now, in case the process is killed during the wait
     saveInboxForRestart(this);
     await Promise.race([Promise.all(work), sleep(wait, undefined, { ref: false })]);
+    await gardening; // bounded by its process's terminate, which waits at most `wait` too
     // Again: exiting processes' last hooks and messages land during the wait. The registry then stops saving.
     this.registry.close();
     saveInboxForRestart(this);
     await flushEvents();
-    await gardening;
     this.memory.close();
   }
 

@@ -8,7 +8,7 @@ type Guard = [check: (rec: NodeRecord, rt: NodeRuntime) => boolean, message: (id
 const pending: Guard = [(rec) => !!rec.pending, () => 'node is armed or queued: it launches by itself; close it to drop it'];
 const busy: Guard = [(_, rt) => !!rt.busy, (id, rt) => `${id} is ${rt.busy}`];
 const setupRunning: Guard = [(_, rt) => !!rt.setup, () => 'worktree setup is running'];
-/** Resume, restart, a harness change and a fork of a memory gardener node are refused with this. */
+/** Resume, restart, a harness change, a follow-up and a fork of a memory gardener node are refused with this. */
 export const GARDENER_REFUSAL = 'a gardener run cannot be resumed; start one with tl memory garden run';
 const gardener: Guard = [(rec) => !!rec.gardener, () => GARDENER_REFUSAL];
 

@@ -24,7 +24,7 @@ import {
   accountKey, itemRef, LIMITS, MEMORY_TOOL_SHAPES, parseItemRef, parseRunRef, runRef, type Actor, type GardenRefused, type GardenRunView, type GardenTarget,
   type ItemView, type MemoryScope,
 } from './memory-schema.js';
-import { gardenAccount, GARDENER_TOOLS, pausedBy, runSummary, type GardenCall, type Gardener, type GardenerTool } from './gardener.js';
+import { gardenAccount, GARDENER_TOOLS, pausedBy, runSummary, type GardenCall, type GardenerTool } from './gardener.js';
 import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS } from './spawnfields.js';
 import { readMessages, renderMessage, sessionMessages } from './transcript.js';
@@ -295,8 +295,6 @@ function tool<S extends z.ZodRawShape>(title: string, description: string, shape
 
 // ---- the gardener ----
 
-/** The daemon's memory Gardener (gardener.ts), which NodeManager constructs; undefined where it has none. */
-const gardenerOf = (m: NodeManager): Gardener | undefined => (m as NodeManager & { gardener?: Gardener }).gardener;
 /** A memory gardener node: it is listed and accepted the garden tools only, and nobody else is. */
 const isGardener = (m: NodeManager, caller: string) => caller !== HUMAN && !!m.registry.get(caller)?.gardener;
 
@@ -307,7 +305,7 @@ const isGardener = (m: NodeManager, caller: string) => caller !== HUMAN && !!m.r
 function refusal(m: NodeManager, caller: string, name: string, t: { humanOnly: boolean; gardenerOnly: boolean }): string | undefined {
   if (isGardener(m, caller)) {
     if (t.gardenerOnly) return undefined;
-    gardenerOf(m)?.toolCall(caller, name);
+    m.gardener.toolCall(caller, name);
     return `refused: ${name} is not a gardener tool; the gardener may call only ${GARDENER_TOOLS.join(', ')}`;
   }
   if (t.gardenerOnly) return `${name} is only for the memory gardener`;
@@ -318,18 +316,17 @@ function refusal(m: NodeManager, caller: string, name: string, t: { humanOnly: b
 /**
  * A garden tool: the Gardener lets each call through (counting it) and gives its run and scope, from the node record and
  * never from arguments. The reply, a refusal's included, counts towards the run's tool-output cap; a refusal is an error
- * naming the rule it broke.
+ * naming the rule it broke. Every reply, a refusal's included, says how many calls the run has left (callsLeft).
  */
 function gardenTool<S extends z.ZodRawShape>(name: GardenerTool, title: string, description: string, shape: S,
   act: (call: Extract<GardenCall, { ok: true }>, a: z.infer<z.ZodObject<S>>, c: Ctx) => Out | GardenRefused) {
   const run = async (c: Ctx, a: z.infer<z.ZodObject<S>>): Promise<Out> => {
-    const g = gardenerOf(c.manager);
-    if (!g) throw new Error('the gardener is not running in this daemon');
+    const g = c.manager.gardener;
     const call = g.toolCall(c.caller, name);
     if (!call.ok) throw new Error(call.error);
     const out = act(call, a, c);
     const refused = 'ok' in out && out.ok === false;
-    const text = refused ? out.message : (out as Out).text ?? JSON.stringify((out as Out).data);
+    const text = refused ? `${out.message} (callsLeft: ${call.callsLeft})` : (out as Out).text ?? JSON.stringify((out as Out).data);
     if (!g.toolOutput(c.caller, text.length)) throw new Error(`garden run ${runRef(call.runId)} has ended; end your turn`);
     if (refused) throw new Error(text);
     return { text, data: (out as Out).data };
@@ -912,9 +909,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         case 'run': {
           if (a.run !== undefined) throw new Error('run starts a new run; it takes no run id');
           if (repoPath === undefined) throw new Error('run needs repo: a directory of the repository to garden (tl memory garden run --repo PATH)');
-          const g = gardenerOf(m);
-          if (!g) throw new Error('the gardener is not running in this daemon');
-          const r = await g.runNow({ repoPath, ...(a.account === undefined ? {} : { account: a.account }) }, { wait: a.wait });
+          const r = await m.gardener.runNow({ repoPath, ...(a.account === undefined ? {} : { account: a.account }) }, { wait: a.wait });
           if (!r.ok) throw new Error(`refused: ${r.reason}`);
           const text = a.wait && r.run.state !== 'running'
             ? runText(r.run, now)
@@ -958,7 +953,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     MEMORY_TOOL_SHAPES.garden_get,
     (call, a, c) => {
       const r = c.manager.memory.gardenGet(call.scope.account, call.runId, idOf(a.id));
-      return r.ok ? { data: r.item } : r;
+      return r.ok ? { data: { ...r.item, callsLeft: call.callsLeft } } : r;
     }),
 
   garden_merge: gardenTool('garden_merge',
@@ -968,7 +963,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     (call, a, c) => {
       const r = c.manager.memory.gardenApply(call.scope.account, call.runId, { action: 'merge', ids: a.ids.map(idOf), reason: a.reason });
       if (!r.ok || r.action !== 'merge') return r as GardenRefused;
-      const data = { kept: itemRef(r.kept), hidden: r.hidden.map(itemRef), hidesLeft: r.hidesLeft, supersedesLeft: r.supersedesLeft };
+      const data = { kept: itemRef(r.kept), hidden: r.hidden.map(itemRef), hidesLeft: r.hidesLeft, supersedesLeft: r.supersedesLeft, callsLeft: call.callsLeft };
       return { text: `merged ${refs(r.hidden)} into ${itemRef(r.kept)} ${JSON.stringify(data)}`, data };
     }),
 
@@ -979,7 +974,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     (call, a, c) => {
       const r = c.manager.memory.gardenApply(call.scope.account, call.runId, { action: 'supersede', id: idOf(a.id), by: idOf(a.by), reason: a.reason });
       if (!r.ok || r.action !== 'supersede') return r as GardenRefused;
-      const data = { hidden: itemRef(r.hidden), by: itemRef(r.by), hidesLeft: r.hidesLeft, supersedesLeft: r.supersedesLeft };
+      const data = { hidden: itemRef(r.hidden), by: itemRef(r.by), hidesLeft: r.hidesLeft, supersedesLeft: r.supersedesLeft, callsLeft: call.callsLeft };
       return { text: `superseded ${itemRef(r.hidden)} by ${itemRef(r.by)} ${JSON.stringify(data)}`, data };
     }),
 };
@@ -1023,6 +1018,8 @@ export function mountMcp(manager: NodeManager, confirm: Ctx['confirm'], focus: C
   async function api(req: http.IncomingMessage, res: http.ServerResponse, name: string, ctx: Ctx): Promise<void> {
     const reply = (code: number, body: unknown) => res.writeHead(code, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
     const t = (tools as Record<string, (typeof tools)[keyof typeof tools]>)[name];
+    // As over /mcp, a gardener's call to any name but its four trips the wire, a name no tool has included.
+    if (!t && req.method === 'POST' && isGardener(manager, ctx.caller)) manager.gardener.toolCall(ctx.caller, name);
     if (req.method !== 'POST' || !t) return void res.writeHead(404).end();
     const raw = await readBody(req, res);
     if (raw === undefined) return;
@@ -1054,7 +1051,7 @@ export function mountMcp(manager: NodeManager, confirm: Ctx['confirm'], focus: C
       try { body = JSON.parse(raw); } catch { return void res.writeHead(400).end(); }
       for (const msg of [body].flat() as { method?: unknown; params?: { name?: unknown } }[]) {
         const name = msg?.method === 'tools/call' ? String(msg.params?.name) : undefined;
-        if (name !== undefined && !(GARDENER_TOOLS as readonly string[]).includes(name)) gardenerOf(manager)?.toolCall(caller, name);
+        if (name !== undefined && !(GARDENER_TOOLS as readonly string[]).includes(name)) manager.gardener.toolCall(caller, name);
       }
     }
 

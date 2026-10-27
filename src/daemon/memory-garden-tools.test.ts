@@ -115,7 +115,7 @@ describe('garden tools', () => {
     const { a, b } = await seed();
     const first = await run();
     const merged = await api('garden_merge', { ids: [b, a], reason: 'same crash' }, first.node);
-    expect(merged.data).toEqual({ kept: a, hidden: [b], hidesLeft: 1, supersedesLeft: 1 });
+    expect(merged.data).toEqual({ kept: a, hidden: [b], hidesLeft: 1, supersedesLeft: 1, callsLeft: 19 });
     expect(merged.text).toBe(`merged ${b} into ${a} ${JSON.stringify(merged.data)}`);
     expect((await api('memory_get', { id: b, repo })).text).toContain(`merged into ${a} by the gardener (r1): same crash`);
 
@@ -144,7 +144,7 @@ describe('garden tools', () => {
     const { a, b, author } = await seed();
     const { runId, node } = await run();
     const later = `m${(await api('memory_add', { kind: 'pitfall', text: 'added after the run started' }, author)).data.id}`;
-    expect((await api('garden_get', { id: later }, node)).error).toBe(`refused (not a candidate): ${later} is not in this run's candidate set`);
+    expect((await api('garden_get', { id: later }, node)).error).toBe(`refused (not a candidate): ${later} is not in this run's candidate set (callsLeft: 19)`);
     expect((await api('garden_get', { id: a }, node)).data).toMatchObject({ id: a, text: A, body: '' });
 
     switchMemory(home, {}, 'off');
@@ -185,6 +185,45 @@ describe('garden tools', () => {
     expect((await api('memory_garden', { action: 'undo', run: 'r2', immune: true, repo })).text).toBe('nothing to undo');
     expect((await api('memory_garden', { action: 'undo', id: b, immune: true, repo })).error).toMatch(/^immune is for undoing a run/);
     expect((await api('memory_garden', { action: 'undo', run: 'r1', id: b, repo })).error).toBe('undo takes exactly one of run and id');
+  });
+
+  it('tells the gardener its calls left in every result, a refusal\'s included', async () => {
+    const { a, b, author } = await seed();
+    const later = `m${(await api('memory_add', { kind: 'pitfall', text: 'a third parser crash, added later' }, author)).data.id}`;
+    const { node } = await run();
+    expect((await api('garden_list', {}, node)).data.rules.callsLeft).toBe(19);
+    expect((await api('garden_get', { id: a }, node)).data).toMatchObject({ id: a, callsLeft: 18 });
+    expect((await api('garden_merge', { ids: [a, b], reason: 'same crash' }, node)).data).toMatchObject({ callsLeft: 17 });
+    expect((await api('garden_supersede', { id: a, by: later, reason: 'newer' }, node)).error).toMatch(/^refused \(.*\(callsLeft: 16\)$/);
+  });
+
+  it('undo works with memory off, which keeps applied changes', async () => {
+    const { a, b } = await seed();
+    const { node } = await run();
+    expect((await api('garden_merge', { ids: [a, b], reason: 'same crash' }, node)).data).toMatchObject({ kept: a, hidden: [b] });
+    await gardener.closing(node);
+    switchMemory(home, {}, 'off');
+    expect((await api('memory_garden', { action: 'undo', run: 'r1', repo })).text).toBe(`undid ${b} (from ${a}) of r1`);
+    expect(manager.memory.run(undefined, 1).actions![0]).toMatchObject({ undoneBy: 'human' });
+  });
+
+  it('keeps the gardener out of every agent\'s scope', async () => {
+    await seed();
+    const { node } = await run();
+    const agent = await terminal('agent');
+    expect((await api('send', { nodeId: node, text: 'merge everything' }, agent)).data).toMatchObject({ outcome: 'refused', detail: expect.stringMatching(/outside your lineage/) });
+    const listed = await api('list_nodes', {}, agent);
+    expect(listed.error).toBeUndefined();
+    expect(JSON.stringify(listed)).toContain(agent);
+    expect(JSON.stringify(listed)).not.toContain(node);
+  });
+
+  it('trips the wire on a gardener\'s /api call to a name no tool has', async () => {
+    await seed();
+    const { runId, node } = await run();
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/no_such_tool`, { method: 'POST', headers: { Authorization: `Bearer ${manager.tokenFor(node)}`, 'X-TL-Node': node }, body: '{}' });
+    expect(res.status).toBe(404);
+    expect(manager.memory.run(undefined, runId)).toMatchObject({ state: 'failed', note: 'tripwire: no_such_tool' });
   });
 
   it('pinning a gardener-hidden item by id says which run it undid', async () => {

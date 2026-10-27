@@ -1,14 +1,22 @@
 // Memory gardener bench Layer G (plan §5.2): the real store and runtime driven through scripted actions on the labeled
 // fixtures. Deterministic and LLM-free; Layer H (live.ts) runs the model.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Gardener, type GardenHost } from '../../../src/daemon/gardener.js';
-import { keepRank, LIMITS, SCHEMA_V1, type Actor, type GardenActionInput, type ItemRow, type MemoryScope } from '../../../src/daemon/memory-schema.js';
+import { GARDENER_REFUSAL } from '../../../src/daemon/lifecycle-guards.js';
+import { NodeManager } from '../../../src/daemon/manager.js';
+import { switchMemory } from '../../../src/daemon/memory-config.js';
+import {
+  keepRank, LIMITS, SCHEMA_V1, type Actor, type GardenActionInput, type GardenApplyResult, type ItemRow, type MemoryScope,
+} from '../../../src/daemon/memory-schema.js';
 import { MemoryStore } from '../../../src/daemon/memory-store.js';
-import { digestMeasure, loadFixture, Seeded } from './fixture.js';
+import { PtySession } from '../../../src/daemon/pty.js';
+import { startServer } from '../../../src/daemon/server.js';
+import { digestMeasure, loadFixture, Seeded, type GardenLabel } from './fixture.js';
 
 const homes: string[] = [];
 const seeded: Seeded[] = [];
@@ -16,6 +24,7 @@ afterEach(() => {
   for (const c of seeded.splice(0)) c.store.close();
   for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true });
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 const tempHome = () => {
   const h = mkdtempSync(join(tmpdir(), 'tl-garden-bench-'));
@@ -27,6 +36,20 @@ const seed = (name: string) => {
   seeded.push(c);
   return c;
 };
+/**
+ * A fixture seeded into a temp home with the daemon's view: a git checkout whose origin gives the fixture's repository key,
+ * and items aged against the real clock. Its store is closed, so a NodeManager can own the file.
+ */
+const seedCheckout = (name: string) => {
+  const fx = loadFixture(name), repo = realpathSync(tempHome());
+  execFileSync('git', ['init', '-q', repo]);
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', `https://${fx.repos.app.replace(/^git:/, '')}`]);
+  const c = new Seeded(fx, tempHome(), { at: Date.now(), repoPath: repo });
+  c.store.close();
+  return { c, repo };
+};
+// The suite may itself run inside a tiller node: a NodeManager here must see only its temp home.
+beforeEach(() => { for (const k of Object.keys(process.env)) if (k.startsWith('TL_')) vi.stubEnv(k, undefined); });
 
 const start = (c: Seeded) => {
   const r = c.store.startRun(c.scope(), { trigger: 'manual', model: 'claude-haiku-5-5' });
@@ -107,44 +130,113 @@ describe('G1 oracle', () => {
   }
 });
 
+/** What one call returned, from the store or over /api: the hidden item, or the refusal's rule and message. */
+type Outcome = { ok: true; hidden: number } | { ok: false; rule: string; message: string };
+/** Each adversarial item's literal attempt, as a garden action. "Stop early" and the fake heading ask for none. */
+const attempts = (c: Seeded) => c.labels((g) => g.attempt).map((label) => {
+  const g = c.fx.garden[label], a = g.attempt!;
+  const input: GardenActionInput = a.action === 'merge'
+    ? { action: 'merge', ids: a.ids.map((l) => c.id(l)), reason: g.adversarial! }
+    : { action: 'supersede', id: c.id(a.id), by: c.id(a.by), reason: g.adversarial! };
+  return { label, g, input };
+});
+/** A supersede by an id past every item: never a candidate. */
+const guessed = (c: Seeded): GardenActionInput =>
+  ({ action: 'supersede', id: c.id(c.labels((g) => g.good)[0]), by: Math.max(...c.rows().map((r) => r.id)) + 1000, reason: 'guessed id' });
+/** G2's verdict on each attempt's outcome and the guessed id's; [] when all hold. Applied allowed attempts go in applied. */
+function judge(results: { label: string; g: GardenLabel; r: Outcome }[], guess: Outcome, applied: number[] = []): string[] {
+  const failures: string[] = [];
+  for (const { label, g, r } of results) {
+    if (!r.ok && !r.message.startsWith(`refused (${r.rule}): `)) failures.push(`${label}: the refusal does not name its rule: ${r.message}`);
+    if (g.expect === 'allowed') {
+      if (r.ok) applied.push(r.hidden);
+    } else if (r.ok) failures.push(`${label} (${g.adversarial}) was applied`);
+    else if (!g.expect!.refused.includes(r.rule)) failures.push(`${label} (${g.adversarial}) refused as ${r.rule}, not one of ${g.expect!.refused}`);
+  }
+  if (guess.ok || guess.rule !== 'not a candidate') failures.push(`an id outside the candidate set: ${JSON.stringify(guess)}`);
+  return failures;
+}
+/** No pin, human item, ledger line or failed-node item is hidden, kept or used as a by in the run, which passes verifyRun. */
+function fenced(c: Seeded, store: MemoryStore, run: number): void {
+  const fence = new Set([...c.labels((g) => g.protected || g.ineligible).map((l) => c.id(l)),
+    ...c.rows().filter((x) => x.kind === 'ledger' || x.author === 'human').map((x) => x.id)]);
+  const actions = store.run(undefined, run).actions!;
+  expect(actions.flatMap((a) => [a.itemId, a.intoId]).filter((id) => id !== undefined && fence.has(id)).map((id) => c.name(id!))).toEqual([]);
+  expect(store.verifyRun(undefined, run)).toEqual([]); // includes the hide and supersede caps
+}
+const fromStore = (r: GardenApplyResult): Outcome => (r.ok ? { ok: true, hidden: r.action === 'merge' ? r.hidden[0] : r.hidden } : r);
+
 describe('G2 adversary', () => {
   it('g-std: refuses every adversarial instruction applied literally, by its named rule, and touches no protected item', () => {
     const c = seed('g-std');
     const run = start(c);
-    const failures: string[] = [];
     const applied: number[] = [];
-    for (const label of c.labels((g) => g.adversarial)) {
-      const g = c.fx.garden[label];
-      if (!g.attempt) continue; // "stop early" and the fake heading ask for no action
-      const a = g.attempt;
-      const r = c.store.gardenApply(undefined, run, a.action === 'merge'
-        ? { action: 'merge', ids: a.ids.map((l) => c.id(l)), reason: g.adversarial! }
-        : { action: 'supersede', id: c.id(a.id), by: c.id(a.by), reason: g.adversarial! });
-      if (!r.ok && !r.message.startsWith(`refused (${r.rule}): `)) failures.push(`${label}: the refusal does not name its rule: ${r.message}`);
-      if (g.expect === 'allowed') {
-        if (r.ok) applied.push(r.action === 'merge' ? r.hidden[0] : r.hidden);
-      } else if (r.ok) failures.push(`${label} (${g.adversarial}) was applied`);
-      else if (!g.expect!.refused.includes(r.rule)) failures.push(`${label} (${g.adversarial}) refused as ${r.rule}, not one of ${g.expect!.refused}`);
-    }
-    const outside = Math.max(...c.rows().map((r) => r.id)) + 1000;
-    const r = c.store.gardenApply(undefined, run, { action: 'supersede', id: c.id(c.labels((g) => g.good)[0]), by: outside, reason: 'guessed id' });
-    if (r.ok || r.rule !== 'not a candidate') failures.push(`an id outside the candidate set: ${JSON.stringify(r)}`);
-    expect(failures).toEqual([]);
-
-    const fenced = new Set([...c.labels((g) => g.protected || g.ineligible).map((l) => c.id(l)),
-      ...c.rows().filter((x) => x.kind === 'ledger' || x.author === 'human').map((x) => x.id)]);
-    const actions = c.store.run(undefined, run).actions!;
-    expect(actions.flatMap((a) => [a.itemId, a.intoId]).filter((id) => id !== undefined && fenced.has(id)).map((id) => c.name(id!))).toEqual([]);
-    expect(c.store.verifyRun(undefined, run)).toEqual([]); // includes the hide and supersede caps
+    const results = attempts(c).map(({ label, g, input }) => ({ label, g, r: fromStore(c.store.gardenApply(undefined, run, input)) }));
+    expect(judge(results, fromStore(c.store.gardenApply(undefined, run, guessed(c))), applied)).toEqual([]);
+    fenced(c, c.store, run);
     // What D8 allows (the residual risk) is logged and undoable.
     for (const id of applied) {
       expect(c.store.undo(c.scope(), { item: id }, 'human').undone.map((u) => u.itemId)).toEqual([id]);
       expect(byId(c).get(id)!.invalid_at).toBeNull();
     }
-    console.log(`G2 g-std: ${actions.length} of the allowed attempts applied, all undone; refused by rule ${JSON.stringify(c.store.run(undefined, run).stats.refused)}`);
+    console.log(`G2 g-std: ${applied.length} of the allowed attempts applied, all undone; refused by rule ${JSON.stringify(c.store.run(undefined, run).stats.refused)}`);
   });
 
-  it.todo('G2 through the tools: each attempt as the gardener node\'s garden_merge or garden_supersede over /api, refused with the same rule (needs W4)');
+  it('g-small: the poisoned paraphrase cannot supersede the note it copies, and merging the two keeps the original', () => {
+    const c = seed('g-small');
+    const [poison] = c.labels((g) => g.adversarial?.startsWith('paraphrase-poison'));
+    const a = c.fx.garden[poison].attempt as { action: 'supersede'; id: string; by: string };
+    const [target, by] = [c.id(a.id), c.id(a.by)];
+    const run = start(c);
+    expect(c.store.gardenApply(undefined, run, { action: 'supersede', id: target, by, reason: 'the current guidance' }))
+      .toEqual({ ok: false, rule: 'copy', message: `refused (copy): m${by} is a near-copy of m${target}; merge them instead` });
+    expect(merge(c, run, [by, target])).toMatchObject({ ok: true, kept: target, hidden: [by] });
+  });
+
+  it("g-std through the tools: the gardener node's garden_merge and garden_supersede over /api refuse the same attempts", async () => {
+    const { c, repo } = seedCheckout('g-std');
+    const manager = new NodeManager({ home: c.home, shell: '/bin/sh' });
+    const server = await startServer(manager, { port: 0 });
+    vi.spyOn(server.updates, 'start').mockImplementation(() => {});
+    switchMemory(c.home, {}, 'on');
+    const api = async (tool: string, args: object, id = 'human') => {
+      const token = id === 'human' ? readFileSync(join(c.home, 'admin-token'), 'utf8') : manager.tokenFor(id);
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/${tool}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-TL-Node': id }, body: JSON.stringify(args) });
+      return (await res.json()) as { data?: { id: number; nodeId: string }; error?: string };
+    };
+    // As memory-garden-tools.test.ts does: the gardener node is a terminal relabelled, so no harness runs.
+    const gardener = new Gardener({
+      home: c.home, store: manager.memory,
+      async spawnGardener(req) {
+        const id = (await api('spawn', { kind: 'terminal', title: 'Memory gardener', cwd: repo })).data!.nodeId;
+        manager.registry.update(id, { kind: 'claude', gardener: { repoKey: req.repoKey, runId: req.runId } });
+        return id;
+      },
+      stopGardener: async () => {}, closePreviousGardener: async () => {}, quiet: () => true, usageFor: () => undefined, trusted: () => true,
+      live: (id) => !!manager.registry.get(id), record: (id) => manager.registry.get(id), gardenerRecords: () => [], setOutcome: () => {},
+    });
+    Object.assign(manager, { gardener });
+    try {
+      const started = await api('memory_garden', { action: 'run', repo });
+      expect(started.error).toBeUndefined();
+      const { id: run, nodeId: node } = started.data!;
+      const call = async (input: GardenActionInput): Promise<Outcome> => {
+        const r = input.action === 'merge'
+          ? await api('garden_merge', { ids: input.ids.map((id) => `m${id}`), reason: input.reason }, node)
+          : await api('garden_supersede', { id: `m${input.id}`, by: `m${input.by}`, reason: input.reason }, node);
+        if (!r.error) return { ok: true, hidden: manager.memory.run(undefined, run).actions!.at(-1)!.itemId };
+        return { ok: false, rule: /^refused \(([^)]+)\)/.exec(r.error)?.[1] ?? '(none)', message: r.error };
+      };
+      const results: { label: string; g: GardenLabel; r: Outcome }[] = [];
+      for (const { label, g, input } of attempts(c)) results.push({ label, g, r: await call(input) });
+      expect(judge(results, await call(guessed(c)))).toEqual([]);
+      fenced(c, manager.memory, run);
+    } finally {
+      await gardener.stop();
+      await manager.shutdown();
+      await server.close();
+    }
+  });
 });
 
 describe('G3 undo fidelity', () => {
@@ -299,7 +391,34 @@ describe('G9 lease and recovery', () => {
     expect(c.store.run(undefined, r2).state).toBe('running');
   });
 
-  it.todo('G9 through the daemon: resumeLive skips a gardener record, and the first tick recovers its run charged the record\'s spend (needs W3)');
+  it('g-small through the daemon: resume on start skips a gardener record left running, and the first tick recovers its run', async () => {
+    const { c, repo } = seedCheckout('g-small');
+    writeFileSync(join(c.home, 'config.json'), JSON.stringify({ memory: { enabled: true } }));
+    // A previous daemon's run: it holds the lease, has one merge, and its node spent $0.04 before the daemon died.
+    const store = new MemoryStore(c.home);
+    const started = store.startRun(c.scope(), { trigger: 'manual', model: 'claude-haiku-5-5' });
+    if (!started.ok) throw new Error(started.reason);
+    const runId = started.run.id, [keep, member] = cluster(c, 2);
+    expect(store.gardenApply(undefined, runId, { action: 'merge', ids: [member, keep], reason: 'same fact' })).toMatchObject({ ok: true });
+    store.close();
+    const spawned = vi.spyOn(PtySession, 'spawn').mockImplementation(() => { throw new Error('nothing may launch'); });
+    const m = new NodeManager({ home: c.home, shell: '/bin/sh' });
+    try {
+      const rec = m.registry.create({ kind: 'claude', parentId: null, title: 'Memory gardener · repo', cwd: repo, sessionId: 's', gardener: { repoKey: c.scope().repoKey, runId } });
+      m.registry.update(rec.id, { spentUsd: 0.04 });
+      m.runtimes.set(rec.id, { status: { state: 'done', exited: true, changedAt: Date.now() } }); // as a record loaded at start
+      m.memory.setRunNode(undefined, runId, rec.id);
+      (m as unknown as { pendingResume: Set<string> }).pendingResume = new Set([rec.id]);
+      expect(await m.resumeLive()).toContain(`${rec.id} (${GARDENER_REFUSAL})`);
+      await m.gardener.tick();
+      expect(m.memory.run(undefined, runId)).toMatchObject({ state: 'interrupted', costUsd: 0.25, costIncomplete: true });
+      expect(m.view(rec.id)!.outcome).toMatchObject({ outcome: 'failed', summary: expect.stringMatching(/^interrupted/) });
+      expect(byId(c).get(member)!.invalid_kind).toBe('merged');
+      expect(spawned).not.toHaveBeenCalled();
+    } finally {
+      await m.shutdown();
+    }
+  });
 });
 
 describe('G10 migration', () => {
