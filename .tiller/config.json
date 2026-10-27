@@ -11,7 +11,10 @@
     "stallMinutes": 10
   },
   "worktrees": {
-    "protected": []
+    "protected": [],
+    "setup": [
+      "test ! -f scripts/worktree-deps.mjs || node scripts/worktree-deps.mjs"
+    ]
   },
   "profiles": {
     "claude": {

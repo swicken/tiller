@@ -49,12 +49,14 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
           <span className={`row-state ${kind}`}>{node.kind === 'terminal' ? `terminal · ${state}` : state}</span>
           {s.activity && <span className={`row-activity${blocked ? ' warn' : ''}`} title={s.activity}>{s.activity}</span>}
         </div>
-        {(node.gate || node.outcome || node.worktree?.missing || hasChanges(node) || collapsed || (s.stalled && !s.exited)) && <div className="row-signals">
+        {(node.gate || node.outcome || node.worktree?.missing || s.git?.conflicts || hasChanges(node) || collapsed || (s.stalled && !s.exited)) && <div className="row-signals">
           {node.outcome && <span role="note" className={`count${node.outcome.outcome === 'failed' ? ' bad' : ''}`}
             aria-label={`Reported task outcome: ${outcome}`}
             title={`Reported task outcome: ${outcome}${node.outcome.summary ?? node.outcome.note ? ` · ${node.outcome.summary ?? node.outcome.note}` : ''}`}>
             {node.outcome.outcome === 'failed' ? outcome : `outcome ${outcome}`}</span>}
           {node.worktree?.missing && <span className="count warn" title="The worktree directory is gone; resume is refused">worktree missing</span>}
+          {s.git?.conflicts && <span className="count warn" title={`Merging ${s.git.base} into ${s.git.branch} would conflict in:\n${s.git.conflicts.join('\n')}`}>
+            conflicts with base · {s.git.conflicts.length}</span>}
           {node.gate && <GateMark gate={node.gate} />}
           {hasChanges(node) && <span className="count" title={`unmerged work on ${node.status.git!.branch}: merge or close it`}>changes · {node.status.git!.ahead} ahead · {node.status.git!.dirty} dirty</span>}
           {collapsed && <span className="count" title={`${descendants.length} hidden`}>+{descendants.length}</span>}

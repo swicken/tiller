@@ -23,7 +23,7 @@ Tiller runs Claude Code, Pi and Codex sessions as child processes of a local Nod
 
 ## Setup and development
 
-Use Node.js 24+ and npm from the repository root. `npm ci` installs the locked dependencies; keep lifecycle scripts enabled because `postinstall` fixes the macOS `node-pty` spawn helper. `node-pty` is pinned to `1.2.0-beta.18`, since 1.1.0 leaks file descriptors for every exited PTY; after pulling a dependency change, run `npm ci` and restart the daemon (`tl reload`) so it loads the new native module. Native app development also needs Rust and Xcode Command Line Tools; see `README.md` for setup.
+Use Node.js 24+ and npm from the repository root. `npm ci` installs the locked dependencies; keep lifecycle scripts enabled because `postinstall` fixes the macOS `node-pty` spawn helper. `node-pty` is pinned to `1.2.0-beta.18`, since 1.1.0 leaks file descriptors for every exited PTY; after pulling a dependency change, run `npm ci` and restart the daemon (`tl reload`) so it loads the new native module. New Tiller worktrees copy the main checkout's `node_modules/` and re-install it during `worktrees.setup` when it does not match their lockfile. Native app development also needs Rust and Xcode Command Line Tools; see `README.md` for setup.
 
 - `npm run ui:dev`: Vite with hot reload; `/ws` proxies to the daemon at `127.0.0.1:7788`, or `TL_WS` when set.
 - `npm run ui:build`: build static assets into `ui/dist/`.
