@@ -18,7 +18,6 @@ export type Dialog =
   | { kind: 'spawn'; parentId: string | null; cwd: string }
   | { kind: 'kill'; id: string }
   | { kind: 'restart'; id: string }
-  | { kind: 'renameSession'; id: string }
   | { kind: 'changeHarness'; id: string }
   | { kind: 'followup'; id: string; title: string }
   /** Spawn a Claude node that starts from `from`'s conversation (a live or archived node). */
@@ -26,6 +25,8 @@ export type Dialog =
   | { kind: 'palette' }
   | { kind: 'update' }
   | { kind: 'whatsNew'; notes: InstalledReleaseNotes };
+
+export interface Renaming { id: string; at: 'title' | 'row' | 'session' }
 
 export interface State {
   nodes: Nodes;
@@ -45,8 +46,8 @@ export interface State {
   retry: number;
   panel: boolean;
   dialog: Dialog | null;
-  /** Node whose title is being edited inline. */
-  renaming: string | null;
+  /** Node whose title is being edited inline, and the one surface showing the editor: the selected node appears in both its row and the title bar. */
+  renaming: Renaming | null;
   /** A spawn was requested: select the next new node that arrives. */
   awaitSpawn: boolean;
   /** Do not disturb, as the daemon last reported it. */
@@ -132,7 +133,7 @@ export const dropConfirm = (confirmId: string) => update((s) => ({ confirms: s.c
 export const setConnected = (connected: boolean, retry = 0) => update(() => ({ connected, retry, ...(!connected ? { usageScanning: false } : {}) }));
 export const openDialog = (dialog: Dialog | null) => update(() => ({ dialog }));
 export const dismissDigest = () => update(() => ({ digest: undefined }));
-export const setRenaming = (renaming: string | null) => update(() => ({ renaming }));
+export const setRenaming = (renaming: Renaming | null) => update(() => ({ renaming }));
 export const expectSpawn = () => update(() => ({ awaitSpawn: true }));
 export const toggleCollapsed = (id: string) =>
   update((s) => ({ collapsed: s.collapsed.includes(id) ? without(s.collapsed, id) : [...s.collapsed, id] }));

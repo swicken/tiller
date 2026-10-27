@@ -11,7 +11,7 @@ export function RenameInput({ id, title }: { id: string; title: string }) {
       className="rename" autoFocus defaultValue={title} onClick={(e) => e.stopPropagation()}
       onFocus={(e) => e.currentTarget.select()}
       onBlur={(e) => commit(e.target.value)}
-      onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') commit(e.currentTarget.value); if (e.key === 'Escape') setRenaming(null); }}
+      onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); commit(e.currentTarget.value); } if (e.key === 'Escape') setRenaming(null); }}
     />
   );
 }

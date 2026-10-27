@@ -47,15 +47,33 @@ it('offers a single New session action with the current root cwd, even when a ch
   expect(getState().dialog).toEqual({ kind: 'spawn', parentId: null, cwd: '' });
 });
 
-it('renames the current session root even when a child or history is selected', () => {
+it('renames the current session root inline from the pencil, even when a child or history is selected', () => {
   update(() => ({ historyOpen: true }));
-  const rename = find(SessionSwitcher(), (el) => el.props['aria-label'] === 'Rename session');
-  rename.props.onClick();
-  expect(getState().dialog).toEqual({ kind: 'renameSession', id: 'a' });
-  expect(getState().selected).toBe('child');
-  expect(hooks.setOpen).toHaveBeenLastCalledWith(false);
+  const tree = SessionSwitcher();
+  const pencil = find(tree, (el) => el.props['aria-label'] === 'Rename session');
+  // One visual control of two sibling buttons, each focusable and activated natively by Enter and Space.
+  expect(pencil.type).toBe('button'); expect(pencil.props.title).toBe('Rename session');
+  const select = find(tree, (el) => el.props.className === 'session-select');
+  expect(select.props.children.filter(Boolean).map((el: Element) => [el.type, el.props.className])).toEqual([['button', 'current'], ['button', 'session-rename']]);
+  expect(elements(find(tree, (el) => el.props.className === 'current').props.children).some((el) => el.type === 'button')).toBe(false);
+  pencil.props.onClick();
+  expect(getState().renaming).toEqual({ id: 'a', at: 'session' });
+  expect(getState().selected).toBe('child'); expect(getState().dialog).toBeNull();
+  expect(hooks.setOpen).toHaveBeenCalledExactlyOnceWith(false);
+  const editor = find(SessionSwitcher(), (el) => el.type === RenameInput);
+  expect(editor.props).toEqual({ id: 'a', title: 'a' });
+  expect(elements(SessionSwitcher()).some((el) => el.props.className === 'current')).toBe(false);
   update(() => ({ nodes: {}, order: [], session: null }));
   expect(elements(SessionSwitcher()).some((el) => el.props['aria-label'] === 'Rename session')).toBe(false);
+});
+
+it('opens the session list from the rest of the selector and renames on right-click', () => {
+  find(SessionSwitcher(), (el) => el.props.className === 'current').props.onClick();
+  expect(hooks.setOpen).toHaveBeenLastCalledWith(true); expect(getState().renaming).toBeNull();
+  const preventDefault = vi.fn();
+  find(SessionSwitcher(), (el) => el.props.className === 'session-select').props.onContextMenu({ preventDefault });
+  expect(preventDefault).toHaveBeenCalled(); expect(getState().renaming).toEqual({ id: 'a', at: 'session' });
+  expect(hooks.setOpen).toHaveBeenLastCalledWith(false);
 });
 
 it('opens session navigation from the keyboard, switches roots, and closes the menu', () => {
@@ -195,15 +213,21 @@ it('retains collapsed descendant attention, gate, unmerged and errored signals w
   expect(getState().collapsed).toEqual([]);
 });
 
-it('preserves inline rename commit and cancellation handlers', () => {
-  setRenaming(child.id);
+it('preserves inline rename commit, cancellation and click-away handlers', () => {
+  setRenaming({ id: child.id, at: 'row' });
   const input = RenameInput({ id: child.id, title: child.title });
-  input.props.onKeyDown({ key: 'Enter', currentTarget: { value: '  New title  ' }, stopPropagation: vi.fn() });
-  expect(send).toHaveBeenCalledWith({ t: 'rename', id: child.id, title: 'New title' });
+  // Enter is consumed so it cannot also activate the control that regains focus when the editor closes.
+  const preventDefault = vi.fn();
+  input.props.onKeyDown({ key: 'Enter', currentTarget: { value: '  New title  ' }, stopPropagation: vi.fn(), preventDefault });
+  expect(send).toHaveBeenCalledWith({ t: 'rename', id: child.id, title: 'New title' }); expect(preventDefault).toHaveBeenCalled();
   expect(getState().renaming).toBeNull();
-  vi.clearAllMocks(); setRenaming(child.id);
+  vi.clearAllMocks(); setRenaming({ id: child.id, at: 'row' });
   input.props.onKeyDown({ key: 'Escape', stopPropagation: vi.fn() });
   expect(getState().renaming).toBeNull(); expect(send).not.toHaveBeenCalled();
+  setRenaming({ id: child.id, at: 'row' });
+  input.props.onBlur({ target: { value: 'Clicked away' } });
+  expect(send).toHaveBeenCalledWith({ t: 'rename', id: child.id, title: 'Clicked away' });
+  expect(getState().renaming).toBeNull();
 });
 
 it('gives the selected leaf a roving tab stop and selects a directly focused row', () => {
