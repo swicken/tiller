@@ -59,16 +59,27 @@ describe('node action operations', () => {
     expect(actionsFor(exited).map((a) => a.key)).not.toContain('child');
   });
 
-  it('offers Close on exited roots without exposing it for running orchestrators', () => {
+  it('offers Close on exited roots directly, from the exited card', () => {
     const root = mk('root', null, 0, { exited: true });
     const close = buttons(ExitedCard({ node: root })).find((b) => Array.isArray(b.props.children) && b.props.children.includes('Close'))!;
     close.props.onClick!();
     expect(send).toHaveBeenCalledExactlyOnceWith({ t: 'close', id: 'root', force: true });
     expect(actionsFor(root).map((a) => a.key)).toContain('restart');
-    expect(actionsFor({ ...root, status: { ...root.status, exited: false } }).map((a) => a.key)).not.toContain('remove');
     run({ ...root, worktree }, 'remove');
     expect(getState().dialog).toEqual({ kind: 'kill', id: 'root' });
     expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('offers a running orchestrator Close behind a confirm, alongside Restart', () => {
+    // A live root is never closed by one click: the action only opens the confirm dialog.
+    const root = mk('root', null, 0);
+    expect(actionsFor(root).map((a) => a.key).slice(-2)).toEqual(['close', 'restart']);
+    expect(actionsFor(root).map((a) => a.key)).not.toContain('remove');
+    run(root, 'close');
+    expect(send).not.toHaveBeenCalled();
+    expect(getState().dialog).toEqual({ kind: 'kill', id: 'root' });
+    // The exited card offers only exited-node actions, so a running root never shows it a Close.
+    expect(buttons(ExitedCard({ node: root })).some((b) => Array.isArray(b.props.children) && b.props.children.includes('Close'))).toBe(false);
   });
 
   it('preserves spawn, rename, mute, fork, resume and merge operations', () => {

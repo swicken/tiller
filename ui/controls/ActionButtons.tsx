@@ -13,7 +13,9 @@ export function actionsFor(node: NodeView, renameAt: Renaming['at'] = 'row'): Ac
   const root = node.parentId === null;
   const remove: Act = { key: 'remove', label: root ? 'Close' : 'Remove', icon: 'trash', danger: true,
     run: () => node.worktree ? openDialog({ kind: 'kill', id: node.id }) : send({ t: 'close', id: node.id, ...(root ? { force: true } : {}) }) };
-  const last: Act = root // a live orchestrator is restarted, never killed
+  // A live orchestrator is never killed outright: Close asks first, and Restart stays the usual way to clear one.
+  const closeLive: Act = { key: 'close', label: 'Close', icon: 'trash', danger: true, run: () => openDialog({ kind: 'kill', id: node.id }) };
+  const last: Act = root
     ? { key: 'restart', label: 'Restart', icon: 'restart', run: () => openDialog({ kind: 'restart', id: node.id }) }
     : exited
       ? remove
@@ -28,7 +30,7 @@ export function actionsFor(node: NodeView, renameAt: Renaming['at'] = 'row'): Ac
     ...(isAgentKind(node.kind) && !node.pending && node.gate !== 'running' ? [{ key: 'harness', label: 'Change harness…', icon: 'restart' as const, run: () => openDialog({ kind: 'changeHarness', id: node.id }) }] : []),
     ...(exited && isAgentKind(node.kind) ? [{ key: 'resume', label: 'Resume', icon: 'play' as const, run: () => send({ t: 'resume', id: node.id }) }] : []),
     ...(canMerge(node) ? [{ key: 'merge', label: `Merge into ${node.status.git!.base}`, icon: 'merge' as const, run: () => send({ t: 'merge', id: node.id }) }] : []),
-    ...(root && exited ? [remove] : []),
+    ...(root ? [exited ? remove : closeLive] : []),
     last,
   ];
 }

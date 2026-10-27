@@ -63,3 +63,18 @@ it.each(['Close', 'Keep branch', 'Discard'])('retains worktree protection and ro
     ...(choice === 'Close' ? {} : { worktree: choice === 'Discard' ? 'discard' : 'keep' }),
   });
 });
+
+it('confirms closing a running root with force and says its children are kept', () => {
+  // The daemon refuses an unforced root close, so the confirm must authorize it; a child's Kill stays unforced.
+  update(() => ({ nodes: { root: mk('root', null, 0), child: mk('child', 'root', 0) }, dialog: { kind: 'kill', id: 'root' } }));
+  const tree = render();
+  expect(tree.props.title).toBe('Close root?');
+  expect(find(tree, (el) => el.type === 'p' && el.props.children === 'Its children are kept.')).toBeDefined();
+  expect(button(tree, 'Kill')).toBeUndefined();
+  button(tree, 'Close').props.onClick();
+  expect(send).toHaveBeenCalledExactlyOnceWith({ t: 'close', id: 'root', force: true });
+  expect(getState().dialog).toBeNull();
+  openDialog({ kind: 'kill', id: 'child' });
+  button(render(), 'Kill').props.onClick();
+  expect(send).toHaveBeenLastCalledWith({ t: 'close', id: 'child' });
+});
