@@ -29,6 +29,7 @@ Claude session measurements currently provide limits without account identity. T
 
 - `?k=<token>` is stored in localStorage and removed from the address bar. `?node=<id>` selects that node and its session; the UI keeps it in step with the selection.
 - Cmd+K jump to any node, Cmd+1..9 select the Nth row of the current session, Cmd+0 focus the sidebar tree.
+- Cmd+Shift+[ and Cmd+Shift+] select the previous and next session tab, wrapping around; Cmd+Shift+1..9 select the Nth session tab. Left and right arrows move focus between tabs.
 - With the tree focused: j/k or arrows move, h/l collapse and expand.
 - Clicking terminal hyperlinks (including rendered Markdown links) opens HTTP/HTTPS URLs in your default browser in the app, or a new tab in the browser UI. File and custom-protocol links are not opened.
 
@@ -37,6 +38,7 @@ Claude session measurements currently provide limits without account identity. T
 ```text
 ui/
   App.tsx, main.tsx              shell composition and startup
+  SessionTabs.tsx               session tabs along the top (the app's title bar strip)
   sidebar/                      tree, node rows, session switcher, inspector and resize
     tree.ts, sessions.ts        pure tree and session selection helpers
   settings/                     settings panel and edit model
@@ -53,7 +55,7 @@ ui/
   theme.css, layout.css         theme variables and shared shell/pane styles
 ```
 
-Other shell surfaces (title/status bars, palette, activity, usage, toasts and last-message panel) remain at the top level. Tests, feature styles and private helpers live beside their owners; `fixtures.ts` supplies shared test nodes.
+Other shell surfaces (session tabs, title/status bars, palette, activity, usage, toasts and last-message panel) remain at the top level. Tests, feature styles and private helpers live beside their owners; `fixtures.ts` supplies shared test nodes.
 
 `store.ts` owns state shared across surfaces, including daemon snapshots, selection and open panes. Components keep local form, focus, resize and transient interaction state. Pure helpers and component tests cover both state transitions and rendered behavior.
 

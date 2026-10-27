@@ -8,6 +8,7 @@ import { ArchivePane } from './transcript/History';
 import { useDocumentSync } from './hooks';
 import { LastMessagePanel } from './LastMessagePanel';
 import { Palette } from './Palette';
+import { nthSession, SessionTabs, stepSession } from './SessionTabs';
 import { Sidebar, useRows } from './sidebar/Sidebar';
 import { StatusBar } from './StatusBar';
 import { TerminalPane } from './TerminalPane';
@@ -34,7 +35,13 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (settingsNode) return;
-      if (!e.metaKey || e.altKey || e.shiftKey) return; // Ctrl must reach the terminal
+      if (!e.metaKey || e.altKey) return; // Ctrl must reach the terminal
+      // e.code, since Shift turns e.key into '{' / '}' and '!'..'('.
+      if (e.shiftKey) {
+        if (e.code === 'BracketLeft' || e.code === 'BracketRight') { e.preventDefault(); stepSession(e.code === 'BracketLeft' ? -1 : 1); }
+        else if (/^Digit[1-9]$/.test(e.code) && nthSession(Number(e.code.slice(5)))) e.preventDefault();
+        return;
+      }
       if (e.key === 'k') { e.preventDefault(); openDialog(getState().dialog?.kind === 'palette' ? null : { kind: 'palette' }); }
       else if (e.key === '0') { e.preventDefault(); document.querySelector<HTMLElement>('.tree')?.focus(); }
       else if (/^[1-9]$/.test(e.key)) {
@@ -48,7 +55,7 @@ export function App() {
 
   return (
     <div className="app">
-      {IN_APP && <div className="dragstrip" data-tauri-drag-region />}
+      <SessionTabs />
       <Sidebar onSettings={() => setSettingsNode({ id: node?.id })} />
       <main className="main">
         {node && !archived ? <TitleBar node={node} /> : null}
