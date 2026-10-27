@@ -433,3 +433,8 @@ async function copyEntry(src: string, dst: string): Promise<void> {
   }
   await cp(src, dst, { recursive: true, verbatimSymlinks: true, force: true });
 }
+
+/** Whether the worktree's directory exists and git still lists it. */
+export async function isListed(w: Pick<Worktree, 'repo' | 'path'>): Promise<boolean> {
+  return existsSync(w.path) && (await listWorktrees(w.repo)).some((e) => samePath(e.path, w.path));
+}

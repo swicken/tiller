@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import { configEntries, effectiveProfileEntries } from './config.js';
-import { gateFor } from './manager.js';
+import { gateFor } from './completion-gate.js';
 import { promptPath } from './launch.js';
 import { listPresets } from './presets.js';
 import { SPAWN_FIELDS, spawnKind } from './spawnfields.js';
