@@ -1,6 +1,6 @@
 import { Select } from '../controls/Select';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { finished, type ArchivedNode, type Harness, type Transcript, type TranscriptEntry } from '../../src/shared/protocol';
+import { HARNESS_LABELS, finished, type ArchivedNode, type Harness, type Transcript, type TranscriptEntry } from '../../src/shared/protocol';
 import { send } from '../conn';
 import { conversationRequested, conversationsRequested, getState, selectNode, toggleShowTools, transcriptRequested, useStore, viewArchived } from '../store';
 import { ConversationList, ConversationView, conversationTitle, type Choice } from './Conversations';
@@ -25,7 +25,7 @@ function Entry({ e, assistantName, showTools }: { e: TranscriptEntry; assistantN
  */
 export function TranscriptView({ data, sessionId, onSession, harness = 'claude', showTools = false }: { data: Transcript; sessionId?: string; onSession: (id: string | undefined) => void; harness?: Harness; showTools?: boolean }) {
   const selectedHarness = data.sessions.find((s) => sessionId ? s.sessionId === sessionId : s.current)?.harness ?? harness;
-  const assistantName = selectedHarness === 'codex' ? 'Codex' : selectedHarness === 'pi' ? 'Pi' : 'Claude';
+  const assistantName = HARNESS_LABELS[selectedHarness];
   const entries = showTools ? data.entries : data.entries.filter((e) => e.text);
   return (
     <>

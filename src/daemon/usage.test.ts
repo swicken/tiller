@@ -11,7 +11,7 @@ it('discovers tools without live agents and treats config files as evidence, not
     const bin = join(home, 'bin'); mkdirSync(bin); mkdirSync(join(home, '.codex'));
     writeFileSync(join(bin, 'codex'), ''); chmodSync(join(bin, 'codex'), 0o755);
     writeFileSync(join(home, '.codex', 'auth.json'), 'credentials must not be read');
-    const sources = discoverUsage(bin, home, {}, 1);
+    const sources = discoverUsage(bin, { home, env: {}, now: 1 });
     expect(sources.find((s) => s.tool === 'codex')).toMatchObject({ installed: true, configured: true, authenticated: null, availability: 'unknown', rateLimits: [] });
     expect(sources.find((s) => s.tool === 'claude')).toMatchObject({ installed: false, configured: null });
     expect(sources.find((s) => s.tool === 'pi')).toMatchObject({ availability: 'unavailable', rateLimits: [] });
@@ -54,12 +54,12 @@ it('probes versions without sessions, labels broken executables, bounds hangs an
   try {
     const marker = join(home, 'calls');
     const scripts = {
-      claude: `#!${process.execPath}\nconst fs = require('node:fs'); if (process.argv[2] !== '--version') throw Error('only version allowed'); fs.appendFileSync(${JSON.stringify(marker)}, 'version\\n'); console.log('Claude Code test-version');`,
+      claude: `#!/bin/sh\n[ "$1" = --version ] || exit 1\necho version >> '${marker}'\necho 'Claude Code test-version'\n`,
       codex: '#!/missing-tiller-test-interpreter\n',
       pi: `#!${process.execPath}\nif (process.argv[2] !== '--version') throw Error('only version allowed'); setInterval(() => {}, 10000);`,
     };
     for (const [tool, script] of Object.entries(scripts)) { writeFileSync(join(home, tool), script); chmodSync(join(home, tool), 0o755); }
-    const registry = new UsageRegistry(home); // independent of any nodes or configured accounts
+    const registry = new UsageRegistry(home, undefined, 500); // independent of any nodes or configured accounts
     expect(registry.sources.every((s) => s.installed && s.authenticated === null && s.rateLimits.length === 0)).toBe(true);
     const started = Date.now();
     await Promise.all([registry.refresh(100000), registry.refresh(100000)]);
@@ -174,7 +174,7 @@ it('keys Claude reports by the daemon-stamped Tiller account, so nodes of one ac
   const acct = mkdtempSync(join(tmpdir(), 'tl-usage-acct-'));
   try {
     writeFileSync(join(acct, '.claude.json'), '{}');
-    const configured = (dirs: string[]) => discoverUsage('', join(acct, 'no-home'), {}, 0, dirs).find((s) => s.tool === 'claude')!.configured;
+    const configured = (dirs: string[]) => discoverUsage('', { home: join(acct, 'no-home'), env: {}, now: 0, claudeDirs: dirs }).find((s) => s.tool === 'claude')!.configured;
     expect([configured([]), configured([acct])]).toEqual([null, true]);
   } finally { rmSync(acct, { recursive: true, force: true }); }
 });

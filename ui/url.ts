@@ -1,3 +1,5 @@
+import { readPref, writePref } from './prefs';
+
 /** URL parameters, read once at load. `?k=` is moved to localStorage and removed from the address bar; `?node=` is kept in sync with the selection. */
 const params = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
 
@@ -6,10 +8,10 @@ const urlKey = params.get('k');
 
 export function token(): string {
   if (urlKey) {
-    try { localStorage.setItem('tl.k', urlKey); } catch { /* storage unavailable; the in-memory copy still works */ }
+    writePref('tl.k', urlKey); // storage unavailable: the in-memory copy still works
     return urlKey;
   }
-  try { return localStorage.getItem('tl.k') ?? ''; } catch { return ''; }
+  return readPref('tl.k') ?? '';
 }
 
 export function syncUrl(nodeId: string | null) {

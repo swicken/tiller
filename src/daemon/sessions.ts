@@ -7,8 +7,8 @@ import { outcomeLine } from '../shared/format.js';
 import { NEEDS_YOU_STATES, type AgentState, type DigestItem, type Outcome } from '../shared/protocol.js';
 import { logError } from './util.js';
 
-export const SESSIONS_DIR = 'sessions';
-export const HANDOFF = 'handoff.md';
+const SESSIONS_DIR = 'sessions';
+const HANDOFF = 'handoff.md';
 const EVENTS = 'events.jsonl';
 const DAY_MS = 86_400_000;
 const CHUNK = 64 * 1024;
@@ -16,7 +16,7 @@ const CHUNK = 64 * 1024;
 export interface SessionMeta { rootId: string; title: string; cwd: string; createdAt: number; closedAt?: number }
 
 export const sessionDir = (home: string, rootId: string): string => join(home, SESSIONS_DIR, rootId);
-export const eventsFile = (dir: string): string => join(dir, EVENTS);
+const eventsFile = (dir: string): string => join(dir, EVENTS);
 
 /** The first prompt after a restart that names none: a pointer at the handoff note, when there is one. */
 export const handoffPrompt = (dir: string): string | undefined =>

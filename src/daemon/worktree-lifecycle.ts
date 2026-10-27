@@ -10,7 +10,7 @@ import type { NodeManager } from './manager.js';
 import { buildChildEnv } from './pty.js';
 import { tillerTrusts } from './trust.js';
 import { initialState } from './status.js';
-import { count, inside, logError } from './util.js';
+import { canonical, count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
 
 /** Main checkouts in which this daemon has created worktrees, so reconciliation finds them after a lost record. */
@@ -77,7 +77,7 @@ export function readClaudeJson(configDir?: string): unknown {
 }
 
 /** Whether any Claude home Tiller knows trusts `dir`: commands Tiller runs itself are not tied to one account. */
-export const claudeTrustsAny = (home: string, dir: string): boolean => claudeHomes(home).some((d) => trustPolicy(dir, readClaudeJson(d)) === 'auto');
+const claudeTrustsAny = (home: string, dir: string): boolean => claudeHomes(home).some((d) => trustPolicy(dir, readClaudeJson(d)) === 'auto');
 
 /**
  * Give a node its worktree, branched from the tip of branch `baseBranch` (absent: the HEAD of the checkout its cwd is in),
@@ -147,7 +147,7 @@ export async function mergeWorktree(m: NodeManager, id: string): Promise<{ base:
     const style = config.mergeStyle;
     const subject = style === 'squash' ? `${rec.title} (squashed from ${w.branch})` : `Merge branch '${w.branch}': ${rec.title}`;
     const sha = await wt.mergeInto(w.repo, w.branch, w.base, style, subject);
-    const merged = { tip: await branchTip(w), at: Date.now() };
+    const merged = { tip: (await wt.branchSha(w.repo, w.branch)) ?? '', at: Date.now() };
     m.registry.update(id, { worktree: { ...m.registry.get(id)!.worktree!, merged } });
     m.logEvent(id, 'merge', { branch: w.branch, base: w.base, sha: sha.slice(0, 7), style });
     return { base: w.base, sha, style };
@@ -199,7 +199,7 @@ export async function worktreeCheck(m: NodeManager, id: string): Promise<Worktre
 async function removeWorktree(m: NodeManager, id: string, title: string, w: Worktree, mode?: 'keep' | 'discard'): Promise<string | undefined> {
   if (!existsSync(w.path)) {
     await wt.prune(w.repo);
-    if (!(await wt.branchExists(w.repo, w.branch))) return undefined;
+    if (!(await wt.branchSha(w.repo, w.branch))) return undefined;
     if (mode === 'discard' || (!mode && !(await wt.unmergedCommits(w.repo, w.branch, w.base, w.baseSha)).length)) {
       await wt.deleteBranch(w.repo, w.branch);
       return undefined;
@@ -237,8 +237,8 @@ async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 's
   await wt.prune(repo);
   const entries = await wt.listWorktrees(repo);
   const live = (path: string) => m.registry.list().some((n) => m.session(n.id) && inside(n.cwd, path));
-  const dir = wt.canonical(join(repo, wt.WORKTREES_DIR)) + sep;
-  for (const e of entries.filter((x) => wt.canonical(x.path).startsWith(dir))) {
+  const dir = canonical(join(repo, wt.WORKTREES_DIR)) + sep;
+  for (const e of entries.filter((x) => canonical(x.path).startsWith(dir))) {
     const marker = await wt.readMarker(e.path);
     if (!marker || marker.home !== m.home || m.registry.get(marker.nodeId)?.worktree) continue; // not ours, or a node's
     const dirty = await wt.dirtyFiles(e.path);
@@ -378,18 +378,19 @@ export function refreshGitSoon(m: NodeManager, id: string): void {
   rt.gitTimer.unref();
 }
 
-const branchTip = (w: Worktree) => wt.git(w.repo, ['rev-parse', '--verify', '-q', `refs/heads/${w.branch}`]).then((s) => s.trim(), () => '');
-
 /** When the node's branch was last merged, if it has not moved since. */
 async function mergedAt(w: Worktree): Promise<number | undefined> {
-  return w.merged && (await branchTip(w)) === w.merged.tip ? w.merged.at : undefined;
+  return w.merged && ((await wt.branchSha(w.repo, w.branch)) ?? '') === w.merged.tip ? w.merged.at : undefined;
 }
 
 /** The configured setup or teardown commands for a repo, or none unless `tl trust` or some Claude home trusts it. */
 export function worktreeCommands(m: NodeManager, repo: string, kind: 'setup' | 'teardown'): string[] {
   const cmds = loadConfig(repo, m.home).worktrees[kind];
-  return cmds.length && (tillerTrusts(m.home, repo) || claudeTrustsAny(m.home, repo)) ? cmds : [];
+  return cmds.length && commandsTrusted(m.home, repo) ? cmds : [];
 }
+
+/** Whether repo shell commands (worktree setup/teardown, the completion gate) may run in `dir`: `tl trust` or some Claude home trusts it. */
+export const commandsTrusted = (home: string, dir: string): boolean => tillerTrusts(home, dir) || claudeTrustsAny(home, dir);
 
 export function worktreeEnv(m: NodeManager, id: string, w: Pick<Worktree, 'repo' | 'path' | 'base'>): Record<string, string> {
   return buildChildEnv({ PATH: m.path, TL_NODE_ID: id, TL_WORKTREE: w.path, TL_REPO: w.repo, TL_BASE: w.base });

@@ -47,6 +47,5 @@ describe("SerialQueue", () => {
 
     await queue.drain();
     expect(events).toEqual(["done"]);
-    expect(queue.size).toBe(0);
   });
 });

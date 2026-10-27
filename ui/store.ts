@@ -3,6 +3,7 @@ import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary
 import type { ReviewComment } from './diff';
 import { pickInitial, rootOf } from './sidebar/sessions';
 import { insertSorted, type Nodes } from './sidebar/tree';
+import { readPref, writePref } from './prefs';
 import { wantedNode } from './url';
 
 export type Tone = 'info' | 'ok' | 'warn' | 'bad';
@@ -88,8 +89,8 @@ export interface State {
   removals: number;
 }
 
-const stored = (() => { try { return localStorage.getItem('tl.panel') === '1'; } catch { return false; } })();
-const storedTools = (() => { try { return localStorage.getItem('tl.showTools') === '1'; } catch { return false; } })();
+const stored = readPref('tl.panel') === '1';
+const storedTools = readPref('tl.showTools') === '1';
 
 let state: State = {
   nodes: {}, order: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
@@ -111,6 +112,8 @@ export function useStore<T>(sel: (s: State) => T): T {
 }
 
 const without = <T,>(xs: T[], x: T) => xs.filter((y) => y !== x);
+/** A reply slot's payload: its error, or the data. */
+const settled = <T extends object,>(d: T | { error: string }) => ('error' in d ? { error: d.error } : { data: d });
 
 export const toast = (text: string, nodeId?: string, tone: Tone = 'info') =>
   update((s) => ({ toasts: [...s.toasts, { id: ++toastSeq, text, nodeId, tone }] }));
@@ -118,11 +121,12 @@ export const recordActivity = (text: string, nodeId?: string, tone: Tone = 'info
   update((s) => ({ activity: appendActivity(s.activity, {
     id: ++activitySeq, nodeId, nodeName: (nodeId && s.nodes[nodeId]?.title) || nodeId || 'Tiller', at, text, tone, read: false,
   }) }));
-export const markActivityRead = () => update((s) => ({ activity: s.activity.map((item) => item.read ? item : { ...item, read: true }) }));
+const allRead = (items: Activity[]) => items.map((item) => item.read ? item : { ...item, read: true });
+export const markActivityRead = () => update((s) => ({ activity: allRead(s.activity) }));
 export const clearActivity = () => update(() => ({ activity: [] }));
 export const setActivityOpen = (activityOpen: boolean) => update((s) => ({
   activityOpen,
-  ...(activityOpen ? { activity: s.activity.map((item) => item.read ? item : { ...item, read: true }) } : {}),
+  ...(activityOpen ? { activity: allRead(s.activity) } : {}),
 }));
 export const dismissToast = (id: number) => update((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
 export const dropConfirm = (confirmId: string) => update((s) => ({ confirms: s.confirms.filter((c) => c.confirmId !== confirmId) }));
@@ -134,11 +138,11 @@ export const expectSpawn = () => update(() => ({ awaitSpawn: true }));
 export const toggleCollapsed = (id: string) =>
   update((s) => ({ collapsed: s.collapsed.includes(id) ? without(s.collapsed, id) : [...s.collapsed, id] }));
 export const togglePanel = () => update((s) => {
-  try { localStorage.setItem('tl.panel', s.panel ? '0' : '1'); } catch { /* per-viewer convenience only */ }
+  writePref('tl.panel', s.panel ? '0' : '1');
   return { panel: !s.panel };
 });
 export const toggleShowTools = () => update((s) => {
-  try { localStorage.setItem('tl.showTools', s.showTools ? '0' : '1'); } catch { /* per-viewer convenience only */ }
+  writePref('tl.showTools', s.showTools ? '0' : '1');
   return { showTools: !s.showTools };
 });
 
@@ -230,7 +234,7 @@ export function applyServer(m: ServerMessage) {
       return dropConfirm(m.confirmId);
     case 'diff': {
       const { t: _, id, ...data } = m;
-      return update((s) => (s.diff?.id === id ? { diff: 'error' in data ? { id, error: data.error } : { id, data } } : {}));
+      return update((s) => (s.diff?.id === id ? { diff: { id, ...settled(data) } } : {}));
     }
     case 'transcript': {
       const { t: _, id, sessionId, ...data } = m;
@@ -243,7 +247,7 @@ export function applyServer(m: ServerMessage) {
         // Reject its old session list even for an explicitly selected historical segment.
         if (current && liveSession && current !== liveSession) return {};
         if (want?.id !== id || (want.sessionId !== sessionId && !(want.sessionId === undefined && sessionId === current))) return {};
-        return { transcript: 'error' in data ? { id, sessionId: want.sessionId, error: data.error } : { id, sessionId: want.sessionId, data } };
+        return { transcript: { id, sessionId: want.sessionId, ...settled(data) } };
       });
     }
     case 'conversations': {
@@ -255,7 +259,7 @@ export function applyServer(m: ServerMessage) {
       return update((s) => {
         const want = s.conversation;
         if (want?.id !== id || want.with !== peer) return {};
-        return { conversation: 'error' in data ? { id, with: peer, error: data.error } : { id, with: peer, data } };
+        return { conversation: { id, with: peer, ...settled(data) } };
       });
     }
     case 'history':
