@@ -56,6 +56,10 @@ describe('session directories with a fake claude', () => {
     m.restart(id);
     expect(firstPrompt(await lastArgs())).toBe(`Read ${join(dir, 'handoff.md')} first; it is your own handoff from before this restart.`);
 
+    writeFileSync(join(dir, 'handoff.md'), 'x'.repeat(33 * 1024));
+    m.restart(id);
+    expect(firstPrompt(await lastArgs())).toContain('It is over 32 KB: rewrite it as the current state only');
+
     m.restart(id, 'carry on with step 3');
     expect(firstPrompt(await lastArgs())).toBe('carry on with step 3');
   });

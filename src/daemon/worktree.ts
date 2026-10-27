@@ -436,3 +436,55 @@ async function copyEntry(src: string, dst: string): Promise<void> {
 export async function isListed(w: Pick<Worktree, 'repo' | 'path'>): Promise<boolean> {
   return existsSync(w.path) && (await listWorktrees(w.repo)).some((e) => samePath(e.path, w.path));
 }
+
+/** Every local branch's tip, by branch name: one git call for a whole repo. */
+export async function branchTips(repo: string): Promise<Map<string, string>> {
+  const out = await git(repo, ['for-each-ref', '--format=%(refname:short) %(objectname)', 'refs/heads']);
+  return new Map(out.split('\n').filter(Boolean).map((l) => l.split(' ') as [string, string]));
+}
+
+export type CarryStep = { branch: string; from: string } & ({ sha: string } | { upToDate: true } | { conflicts: string[] });
+
+/**
+ * Carry `from` (any commit-ish, such as origin/main) up a chain of local branches by merge: `from` into chain[0], then
+ * chain[0] into chain[1], and so on. Each branch moves only to a merge commit whose first parent is its tip (or straight
+ * to the layer below when it has nothing of its own), and update-ref moves it only if it is still at that tip, so every
+ * move is a fast-forward; nothing is rebased or pushed.
+ * Refuses before anything moves when a branch is missing, protected or checked out in some worktree. Stops at the first
+ * conflict, leaving that branch and the rest untouched; the steps say which moved, which were up to date and which conflicted.
+ */
+export async function carry(repo: string, from: string, chain: string[], protectedList: string[]): Promise<CarryStep[]> {
+  const tips = await branchTips(repo);
+  const checkouts = await listWorktrees(repo);
+  for (const b of chain) {
+    if (!tips.has(b)) throw new Error(`carry refused, nothing changed: ${b} is not a local branch`);
+    if (protectedList.includes(b)) throw new Error(`carry refused, nothing changed: ${b} is protected (worktrees.protected)`);
+    const at = checkouts.find((e) => e.branch === b);
+    if (at) throw new Error(`carry refused, nothing changed: ${b} is checked out at ${at.path}; switch that worktree off it or carry without it`);
+  }
+  let prev = from;
+  let prevTip = await git(repo, ['rev-parse', '--verify', '-q', `${from}^{commit}`]).then((s) => s.trim(), () => { throw new Error(`carry refused: ${from} is not a commit`); });
+  const sign = (await git(repo, ['config', '--type=bool', '--default=false', '--get', 'commit.gpgsign'])).trim() === 'true';
+  const steps: CarryStep[] = [];
+  for (const branch of chain) {
+    const tip = tips.get(branch)!;
+    if (await isAncestor(repo, prevTip, tip)) {
+      steps.push({ branch, from: prev, upToDate: true });
+    } else {
+      const { tree, conflicts } = await mergeTree(repo, tip, prevTip);
+      if (conflicts.length) {
+        steps.push({ branch, from: prev, conflicts });
+        return steps;
+      }
+      // Like git merge: a branch with nothing of its own fast-forwards instead of gaining an empty merge commit.
+      const sha = (await isAncestor(repo, tip, prevTip)) ? prevTip
+        : (await git(repo, ['commit-tree', ...(sign ? ['-S'] : []), tree, '-p', tip, '-p', prevTip, '-m', `Merge ${prev} into ${branch}`])).trim();
+      await git(repo, ['update-ref', '-m', `tiller: carry ${prev}`, `refs/heads/${branch}`, sha, tip]);
+      tips.set(branch, sha);
+      steps.push({ branch, from: prev, sha });
+    }
+    prev = branch;
+    prevTip = tips.get(branch)!;
+  }
+  return steps;
+}

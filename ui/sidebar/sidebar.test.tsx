@@ -429,6 +429,12 @@ it('keeps reported outcomes distinct from process state and gate, and surfaces h
   expect(html).not.toContain('errored');
 });
 
+it('flags a branch that conflicts with its base, listing the files in the tooltip', () => {
+  const node = { ...a, status: { ...a.status, git: { branch: 'tl/a', base: 'main', ahead: 1, behind: 2, dirty: 0, additions: 1, deletions: 0, conflicts: ['README', 'src/x.ts'] } } };
+  const html = renderToStaticMarkup(<NodeRow row={{ node, depth: 0, hasChildren: false, collapsed: false, descendants: [], guides: [], last: true }} />);
+  expect(html).toContain(`title="Merging main into tl/a would conflict in:\nREADME\nsrc/x.ts">conflicts with base · 2</span>`);
+});
+
 it.each(['errored', 'exited'] as const)('keeps a successful report independent from %s runtime state and a failed gate', (state) => {
   const node = { ...a, status: { ...a.status, state: 'done' as const, errored: state === 'errored', exited: state === 'exited' },
     gate: 'failed' as const, outcome: { outcome: 'succeeded' as const, at: 0 } };

@@ -85,6 +85,7 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
             {row('Commits', `${git.ahead} ahead · ${git.behind} behind ${git.base}`)}
             {row('Changes', <>{git.dirty} uncommitted file{git.dirty === 1 ? '' : 's'} · <DiffCounts git={git} /></>)}
             {git.mergedAt && row('Merge', `Merged into ${git.base}`)}
+            {git.conflicts && row('Conflicts', <span className="warn">Merging {git.base} conflicts in {git.conflicts.join(', ')}</span>)}
           </>}
         </dl>
         {agent && <><h3>Context</h3><p>{s.contextPct !== undefined ? <CtxBar pct={s.contextPct} /> : 'Not reported'}

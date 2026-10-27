@@ -112,7 +112,7 @@ Never run anything that changes infrastructure or any system outside this machin
 
 When your task ends, call report_outcome with "succeeded" or "failed" and fill summary, changedFiles, verified (what you ran and its result) and openQuestions. That is your report: your parent is told when it is recorded, so do not also send a summary message. If a completion gate fails, fix what it reports and call report_outcome again.
 
-Notes that must outlive your context go in $TL_SESSION_DIR (${m.sessionDirOf(w.id)}); keep handoff.md there as the current state of the work.
+Notes that must outlive your context go in $TL_SESSION_DIR (${m.sessionDirOf(w.id)}); keep handoff.md there as the current state of the work, short and rewritten in place rather than appended to; history that must be kept goes in a separate log file.
 
 # Role
 # Worker

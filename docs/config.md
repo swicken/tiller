@@ -40,7 +40,7 @@ The layer column says where a key may be set: "project, home" means either file,
 | `worktrees.branchPrefix` | string | `tl/` | project, home | A worktree's branch is this prefix followed by the node id. |
 | `worktrees.include` | list of gitignore patterns | `.worktreeinclude` | project, home | Gitignored files copied into a new worktree; when absent, the repo's `.worktreeinclude` file is used. |
 | `worktrees.mergeStyle` | `merge`, `squash`, `ff-only` | `merge` | project, home | How the merge verb brings a branch into its base. |
-| `worktrees.setup` | list of shell commands | `[]` | project, home | Run in a new worktree before the agent starts. |
+| `worktrees.setup` | list of shell commands | `[]` | project, home | Run in a new worktree before the agent starts. See [copied `node_modules/`](#copied-node_modules) for re-installing a stale copy. |
 | `worktrees.teardown` | list of shell commands | `[]` | project, home | Run in a worktree before tiller removes it. |
 | `worktrees.protected` | list of branch names | `["main", "master"]` | project, home | Branches a merge never goes into; the remote's default branch counts too, unless the list is set to `[]`, which protects nothing. A worker spawned from one without a base gets a task branch. |
 | `worktrees.taskBranch` | string containing `{slug}` | `tl/{slug}` | project, home | Name of the task branch made for such a worker; `{slug}` is its title in lower case with dashes. |
@@ -85,6 +85,18 @@ For notification levels, `sound` is a banner with a sound and `silent` sends not
   "limits": { "stallMinutes": 10 }
 }
 ```
+
+### Copied `node_modules/`
+
+A `.worktreeinclude` that lists `node_modules/` gives each worktree a copy of the main checkout's install, stale or not, even when the worktree's `package-lock.json` pins other versions. This repo's [`scripts/worktree-deps.mjs`](../scripts/worktree-deps.mjs) re-installs only when the copy doesn't match the worktree's lockfile. It compares the `packages` of `package-lock.json` with npm's record of what it installed (`node_modules/.package-lock.json`). Optional packages skipped on this platform don't count as differences. On any other difference, or when the record is missing, it runs `npm ci --no-audit --no-fund`. Setup commands run in the new worktree, so the worktree's own copy of the script is the one that runs. A worker whose base branch predates the script has no copy, so the command skips the check when the file is missing instead of failing setup:
+
+```json
+"worktrees": {
+  "setup": ["test ! -f scripts/worktree-deps.mjs || node scripts/worktree-deps.mjs"]
+}
+```
+
+Another repo can copy the script. A matching copy adds about 50 ms before the agent starts. A stale or missing copy runs `npm ci` instead, which takes about 1.5–3.5 s for this repo with a warm npm cache. A plain `"npm ci"` is also correct, but it pays that cost every time and replaces the copy-on-write clone with a full copy of the files.
 
 <a id="opt-in-codex-task-defaults"></a>
 
