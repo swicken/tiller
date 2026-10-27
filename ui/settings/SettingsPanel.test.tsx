@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { ReactElement, ReactNode } from 'react';
+import { elements, type Element } from '../test-tree';
 import { refreshUsage, send } from '../conn';
 import { SettingsPanel } from './SettingsPanel';
 import { Modal } from '../controls/Modal';
@@ -33,14 +34,7 @@ const fetchMock = vi.fn(async (_url: unknown, options?: RequestInit) => {
   return { ok: true, json: async () => ({ ...snapshot, scope, ...(options?.method === 'POST' ? { revision: 'r2' } : {}) }) };
 });
 function render() { hooks.cursor = 0; tree = SettingsPanel({ nodeId: 'n1', onClose: close }); hooks.effects.splice(0).forEach((effect) => effect()); }
-async function settle() { await vi.waitFor(() => { render(); expect(elements(tree).some((e) => e.type === 'form')).toBe(true); expect(button('Close').props.disabled).toBe(false); }); }
-type Element = ReactElement<Record<string, any>>;
-function elements(node: ReactNode): Element[] {
-  if (Array.isArray(node)) return node.flatMap((child) => elements(child));
-  if (!node || typeof node !== 'object' || !('props' in node)) return [];
-  const element = node as Element;
-  return [element, ...elements(element.props.children)];
-}
+async function settle() { await vi.waitFor(() => { render(); expect(elements(tree).some((e) => e.type === 'form')).toBe(true); expect(button('Close').props.disabled).toBe(false); }, { interval: 1 }); }
 function text(node: ReactNode): string { return Array.isArray(node) ? node.map(text).join('') : node && typeof node === 'object' && 'props' in node ? text((node as Element).props.children) : typeof node === 'string' ? node : ''; }
 function button(label: string, root: ReactNode = tree) { const match = elements(root).find((e) => e.type === 'button' && text(e.props.children) === label); if (!match) throw Error(`Missing button ${label}`); return match; }
 function click(label: string, root: ReactNode = tree) { button(label, root).props.onClick(); render(); }
@@ -336,7 +330,7 @@ it('disables scope, close, fields and save while a save request is pending', asy
 it('retries a failed scope load and disables retry while the replacement request is pending', async () => {
   fetchMock.mockImplementationOnce(async () => ({ ok: false, status: 503, json: async () => ({ error: 'Settings temporarily unavailable' }) } as any));
   changeScope('home');
-  await vi.waitFor(() => { render(); expect(text(tree)).toContain('Settings temporarily unavailable'); });
+  await vi.waitFor(() => { render(); expect(text(tree)).toContain('Settings temporarily unavailable'); }, { interval: 1 });
   expect(button('Save changes').props.disabled).toBe(true);
   let resolve!: (response: any) => void;
   fetchMock.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));

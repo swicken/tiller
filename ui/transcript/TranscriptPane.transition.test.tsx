@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactElement, ReactNode } from 'react';
+import { elements } from '../test-tree';
 import type { Harness, Transcript } from '../../src/shared/protocol';
 import { applyServer, getState, update } from '../store';
 import { mk } from '../fixtures';
@@ -35,13 +36,6 @@ vi.mock('../store', async (original) => {
   return { ...store, useStore: (select: (s: ReturnType<typeof store.getState>) => unknown) => select(store.getState()) };
 });
 
-type Element = ReactElement<Record<string, any>>;
-function elements(node: ReactNode): Element[] {
-  if (Array.isArray(node)) return node.flatMap(elements);
-  if (!node || typeof node !== 'object' || !('props' in node)) return [];
-  const element = node as Element;
-  return [element, ...elements(element.props.children)];
-}
 function render() {
   hooks.cursor = 0;
   const node = getState().nodes.root;

@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
-import { PROFILES, isSupportedEffort } from '../shared/harness-policy.js';
+import { HARNESSES, PROFILES, isSupportedEffort } from '../shared/harness-policy.js';
 import { EFFORTS, ISOLATIONS, type Harness, type Profile, type Role } from '../shared/protocol.js';
-import { SETTINGS_HARNESSES, SETTINGS_PROFILES, SETTINGS_PROFILE_DEFAULTS, type SettingsEntry } from '../shared/settings.js';
+import { SETTINGS_PROFILE_DEFAULTS, type SettingsEntry } from '../shared/settings.js';
 import { homeDir } from './home.js';
 import { expandHome } from './util.js';
 
@@ -258,7 +258,7 @@ export function configEntries(cwd: string | null, home = homeDir()): Record<Key,
  */
 export function effectiveProfileEntries(entries: Record<string, SettingsEntry>): Record<string, SettingsEntry> {
   const resolved = { ...entries };
-  for (const harness of SETTINGS_HARNESSES) for (const profile of SETTINGS_PROFILES) {
+  for (const harness of HARNESSES) for (const profile of PROFILES) {
     const role = profile === 'orchestrator' ? 'orchestrator' : 'worker';
     for (const leaf of ['model', 'effort'] as const) {
       const key = `profiles.${harness}.${profile}.${leaf}`;
