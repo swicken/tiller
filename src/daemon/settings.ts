@@ -160,6 +160,7 @@ export function updateSettings(manager: NodeManager, update: SettingsUpdate): Se
   }
   if (home) writeConfig(homePath, home.data, home.revision);
   if (!home || Object.keys(changes).length) writeConfig(path, before.data, update.revision);
+  manager.refreshRepoAccounts();
   return settingsSnapshot(manager, scope, nodeId);
 }
 
@@ -208,6 +209,7 @@ export function saveClaudeAccounts(manager: NodeManager, save: ClaudeAccountsSav
   for (const { dir, create } of dirs) if (create) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   before.data.claude = { ...claude, accounts, ...(account === undefined ? {} : { account }) };
   writeConfig(homePath, before.data, save.revision);
+  manager.refreshRepoAccounts();
   return settingsSnapshot(manager, 'home');
 }
 

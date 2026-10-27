@@ -61,3 +61,9 @@ export function flattenSession(nodes: Nodes, order: string[], rootId: string, co
   if (nodes[rootId]) walk(nodes[rootId], 0, [], true);
   return rows;
 }
+
+/** The daemon sets repoAccount on a root Claude node whose account its repository no longer uses. */
+export const accountMismatch = (node: NodeView) => {
+  const name = (a?: string | null) => a ?? "Claude's default home (~/.claude)";
+  return `Runs in ${name(node.account)}; this repository now uses ${name(node.repoAccount)}. Start a new session to switch.`;
+};

@@ -8,6 +8,7 @@ import { findArchived } from './archive.js';
 import { gateFor } from './completion-gate.js';
 import { NodeManager, type SpawnRequest } from './manager.js';
 import { PtySession, type SpawnOpts } from './pty.js';
+import { saveClaudeAccounts, settingsSnapshot, updateSettings } from './settings.js';
 
 class FakeSession {
   exited = false;
@@ -239,5 +240,63 @@ describe('usage per account', () => {
     m.applyModEvent(x.id, { event: 'session.measure', payload: { usageReports: [{ scope: 'account', account: 'work', rateLimits: [{ kind: 'five_hour', percentUsed: 9 }] }] } });
     expect(claude()).toEqual([expect.objectContaining({ nodeIds: [x.id] })]);
     expect(claude()[0]).not.toHaveProperty('account');
+  });
+});
+
+describe('a root whose repository now uses another account', () => {
+  const repoAccount = (id: string) => m.view(id)!.repoAccount;
+
+  it('warns on the root only, updating live when Settings moves the repository', async () => {
+    const root = await spawn(), child = await spawn({ parentId: root.id });
+    expect(repoAccount(root.id)).toBeUndefined(); // spawned in the repo's account
+    const emitted: string[] = [];
+    m.on('node', (v: { id: string }) => emitted.push(v.id));
+    const move = (account: string) => {
+      const s = settingsSnapshot(m, 'project', root.id);
+      updateSettings(m, { scope: 'project', nodeId: root.id, revision: s.revision, homeRevision: s.homeRevision, changes: { 'claude.account': account } });
+    };
+    move('other');
+    expect(repoAccount(root.id)).toBe('other');
+    expect(emitted).toContain(root.id); // the UI hears of it without another change to the node
+    expect(repoAccount(child.id)).toBeUndefined(); // children run in their root's account; the root carries the warning
+    move('work');
+    expect(repoAccount(root.id)).toBeUndefined();
+  });
+
+  it('compares Claude homes: a node from before accounts warns only once its repo maps to another dir', async () => {
+    configure([]);
+    const { id } = await spawn();
+    expect(repoAccount(id)).toBeUndefined(); // no accounts configured
+    configure([{ name: 'personal' }], { claude: { accounts: [{ name: 'personal' }], account: 'personal' } });
+    m.refreshRepoAccounts();
+    expect(repoAccount(id)).toBeUndefined(); // personal has no configDir: the same default home the node runs in
+    configure();
+    m.refreshRepoAccounts();
+    expect(repoAccount(id)).toBe('work');
+  });
+
+  it('warns with null when the repo now resolves to no account, so new roots would run in Claude\'s default home', async () => {
+    const { id } = await spawn(); // work, from its projects entry; no claude.account
+    configure([{ name: 'work', configDir: '~/.claude-work' }, { name: 'other', configDir: '~/.claude-other' }]);
+    m.refreshRepoAccounts();
+    expect(m.view(id)!).toHaveProperty('repoAccount', null);
+  });
+
+  it('updates live when the account form seeds accounts', async () => {
+    configure([]);
+    const { id } = await spawn({ cwd: plain }); // no account: Claude's default home
+    const s = settingsSnapshot(m, 'home');
+    saveClaudeAccounts(m, { scope: 'home', revision: s.revision, openedWith: [], claudeAccounts: { account: 'other', accounts: [{ name: 'other', configDir: '~/.claude-other' }] } });
+    expect(repoAccount(id)).toBe('other');
+  });
+
+  it('never warns for other harnesses, terminals, or while the accounts config is invalid', async () => {
+    const claude = await spawn(), pi = await spawn({ kind: 'agent', harness: 'pi' }), term = await spawn({ kind: 'terminal' });
+    configure([{ name: 'work', configDir: '~/.claude-work' }, { name: 'other', configDir: '~/.claude-other', projects: ['~/work'] }]);
+    m.refreshRepoAccounts();
+    expect([claude, pi, term].map((n) => repoAccount(n.id))).toEqual(['other', undefined, undefined]);
+    configure([{ name: 'other', configDir: '~/.claude-other', projects: ['~/work'] }, { name: 'other', configDir: '~/.claude-work' }]);
+    m.refreshRepoAccounts();
+    expect(repoAccount(claude.id)).toBeUndefined();
   });
 });
