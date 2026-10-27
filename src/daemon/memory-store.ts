@@ -462,8 +462,7 @@ export class MemoryStore implements DigestSource, GardenStore {
    */
   search(scope: MemoryScope, q: { query: string; kind?: ItemKind; pinned?: boolean; limit?: number; includeRetracted?: boolean; eligible?: boolean }): MemoryItemView[] {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       const terms = ftsQuery(ftsTerms(q.query));
       if (!db || repo === undefined || !terms) return [];
       const rows = db.prepare(`SELECT i.*${q.eligible ? `, ${ELIGIBLE} AS eligible` : ''} FROM items_fts CROSS JOIN items i ON i.id = items_fts.rowid
@@ -482,8 +481,7 @@ export class MemoryStore implements DigestSource, GardenStore {
    */
   list(scope: MemoryScope, q: { kind?: ItemKind; pinned?: boolean; retracted?: boolean; before?: ListCursor; limit?: number }): { items: MemoryItemView[]; next?: ListCursor } {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) return { items: [] };
       const limit = Math.min(q.limit ?? LIMITS.panel.page, LIMITS.panel.page);
       // The page's ids first, so ELIGIBLE runs for its rows only.
@@ -502,8 +500,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   counts(scope: MemoryScope): ItemCounts {
     return this.loud(() => {
       const counts = noCounts();
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) return counts;
       for (const r of db.prepare('SELECT kind, count(*) AS n FROM items WHERE repo_id = ? AND invalid_at IS NULL GROUP BY kind').all(repo) as { kind: ItemKind; n: number }[]) {
         counts[r.kind] = Number(r.n);
@@ -525,8 +522,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   /** One item in full for the panel, with eligible, its newest superseder and the digests that gave it; the read is not counted. */
   peek(scope: MemoryScope, id: number): MemoryItemDetail {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       const row = db && repo !== undefined
         ? db.prepare(`SELECT i.*, ${ELIGIBLE} AS eligible FROM items i WHERE i.id = ? AND i.repo_id = ?`).get(id, repo) as (ItemRow & { eligible: number }) | undefined
         : undefined;
@@ -548,8 +544,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   /** One item in full, counting the read. Another repository's item is "no such item". */
   get(scope: MemoryScope, id: number): MemoryItemView {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(`no such item ${itemRef(id)}`);
       const row = this.item(db, repo, id);
       db.prepare('UPDATE items SET gets = gets + 1 WHERE id = ?').run(id);
@@ -597,8 +592,7 @@ export class MemoryStore implements DigestSource, GardenStore {
     return this.loud(() => {
       if (input.purge && actor.kind !== 'human') throw new MemoryError('only the human can purge');
       const reason = redact(input.reason.trim()).slice(0, LIMITS.tools.reason);
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(`no such item ${itemRef(input.id)}`);
       const who = this.who(actor);
       const row = tx(db, () => {
@@ -667,8 +661,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   restore(scope: MemoryScope, actor: Actor, input: { id: number }): MemoryItemView {
     return this.loud(() => {
       if (actor.kind !== 'human') throw new MemoryError('only the human can restore');
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(`no such item ${itemRef(input.id)}`);
       const row = tx(db, () => {
         const item = this.item(db, repo, input.id), ref = itemRef(item.id);
@@ -702,8 +695,7 @@ export class MemoryStore implements DigestSource, GardenStore {
       if (actor.kind !== 'human') throw new MemoryError('only the human can pin');
       const text = redact(input.text.trim());
       if (!text || text.length > LIMITS.tools.pinText) throw new MemoryError(`text must be 1-${LIMITS.tools.pinText} characters`);
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(`no such item ${itemRef(input.id)}`);
       const row = tx(db, () => {
         const old = this.item(db, repo, input.id);
@@ -791,8 +783,7 @@ export class MemoryStore implements DigestSource, GardenStore {
 
   startRun(scope: MemoryScope, input: { trigger: GardenTrigger; model: string }): { ok: true; run: GardenRunView } | { ok: false; reason: string } {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) return { ok: false, reason: 'no memory for this repository yet' };
       return tx(db, () => {
         const g = LIMITS.garden, now = this.now();
@@ -814,8 +805,7 @@ export class MemoryStore implements DigestSource, GardenStore {
 
   skipRun(scope: MemoryScope, input: { trigger: GardenTrigger; note: string }): void {
     this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) return;
       tx(db, () => {
         const last = db.prepare('SELECT state, note FROM garden_runs WHERE repo_id = ? ORDER BY id DESC LIMIT 1').get(repo) as { state: string; note: string | null } | undefined;
@@ -1010,8 +1000,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   undo(scope: MemoryScope, target: GardenUndoTarget, by: GardenUndoneBy): GardenUndoResult {
     return this.loud(() => {
       const missing = 'run' in target ? `no such run ${runRef(target.run)}` : `no such item ${itemRef(target.item)}`;
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(missing);
       return tx(db, () => {
         if ('run' in target) {
@@ -1211,6 +1200,12 @@ export class MemoryStore implements DigestSource, GardenStore {
     } catch {
       return LIMITS.size.defaultMB;
     }
+  }
+
+  /** The scope's account file and repository row, each when it exists; neither is created. */
+  private existing(scope: MemoryScope): { db?: DatabaseSync; repo?: number } {
+    const db = this.db(scope.account, false);
+    return db ? { db, repo: this.repo(db, scope, false) } : {};
   }
 
   private repo(db: DatabaseSync, scope: MemoryScope, create: boolean): number | undefined {
