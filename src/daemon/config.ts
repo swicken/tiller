@@ -6,7 +6,7 @@ import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { PROFILES, isSupportedEffort } from '../shared/harness-policy.js';
 import { EFFORTS, ISOLATIONS, type Harness, type Profile, type Role } from '../shared/protocol.js';
-import { SETTINGS_HARNESSES, SETTINGS_PROFILES, SETTINGS_PROFILE_DEFAULTS, type SettingsEntry } from '../shared/settings.js';
+import { CLAUDE_ACCOUNT_NAME, CLAUDE_ACCOUNT_NAME_RULE, SETTINGS_HARNESSES, SETTINGS_PROFILES, SETTINGS_PROFILE_DEFAULTS, type SettingsEntry } from '../shared/settings.js';
 import { homeDir } from './home.js';
 import { expandHome } from './util.js';
 
@@ -30,7 +30,7 @@ const CodexProfileDefaults = ProfileDefaults.superRefine((profiles, ctx) => {
 });
 const Level = z.enum(NOTIFY_LEVELS).optional();
 const AccountPath = z.string().refine((p) => isAbsolute(p) || p.startsWith('~/'), 'must be absolute or start with ~/');
-const AccountName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/, 'a name is 1-32 letters, digits, _ or -, starting with a letter or digit');
+const AccountName = z.string().regex(CLAUDE_ACCOUNT_NAME, CLAUDE_ACCOUNT_NAME_RULE);
 /** Home file only: Claude accounts, each a CLAUDE_CONFIG_DIR. No configDir means Claude's default home (at most one). */
 const ClaudeAccounts = z.array(z.object({
   name: AccountName,
