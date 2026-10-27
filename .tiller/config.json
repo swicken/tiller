@@ -13,7 +13,7 @@
   "worktrees": {
     "protected": [],
     "setup": [
-      "node -e \"const r=require,s=JSON.stringify,a=r('./package-lock.json').packages,b=r('./node_modules/.package-lock.json').packages;delete a[''];process.exit(Object.keys(b).every(k=>s(a[k])===s(b[k]))&&Object.keys(a).every(k=>b[k]||a[k].optional)?0:1)\" 2>/dev/null || npm ci --no-audit --no-fund"
+      "node scripts/worktree-deps.mjs"
     ]
   },
   "profiles": {
