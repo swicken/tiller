@@ -107,9 +107,6 @@ export const remove = (repo: string, path: string, force: boolean) =>
 
 export const prune = (repo: string) => git(repo, ['worktree', 'prune']);
 
-export const branchExists = (repo: string, branch: string) =>
-  git(repo, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`]).then(() => true, () => false);
-
 /** -D: callers delete only after their own merged check, or on an explicit discard. `-d` would test against the main checkout's HEAD, not the base. */
 export const deleteBranch = (repo: string, branch: string) => git(repo, ['branch', '-D', branch]);
 
