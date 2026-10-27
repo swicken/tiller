@@ -1,6 +1,6 @@
 // Shared contracts between daemon, UI and the agent-facing API. Keep this file small and stable.
 import type { Harness, Profile, Effort } from './harness-policy.js';
-export { HARNESSES, PROFILES, PROFILE_LABELS, EFFORTS, type Harness, type Profile, type Effort } from './harness-policy.js';
+export { HARNESSES, HARNESS_LABELS, PROFILES, PROFILE_LABELS, EFFORTS, type Harness, type Profile, type Effort } from './harness-policy.js';
 
 /** `agent` is any agent harness; the harness field names which one. `terminal` is a plain login shell. */
 export const NODE_KINDS = ['claude', 'agent', 'terminal'] as const;
@@ -290,7 +290,7 @@ export interface Usage { rateLimits: RateLimit[]; nodeId: string; at: number; /*
 /** Prepared by the daemon only after notification suppression, grouping and sound policy. */
 export interface NativeNotification { id: string; title: string; subtitle?: string; body: string; sound: boolean }
 /** Usage discovery is independent of live nodes. null means not verified, not absent. */
-export type UsageTool = 'claude' | 'codex' | 'pi';
+export type UsageTool = Harness;
 export interface UsageSource {
   id: string;
   tool: UsageTool;

@@ -65,13 +65,11 @@ describe("parseBridgeConfig", () => {
       ...base,
       TL_PI_MCP_EXPOSURE: "codemode",
       TL_PI_HOOK_TOOLS: "true",
-      TL_PARENT_ID: "n-parent",
     });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.config.exposure).toBe("codemode");
       expect(ok.config.hookTools).toBe(true);
-      expect(ok.config.parentId).toBe("n-parent");
     }
   });
 

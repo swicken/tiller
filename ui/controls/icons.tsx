@@ -9,7 +9,6 @@ const PATHS = {
   subnode: 'M6 4v9a3 3 0 003 3h9M14 12l4 4-4 4',
   trash: 'M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13',
   restart: 'M20 12a8 8 0 11-2.4-5.7M20 4v5h-5',
-  search: 'M11 4a7 7 0 100 14 7 7 0 000-14zM16 16l4 4',
   merge: 'M7 4v16M7 8a7 7 0 007 7h5M16 12l3 3-3 3',
   bell: 'M6 16v-5a6 6 0 0112 0v5l2 2H4l2-2zM10 21h4',
   fork: 'M6 4v4a4 4 0 004 4h4a4 4 0 014 4v4M18 4v4a4 4 0 01-4 4M6 20v-4',

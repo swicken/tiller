@@ -715,3 +715,19 @@ describe('repoKeySync', () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe('isListed', () => {
+  it('is true only for an existing directory git lists, however the path is spelled', async () => {
+    setup();
+    const path = join(home, 'wt');
+    g(repo, 'worktree', 'add', '-q', '-b', 'tl/listed', path);
+    symlinkSync(path, join(home, 'wt-link'));
+    expect(await wt.isListed({ repo, path })).toBe(true);
+    expect(await wt.isListed({ repo, path: `${path}/` })).toBe(true);
+    expect(await wt.isListed({ repo, path: join(home, 'wt-link') })).toBe(true);
+    mkdirSync(join(home, 'plain'));
+    expect(await wt.isListed({ repo, path: join(home, 'plain') })).toBe(false); // exists, not a worktree of repo
+    rmSync(path, { recursive: true });
+    expect(await wt.isListed({ repo, path })).toBe(false); // still registered, directory gone
+  });
+});

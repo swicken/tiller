@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { codexAdapter } from './harness.js';
-import { codexHeader } from './codex-session.js';
+import { codexHeader } from '../shared/codex-transcript.js';
 import { NodeManager } from './manager.js';
 import { startServer, type DaemonServer } from './server.js';
 import { DAEMON, deliver, HUMAN, messageStatus } from './messaging.js';

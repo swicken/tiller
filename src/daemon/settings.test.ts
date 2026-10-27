@@ -161,6 +161,13 @@ describe('settings persistence', () => {
       expect(fs.readFileSync(file(), 'utf8')).toBe(raw);
     }
   });
+  it('refuses a project save while the inherited home file is malformed', () => {
+    write({ limits: { maxDepth: 3 } });
+    const s = snapshot();
+    fs.writeFileSync(join(home, 'config.json'), '{broken');
+    expect(() => save({ 'limits.maxDepth': 2 }, s.revision)).toThrow(/Malformed JSON/);
+    expect(JSON.parse(fs.readFileSync(file(), 'utf8'))).toEqual({ limits: { maxDepth: 3 } });
+  });
   it('detects concurrent revisions and preserves external changes after a reload', () => {
     const old = snapshot();
     write({ custom: 17 });

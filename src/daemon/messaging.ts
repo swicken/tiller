@@ -161,8 +161,7 @@ export function handoverInbox(m: Mgr, id: string): void {
   for (const item of [...(s.inbox.get(id) ?? [])]) if (item.claimed) unconfirmed(m, id, item.msg.id);
   for (const entry of s.queues.get(id) ?? []) {
     clearTimeout(entry.timer);
-    addInbox(m, s, { to: id, from: entry.from, msg: { id: entry.id, from: entry.label, text: frame(entry).text,
-      enqueuedAt: s.status.get(entry.id)?.at ?? Date.now(), ...(entry.steer ? { steer: true } : {}) } });
+    addInbox(m, s, inboxItem(entry, s.status.get(entry.id)?.at ?? Date.now()));
   }
   s.queues.delete(id);
   clearTimeout(s.retry.get(id));
@@ -177,6 +176,7 @@ const verifiedIdle = (v: NodeView) => v.status.state === 'done' && !v.status.sta
 const readyFor = (v: NodeView, e: Entry | undefined) => verifiedIdle(v) || (!!e?.steer && v.status.state === 'done' && v.status.doneSource === 'interrupt');
 const busy = (v: NodeView | undefined) => v?.status.state === 'working';
 const gone: SendResult = { outcome: 'gone', retryable: false, detail: 'target does not exist or has exited' };
+const changingHarness = (m: Mgr, id: string) => m.runtimes?.get(id)?.busy === 'changing harness';
 const oneLine = (s: string) => s.replace(/[\r\n]+/g, ' ');
 
 /** The envelope line that marks a steer (see conversation.ts, which parses envelopes). */
@@ -189,11 +189,14 @@ function frame(e: Entry): { text: string; nonce: string } {
   return { nonce, text: `--- TL MESSAGE ${nonce} ---\nfrom: ${e.label}\nreply-to: ${e.replyTo ?? 'none'}\n${steer}${e.text}\n--- END TL MESSAGE ${nonce} ---` };
 }
 
+const inboxItem = (e: Entry, enqueuedAt: number): InboxItem =>
+  ({ to: e.to, from: e.from, msg: { id: e.id, from: e.label, text: frame(e).text, enqueuedAt, ...(e.steer ? { steer: true } : {}) } });
+
 async function attempt(m: Mgr, e: Entry): Promise<Attempt> {
   const check = (): Attempt | undefined => {
     const v = m.view(e.to);
     if (m.draining) return { wait: 'deliveries are held until the daemon restarts' };
-    if (m.runtimes?.get(e.to)?.busy === 'changing harness') return { wait: 'target is changing harness' };
+    if (changingHarness(m, e.to)) return { wait: 'target is changing harness' };
     if (!v || v.status.exited) return { result: gone };
     if (!readyFor(v, e)) return { wait: `target is ${v.status.state}${v.status.doneSource ? ` (done via ${v.status.doneSource})` : ''}, not verified idle` };
   };
@@ -365,8 +368,7 @@ export function saveInboxForRestart(m: Mgr): void {
   for (const [id, q] of s.queues) {
     for (const entry of q) {
       clearTimeout(entry.timer);
-      addInbox(m, s, { to: id, from: entry.from, msg: { id: entry.id, from: entry.label, text: frame(entry).text,
-        enqueuedAt: s.status.get(entry.id)?.at ?? Date.now(), ...(entry.steer ? { steer: true } : {}) } });
+      addInbox(m, s, inboxItem(entry, s.status.get(entry.id)?.at ?? Date.now()));
     }
     // Both lists were in send order; keep that order across them. Together they may pass QUEUE_CAP, which then only refuses new sends.
     s.inbox.get(id)?.sort((a, b) => a.msg.enqueuedAt - b.msg.enqueuedAt);
@@ -440,7 +442,7 @@ export function markModLive(m: Mgr, nodeId: string): void {
  * has already claimed. Every poll marks the node mod-live.
  */
 export function inbox(m: Mgr, nodeId: string): InboxMessage[] {
-  if (m.runtimes?.get(nodeId)?.busy === 'changing harness') return [];
+  if (changingHarness(m, nodeId)) return [];
   markModLive(m, nodeId);
   return (stateOf(m).inbox.get(nodeId) ?? []).filter((i) => i.claimed || !m.draining).map((i) => ({ ...i.msg, ...(i.claimed ? { claimed: true } : {}) }));
 }
@@ -452,7 +454,7 @@ export function ack(m: Mgr, nodeId: string, id: string): boolean {
 
 /** POST /claim: the mod is about to submit the message, so it can no longer be withdrawn. False if it is not in that node's inbox. */
 export function claim(m: Mgr, nodeId: string, id: string): boolean {
-  if (m.runtimes?.get(nodeId)?.busy === 'changing harness' || m.draining) return false;
+  if (changingHarness(m, nodeId) || m.draining) return false;
   const s = stateOf(m);
   const i = s.inbox.get(nodeId)?.find((x) => x.msg.id === id);
   if (!i) return false;
@@ -507,7 +509,7 @@ export function unconfirmed(m: Mgr, nodeId: string, id: string): boolean {
 /** Queue for a mod-live target. */
 function queueInbox(m: Mgr, s: State, e: Entry): SendResult {
   if ((s.inbox.get(e.to)?.length ?? 0) >= QUEUE_CAP) return { outcome: 'queueFull', retryable: true, detail: `${QUEUE_CAP} messages already queued for ${e.to}` };
-  addInbox(m, s, { to: e.to, from: e.from, msg: { id: e.id, from: e.label, text: frame(e).text, enqueuedAt: Date.now(), ...(e.steer ? { steer: true } : {}) } });
+  addInbox(m, s, inboxItem(e, Date.now()));
   saveInbox(s);
   return e.steer
     ? { outcome: 'queued', retryable: false, steer: true, detail: 'the target\'s mod interrupts its turn and submits the message; delivery is confirmed when it does' }
@@ -571,7 +573,7 @@ export async function deliver(m: Mgr, fromId: string, toId: string, text: string
   if (!inScope(m, fromId, toId)) return refuse('target is outside your lineage (self, ancestors, siblings, descendants)');
   const target = m.view(toId);
   if (!target || target.status.exited) return out(gone);
-  if (m.runtimes?.get(toId)?.busy === 'changing harness') return refuse('target is changing harness; retry after it starts', true);
+  if (changingHarness(m, toId)) return refuse('target is changing harness; retry after it starts', true);
   if (fromId === toId) return refuse('cannot send to yourself');
   if (target.kind === 'terminal') return refuse('not an agent node; use write for terminals');
 
@@ -617,8 +619,12 @@ function loopNotice(m: Mgr, s: State, from: NodeView | undefined, key: string, w
   const now = Date.now();
   if (!from?.parentId || now - (s.loopNoticed.get(key) ?? -Infinity) < LOOP_MS) return;
   s.loopNoticed.set(key, now);
-  deliver(m, DAEMON, from.parentId, `Refused a send: ${why}. It was told to escalate to the human or change approach.`,
-    { fromLabel: `tiller (child ${from.id} "${from.title}" may be looping)`, replyTo: null, about: [from.id] }).catch(logError);
+  childNotice(m, from, 'may be looping', `Refused a send: ${why}. It was told to escalate to the human or change approach.`);
+}
+
+/** A daemon notice to `v`'s parent about `v`. */
+function childNotice(m: Mgr, v: NodeView, why: string, body: string): void {
+  if (v.parentId) deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} "${v.title}" ${why})`, replyTo: null, about: [v.id] }).catch(logError);
 }
 
 // ---- station notices (PLAN §7) ----
@@ -626,9 +632,9 @@ function loopNotice(m: Mgr, s: State, from: NodeView | undefined, key: string, w
 /**
  * Tell a parent when its child reports an outcome (unless the parent's pending notify_when covers that child, which then
  * carries it), exits, errors, sits on a question or stalls. Once per episode. A turn error first gets
- * one "continue" message to the child; the parent hears of the next error in the episode. Returns a disposer.
+ * one "continue" message to the child; the parent hears of the next error in the episode.
  */
-export function startNotices(m: Mgr): () => void {
+export function startNotices(m: Mgr): void {
   const notified = new Set<string>();
   const timers = new Map<string, NodeJS.Timeout>();
   /** The changedAt of the errored turn the child was told to continue from. */
@@ -638,7 +644,7 @@ export function startNotices(m: Mgr): () => void {
     if (!v.parentId || notified.has(v.id)) return;
     notified.add(v.id);
     const body = v.status.lastAssistantMessage?.slice(0, 300) ?? 'No further details.';
-    deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} "${v.title}" stopped: ${reason})`, replyTo: null, about: [v.id] }).catch(logError);
+    childNotice(m, v, `stopped: ${reason}`, body);
   };
   const onNode = (v: NodeView) => {
     if (!v.parentId) return;
@@ -659,7 +665,7 @@ export function startNotices(m: Mgr): () => void {
     else if (!stallNoticed.has(v.id)) {
       stallNoticed.add(v.id);
       const body = `No hook event for ${fmtAge(Date.now() - v.status.changedAt)} while working${v.status.activity ? `; last activity: ${v.status.activity}` : ''}.`;
-      deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} "${v.title}" no activity)`, replyTo: null, about: [v.id] }).catch(logError);
+      childNotice(m, v, 'no activity', body);
     }
     if (exited) notice(v, 'exited');
     else if (state === 'done' && errored) {
@@ -674,11 +680,10 @@ export function startNotices(m: Mgr): () => void {
   const onOutcome = (id: string) => {
     const v = m.view(id);
     if (!v?.parentId || !v.outcome || watching(m, v.parentId, id)) return;
-    deliver(m, DAEMON, v.parentId, `${id} reported ${outcomeLine(v.outcome)}`, { fromLabel: `tiller (child ${id} "${v.title}" reported ${v.outcome.outcome})`, replyTo: null, about: [id] }).catch(logError);
+    childNotice(m, v, `reported ${v.outcome.outcome}`, `${id} reported ${outcomeLine(v.outcome)}`);
   };
   m.on('node', onNode);
   m.on('outcome', onOutcome);
-  return () => { m.off('node', onNode); m.off('outcome', onOutcome); for (const t of timers.values()) clearTimeout(t); };
 }
 
 // ---- notify_when ----

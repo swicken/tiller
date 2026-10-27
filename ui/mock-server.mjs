@@ -12,6 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { pruneIds } from '../src/shared/prune.ts';
 
 const PORT = Number(process.env.TL_MOCK_PORT ?? 7789);
 const DIST = fileURLToPath(new URL('./dist', import.meta.url));
@@ -485,7 +486,7 @@ wss.on('connection', (ws) => {
       }
       case 'close': if (n?.worktree && !m.worktree && n.title.includes('dirty')) send({ t: 'error', id: m.id, message: 'worktree has 2 uncommitted files and 1 unmerged commit; close with keep or discard' });
         else if (n) { nodes.delete(m.id); broadcast({ t: 'removed', id: m.id }); } break;
-      case 'prune': for (const x of [...nodes.values()]) if (x.status.exited && ![...nodes.values()].some((c) => c.parentId === x.id)) { nodes.delete(x.id); broadcast({ t: 'removed', id: x.id }); } break;
+      case 'prune': for (const id of pruneIds([...nodes.values()])) { nodes.delete(id); broadcast({ t: 'removed', id }); } break;
       case 'claudeAccounts': send({ t: 'claudeAccounts', accounts }); break;
       case 'spawn': {
         if (m.fork) console.log(`spawn ${m.title} forked from ${m.fork}`);

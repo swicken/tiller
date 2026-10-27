@@ -9,28 +9,19 @@
  */
 export class SerialQueue {
   private tail: Promise<void> = Promise.resolve();
-  private queued = 0;
 
   /** Run `task` after every previously enqueued task, preserving enqueue order. */
   enqueue<T>(task: () => Promise<T> | T): Promise<T> {
-    this.queued += 1;
     const run = this.tail.then(task, task);
     this.tail = run.then(
       () => undefined,
       () => undefined,
     );
-    return run.finally(() => {
-      this.queued -= 1;
-    });
+    return run;
   }
 
   /** Resolve once every task enqueued so far has settled. */
   async drain(): Promise<void> {
     await this.tail;
-  }
-
-  /** Tasks enqueued but not yet settled. */
-  get size(): number {
-    return this.queued;
   }
 }

@@ -148,7 +148,6 @@
 
 .release-notes { max-height: 40vh; overflow: auto; }
 .release-notes h3 { margin: 1.5em 0 .5em; }
-.release-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 760px) { .statusbar { gap: 8px; padding: 0 8px; } .statusbar .conn { display: none; } }
 

@@ -40,9 +40,10 @@ import { archivedOf, archiveNode, findArchived, type BranchFate } from './archiv
 import { adoptSessionHistory, nodeTranscript, recordedSessions, transcriptFor } from './transcript.js';
 import { active, initialState, interruptKeyPressed, interruptTimeout, ptyExited, reduce, stall, sweep, turnComplete, type HookEvent } from './status.js';
 
-export { gateFor } from './completion-gate.js';
 
 const MAX_PREVIOUS_SESSIONS = 10;
+/** The node's earlier sessions then its current one, the newest MAX_PREVIOUS_SESSIONS. */
+const sessionChain = (rec: NodeRecord) => [...(rec.previousSessions ?? []), ...(rec.sessionId ? [rec.sessionId] : [])].slice(-MAX_PREVIOUS_SESSIONS);
 const INTERRUPT_MS = 1500;
 const SWEEP_MS = 60_000;
 const TRUST_WATCH_MS = 20_000;
@@ -101,7 +102,7 @@ export interface SpawnRequest {
   isolation?: Isolation;
   /** Worktree isolation only: the branch the worktree forks from and merges into, created at the cwd's HEAD if absent. */
   base?: string;
-  /** A spawn preset's name; its fields fill in what the request leaves unset (see withPreset). */
+  /** A spawn preset's name; its fields fill in what the request leaves unset (see resolveSpawn). */
   preset?: string;
   /** Set for the human's spawns (web UI, app, admin token), which skip the spawn caps. */
   byHuman?: boolean;
@@ -148,7 +149,7 @@ export interface NodeRuntime {
   unread?: boolean;
   lastHookAt?: number;
   interruptTimer?: NodeJS.Timeout;
-  /** Set while the node's worktree is being created, closed or merged; each excludes the others. */
+  /** Set while the node's worktree is being created, closed or merged, or its harness changed; each excludes the others. */
   busy?: 'creating' | 'closing' | 'merging' | 'changing harness';
   /** A failed harness-change stop still owns the lifecycle lock until its actual process exits. */
   stoppingAfterFailedChange?: boolean;
@@ -165,7 +166,7 @@ export interface NodeRuntime {
   lastCostEvent?: number;
   /** When the latest turn began (UserPromptSubmit), for after dependencies and notify_when. */
   turnStart?: number;
-  /** A claude node launched with a prompt whose first turn has not begun: it counts against daemon.maxWorking. */
+  /** An agent node launched with a prompt whose first turn has not begun: it counts against daemon.maxWorking. */
   starting?: boolean;
   /** Armed from the record at start; it waits for resumeLive, which runs once the daemon has its endpoint. */
   restored?: boolean;
@@ -454,7 +455,7 @@ export class NodeManager extends EventEmitter {
   /**
    * Spawn a node. Each of role, model, effort, permissionMode and isolation comes from the request, else its preset,
    * else: model and effort from the harness/profile config, then legacy Claude role defaults; permissionMode from an agent parent's own
-   * mode unless that is bypassPermissions; isolation from the config for a claude node whose role is worker or none.
+   * mode unless that is bypassPermissions; isolation from the config for an agent node whose role is worker or none.
    * Isolation "worktree" gives the node <main checkout>/.claude/worktrees/<id> on branch <prefix><id>, branched from its
    * base (see wt.pickBase: req.base, else the cwd's HEAD branch, else a new task branch); the repo must have a commit
    * and be trusted by Claude. Any failure removes the worktree and branch and discards the record. A request's gardener
@@ -587,7 +588,7 @@ export class NodeManager extends EventEmitter {
     return this.spawn({ kind: a.harness && a.harness !== 'claude' ? 'agent' : 'claude', ...(a.harness ? { harness: a.harness } : {}), title: title || a.title, cwd, prompt, model: a.model, effort: a.effort, role: a.role, profile: a.profile, parentId, isolation: 'none', byHuman: true, followup: a });
   }
 
-  /** A live or archived Claude node's conversation in one of its sessions (default: the current one). */
+  /** A live or archived agent node's conversation in one of its sessions (default: the current one). */
   async transcript(id: string, sessionId?: string): Promise<Transcript> {
     const n = await this.transcriptNode(id);
     return nodeTranscript({ ...n, claudeHome: claudeHomeOf(this.home, n.account) }, sessionId);
@@ -626,7 +627,7 @@ export class NodeManager extends EventEmitter {
     return mergeWorktree(this, id);
   }
 
-  /** Relaunch an exited Claude node with `claude --resume`. Fails if the transcript or the node's worktree is gone. */
+  /** Relaunch an exited agent node in its current session. Fails if the transcript or the node's worktree is gone. */
   async resume(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
     const rec = this.registry.get(id);
     if (!rec) return { ok: false, error: 'No such node' };
@@ -636,7 +637,7 @@ export class NodeManager extends EventEmitter {
     if (rec.worktree) {
       // Without its worktree, claude --resume carries on in the main checkout with no isolation.
       const w = rec.worktree;
-      const listed = existsSync(w.path) && (await wt.listWorktrees(w.repo).catch(() => [])).some((e) => wt.samePath(e.path, w.path));
+      const listed = await wt.isListed(w).catch(() => false);
       setMissing(this, id, !listed);
       if (!listed) return { ok: false, error: 'worktree missing' };
       if (rt.busy) return { ok: false, error: `${id} is ${rt.busy}` };
@@ -695,14 +696,14 @@ export class NodeManager extends EventEmitter {
       if ('error' in selection) return { ok: false, error: selection.error };
       fresh = selection.fresh;
     }
-    const old = rec.sessionId;
+    const previousSessions = sessionChain(rec);
     const sessionHistory = this.priorSessions(id);
     this.kill(id);
     rt.lastHookAt = undefined;
     const sessionId = isAgentKind(rec.kind) ? randomUUID() : undefined;
     const transcriptPath = isAgentKind(rec.kind) && adapterFor(rec).id !== 'claude' && rec.transcriptPath && sessionId
       ? join(dirname(rec.transcriptPath), `${sessionId}.jsonl`) : undefined;
-    this.registry.update(id, { ...fresh, sessionId, transcriptPath, previousSessions: [...(rec.previousSessions ?? []), ...(old ? [old] : [])].slice(-MAX_PREVIOUS_SESSIONS), ...(rec.sessionHistory ? { sessionHistory } : {}) });
+    this.registry.update(id, { ...fresh, sessionId, transcriptPath, previousSessions, ...(rec.sessionHistory ? { sessionHistory } : {}) });
     rt.status = { state: initialState(rec.kind), activity: 'restarting', changedAt: Date.now() };
     try {
       this.writeFiles(id);
@@ -722,8 +723,7 @@ export class NodeManager extends EventEmitter {
   private priorSessions(id: string) {
     const rec = this.registry.get(id)!;
     const records = new Map(recordedSessions({ ...rec, claudeHome: claudeHomeOf(this.home, rec.account) }).map((s) => [s.sessionId, s]));
-    return [...(rec.previousSessions ?? []), ...(rec.sessionId ? [rec.sessionId] : [])]
-      .slice(-MAX_PREVIOUS_SESSIONS).flatMap((sid) => records.get(sid) ?? []);
+    return sessionChain(rec).flatMap((sid) => records.get(sid) ?? []);
   }
 
   /** Human-only replacement of an agent's CLI. Native contexts never cross the harness boundary. */
@@ -751,7 +751,7 @@ export class NodeManager extends EventEmitter {
       if (ownerRuntime?.busy || ownerRuntime?.setup || ownerRuntime?.gate?.state === 'running') throw new Error('the shared worktree has a lifecycle operation running');
       if (rec.worktree) {
         const w = rec.worktree;
-        const listed = existsSync(w.path) && (await wt.listWorktrees(w.repo)).some((e) => wt.samePath(e.path, w.path));
+        const listed = await wt.isListed(w);
         if (!listed) throw new Error('worktree missing');
         if (harness === 'claude' && !trustedForWorktree(w.repo, readClaudeJson(this.claudeDirOf(rec)))) throw new Error(`Claude does not trust ${w.repo}; run claude there to trust it before changing harness`);
       }
@@ -773,7 +773,7 @@ export class NodeManager extends EventEmitter {
       handoverInbox(this, id);
       const sessionHistory = this.priorSessions(id), from = harnessFor(rec), sessionId = randomUUID();
       this.registry.update(id, { kind: 'agent', harness, sessionId, transcriptPath: undefined,
-        previousSessions: [...(rec.previousSessions ?? []), ...(rec.sessionId ? [rec.sessionId] : [])].slice(-MAX_PREVIOUS_SESSIONS), sessionHistory,
+        previousSessions: sessionChain(rec), sessionHistory,
         credentialGeneration: randomUUID(), model: defaults.model, effort: defaults.effort, explicit: [], permissionMode: undefined, preset: undefined,
         forkSession: undefined, lastCost: undefined });
       clearTimeout(rt.interruptTimer);
@@ -822,7 +822,7 @@ export class NodeManager extends EventEmitter {
     return undefined;
   }
 
-  /** Log the close, archive a Claude node that has launched, record closedAt for a root's session directory, and forget the node. */
+  /** Log the close, archive an agent node that has launched, record closedAt for a root's session directory, and forget the node. */
   closed(id: string, note?: string, fate: BranchFate = {}): void {
     this.logEvent(id, 'close', note ? { note } : {});
     const rec = this.registry.get(id), rt = this.runtimes.get(id);

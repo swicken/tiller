@@ -1,5 +1,5 @@
 import { ActionButtons } from '../controls/ActionButtons';
-import { CtxBar, GateMark, StateDot } from '../controls/Bits';
+import { CtxBar, GateMark, outcomeLabel, StateDot } from '../controls/Bits';
 import { hasChanges } from '../worktree';
 import { fmtAge, shortEffort, shortModel } from '../../src/shared/format';
 import { useNow } from '../hooks';
@@ -23,7 +23,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
   const blocked = s.state === 'blocked' && !s.exited;
   const kind = statusKind(node);
   const state = kind === 'needs' ? s.state : KIND_LABEL[kind];
-  const outcomeLabel = node.outcome?.outcome === 'failed' ? 'Needs changes' : 'succeeded';
+  const outcome = node.outcome && outcomeLabel(node.outcome);
 
   return (
     <div className={`row${selected ? ' sel' : ''}`} role="treeitem" aria-selected={selected} aria-level={depth + 1} aria-expanded={hasChildren ? !collapsed : undefined}
@@ -51,9 +51,9 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
         </div>
         {(node.gate || node.outcome || node.worktree?.missing || hasChanges(node) || collapsed || (s.stalled && !s.exited)) && <div className="row-signals">
           {node.outcome && <span role="note" className={`count${node.outcome.outcome === 'failed' ? ' bad' : ''}`}
-            aria-label={`Reported task outcome: ${outcomeLabel}`}
-            title={`Reported task outcome: ${outcomeLabel}${node.outcome.summary ?? node.outcome.note ? ` · ${node.outcome.summary ?? node.outcome.note}` : ''}`}>
-            {node.outcome.outcome === 'failed' ? outcomeLabel : `outcome ${outcomeLabel}`}</span>}
+            aria-label={`Reported task outcome: ${outcome}`}
+            title={`Reported task outcome: ${outcome}${node.outcome.summary ?? node.outcome.note ? ` · ${node.outcome.summary ?? node.outcome.note}` : ''}`}>
+            {node.outcome.outcome === 'failed' ? outcome : `outcome ${outcome}`}</span>}
           {node.worktree?.missing && <span className="count warn" title="The worktree directory is gone; resume is refused">worktree missing</span>}
           {node.gate && <GateMark gate={node.gate} />}
           {hasChanges(node) && <span className="count" title={`unmerged work on ${node.status.git!.branch}: merge or close it`}>changes · {node.status.git!.ahead} ahead · {node.status.git!.dirty} dirty</span>}

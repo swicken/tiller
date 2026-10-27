@@ -1,8 +1,8 @@
 # Tiller demo video
 
-A Remotion project that cuts the capture clips (demo/capture) into the 78-second demo described in
-the session's demo-plan.md: a title card, one scene per beat inside a macOS-style window with a
-caption and highlights, and an end card, with a music track underneath.
+A Remotion project that cuts the capture clips (demo/capture) into a 78-second demo:
+a title card, one scene per beat inside a macOS-style window with a caption and highlights, and an
+end card, with a music track underneath.
 
 ```sh
 npm install
@@ -10,7 +10,8 @@ npm install
 npm test           # the timing arithmetic
 ```
 
-`render.sh` reads the clips from `$DEMO_DIR/clips` (or `CLIPS_DIR`) and the music from
+`render.sh` reads the clips from `$DEMO_DIR/clips` (or `CLIPS_DIR`; `DEMO_DIR` defaults to
+`~/.tiller-demo`, as in `demo/capture/run.mjs`) and the music from
 `$DEMO_DIR/music` (or `MUSIC`); neither is committed. The beats, trims, speed-ups and highlight
 regions are in `src/beats.js`; the regions are rectangles in page pixels (the 1280x720 capture),
 measured from the clip frames, so they need re-measuring after a new capture. Playwright records

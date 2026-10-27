@@ -382,6 +382,45 @@ human's line is the newest report, labelled with its account.
 **Not a sandbox.** Accounts prevent accidental cross-account use; they do not stop an agent
 with a shell from running `CLAUDE_CONFIG_DIR=… claude` itself.
 
+## Usage and quotas
+
+The usage panel shows each harness's account quotas. Codex reads them through its app-server
+(see [the Codex adapter](../adapters/codex/README.md#account-quotas)); Claude reports them from
+its mod's `session.measure`.
+
+Discovery automatically checks the daemon launch PATH even with no live nodes.
+Opening the overview or choosing Rescan runs at most three `--version` probes,
+concurrently, with 1.5-second deadlines and 16 KiB output limits. Results are
+cached for one minute and concurrent requests coalesce. Failed probes remain
+detected tools with an explicit version-check failure. Authentication is unknown
+until a quota report arrives. Pi does not expose provider account quotas through
+the current adapter. Unknown accounts are
+isolated by reporting node; identified account/provider/pool reports may be shared
+only between nodes that actually reported that identity. Reports survive node
+exit/removal and websocket reconnects for the daemon lifetime, but not daemon
+restart. No background provider polling or inference is performed.
+
+Each normalized window carries `windowId` and `observedAt`. Sparse notifications
+keep the original observation time on cached windows, so the daemon can merge a
+shared account's reports without regressing a newer reading from another agent.
+Nullable IDs resolve to a known mirror pool or the single unambiguous known pool.
+Sparse null spend metadata is retained; a full-read null emits timestamped
+`removedWindows` entries so the registry removes that window and rejects older
+cached copies. Read failures remain scoped to the reporting node; healthy nodes
+sharing an identified account retain their available snapshot.
+
+Removed nodes lose their source bindings. At most one newest unidentified closed
+snapshot per tool is retained; unidentified accounts are never combined. Known
+accounts retain their pools, and context-only measures do not broadcast snapshots.
+Expired reset windows display “reset passed · awaiting report” with no old percent.
+
+Claude Code 2.1.302 was inspected locally (read-only native binary): its mod
+`session.measure` normalization currently emits `five_hour`, `seven_day`, and
+`spend_limit` for gateway usage. Native Opus/Sonnet windows exist elsewhere but are
+not emitted by that conversion. If explicit `seven_day_opus` / `seven_day_sonnet`
+windows arrive, Tiller labels their family pools and filters unrelated families
+from the selected-agent bar. It does not infer exact-model quotas from model names.
+
 ## Adapter boundary
 
 `src/daemon/harness.ts` defines `HarnessAdapter`: validation, capabilities, launch command,

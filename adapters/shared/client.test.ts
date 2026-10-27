@@ -67,23 +67,21 @@ describe("TillerClient", () => {
     );
   });
 
-  it("posts ack, mod-event, hook, focus and honest retirement with node auth", async () => {
+  it("posts ack, mod-event, hook and honest retirement with node auth", async () => {
     const { calls, fetchFn } = recorder();
     const c = client(fetchFn);
     await c.ack("m1");
     await c.modEvent("turn.complete", { turnId: "1" });
     await c.hook({ hook_event_name: "SessionStart" });
-    await c.focus("n-2");
     await c.unconfirmed("m1");
     expect(calls.map((call) => call.url)).toEqual([
       "http://127.0.0.1:7000/ack",
       "http://127.0.0.1:7000/mod-event",
       "http://127.0.0.1:7000/hook",
-      "http://127.0.0.1:7000/focus",
       "http://127.0.0.1:7000/unconfirmed",
     ]);
-    expect(JSON.parse(calls[4].init.body)).toEqual({ id: "m1" });
-    expect(calls[4].init.headers).toMatchObject({ Authorization: "Bearer secret", "X-TL-Node": "n-1" });
+    expect(JSON.parse(calls[3].init.body)).toEqual({ id: "m1" });
+    expect(calls[3].init.headers).toMatchObject({ Authorization: "Bearer secret", "X-TL-Node": "n-1" });
     expect(calls[1].init.headers["X-TL-Node"]).toBe("n-1");
   });
 

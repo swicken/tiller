@@ -53,7 +53,7 @@ placed on the command line. Tiller's existing tools and lineage restrictions are
 The bridge serializes lifecycle reports from `turn/started`, `turn/completed`, item events,
 and token-usage notifications through `/hook` and `/mod-event`. Context usage is reported, and so
 are account quota windows, read once when the native UI attaches and updated from Codex's
-rate-limit notifications (see [USAGE-INTEGRATION.md](USAGE-INTEGRATION.md)); dollar cost is not
+rate-limit notifications (see [Account quotas](#account-quotas)); dollar cost is not
 available from this adapter.
 A report the daemon cannot take, for example during `tl reload` or `tl update`, is retried
 every second for up to 60 seconds, holding later events so reports stay in order. After that
@@ -103,6 +103,45 @@ cannot bypass its restrictions by selecting Codex. A Codex parent may spawn Code
 The node-scoped HTTP client is shared with Pi in `adapters/shared/client.ts`. The readable
 transcript header format/parser lives in `src/shared/codex-transcript.ts`; transcript path
 selection and adoption remain in the daemon.
+
+## Account quotas
+
+`adapters/codex/bridge.ts` reads account quotas once when the native UI attaches
+and starts inbox polling. The read runs without blocking startup. Account quota
+notifications are handled before thread filtering because they are account-scoped.
+Both paths publish through the bridge's shutdown-deadline wrapper; usage transport
+failures never stop the agent. A completed background read is not published after
+shutdown begins.
+
+`readCodexUsage` issues exactly one read on the existing RPC connection, with a
+2-second deadline. Invoke it without `await` so it never blocks startup. It never
+starts an app-server, thread or turn, and returns `{ usageUnavailable: true }` on
+RPC failure, timeout, or a response without reportable quota windows. Publishing
+that measure retains prior snapshots and marks them stale/unavailable. Publishing
+must also be caught separately so HTTP telemetry failures cannot call the bridge's
+fatal handler. There is no automatic retry or recurring quota probe.
+
+`CodexUsage.measure(payload)` returns `{ usageReports }` for real quota windows,
+or `{ usageUnavailable: true }` for unavailable data. `reports(payload)` remains
+available for normalization alone. Keep one instance for the bridge lifetime so
+sparse updates preserve unrelated pools and account identity; a reported account
+switch clears prior-account pool state. Neither method fabricates model-specific
+quotas or converts token counts, credits or dollar balances into quota use.
+
+The manager derives tool identity from the authenticated node, including Codex.
+The native generated protocol was inspected locally with:
+
+```sh
+codex app-server generate-ts --out /tmp/tiller-usage-codex-protocol
+```
+
+Relevant generated contracts: `v2/GetAccountRateLimitsResponse.ts`,
+`v2/AccountRateLimitsUpdatedNotification.ts`, `v2/RateLimitSnapshot.ts`,
+`v2/RateLimitWindow.ts`, and `v2/SpendControlLimitSnapshot.ts`. Read responses
+support `rateLimitsByLimitId`, fallback `rateLimits`, and optional `accountId`.
+Rolling updates are sparse and omit account metadata. `normalModelSlug` describes
+a quota alias and does not prove a model-exclusive quota. Unix reset timestamps
+are seconds. Credits and dollar balances are not quota percentages.
 
 ## Validation
 

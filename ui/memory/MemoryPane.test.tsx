@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isValidElement, type ReactElement, type ReactNode } from 'react';
+import { isValidElement, type ReactNode } from 'react';
 import type { ClientMessage, MemoryItemView, MemoryPage, MemoryTarget } from '../../src/shared/protocol';
 import { send } from '../conn';
 import { Markdown } from '../controls/Markdown';
 import { applyServer, getState, update } from '../store';
 import { MemoryPane } from './MemoryPane';
+import { elements, type Element } from '../test-tree';
 
 // The pane's real handlers and effects, without a DOM: a small renderer calls each function component with hook state kept
 // per position in the tree, and runs effects whose dependencies changed, as React would.
@@ -34,7 +35,6 @@ vi.mock('../store', async (original) => {
 vi.mock('../conn', () => ({ send: vi.fn() }));
 vi.mock('../hooks', () => ({ useNow: () => 100_000 }));
 
-type Element = ReactElement<Record<string, any>>;
 function expand(node: ReactNode, path: string): ReactNode {
   if (Array.isArray(node)) return node.map((n, i) => expand(n, `${path}.${i}`));
   if (!isValidElement(node)) return node;
@@ -48,12 +48,6 @@ function expand(node: ReactNode, path: string): ReactNode {
     return expand(out, key);
   }
   return { ...el, props: { ...el.props, children: expand(el.props.children, `${path}.${String(el.type)}`) } } as Element;
-}
-function elements(node: ReactNode): Element[] {
-  if (Array.isArray(node)) return node.flatMap(elements);
-  if (!isValidElement(node)) return [];
-  const el = node as Element;
-  return [el, ...elements(el.props.children)];
 }
 const text = (node: ReactNode): string => Array.isArray(node) ? node.map(text).join('') : isValidElement(node) ? text((node as Element).props.children) : typeof node === 'string' || typeof node === 'number' ? String(node) : '';
 
@@ -71,7 +65,7 @@ function render() {
 const all = () => elements(tree);
 const find = (match: (el: Element) => boolean) => { const el = all().find(match); if (!el) throw Error('missing element'); return el; };
 const button = (label: string | RegExp, within: (el: Element) => boolean = () => true) => {
-  const el = all().filter(within).flatMap(elements).find((e) => e.type === 'button' && (typeof label === 'string' ? text(e.props.children) === label : label.test(text(e.props.children))));
+  const el = all().filter(within).flatMap((e) => elements(e)).find((e) => e.type === 'button' && (typeof label === 'string' ? text(e.props.children) === label : label.test(text(e.props.children))));
   if (!el) throw Error(`missing button ${label}`);
   return el;
 };

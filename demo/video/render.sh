@@ -4,7 +4,7 @@
 # (MUSIC overrides; see README.md).
 set -eu
 cd "$(dirname "$0")"
-demo=${DEMO_DIR:-$HOME/.tiller/sessions/n-8f9599e6/demo}
+demo=${DEMO_DIR:-$HOME/.tiller-demo}
 clips=${CLIPS_DIR:-$demo/clips}
 music=${MUSIC:-$demo/music/Meditating Beat.mp3}
 out=$demo/out

@@ -18,7 +18,7 @@ export interface SpawnOpts {
 export type ScreenClass = 'prompt' | 'dialog' | 'unknown';
 
 /** Lines of headless scrollback kept above the visible screen for each node. */
-export const SCROLLBACK_LINES = 1000;
+const SCROLLBACK_LINES = 1000;
 
 const DIALOG_TEXT = /Enter to confirm|Esc to cancel|Quick safety check|No, exit/;
 const NUMBERED_OPTION = /^(❯\s*)?\d+\.\s+\S/;
@@ -161,10 +161,6 @@ export class PtySession {
 
   /** Last n rows of the viewport (not rows up to the cursor), right-trimmed. */
   screenTail(n: number): string[] {
-    return this.lines(n);
-  }
-
-  private lines(n: number): string[] {
     const buf = this.term.buffer.active;
     const end = buf.baseY + this.term.rows - 1;
     const start = Math.max(0, end - n + 1);
