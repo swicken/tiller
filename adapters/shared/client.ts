@@ -181,9 +181,4 @@ export class TillerClient {
   async hook(event: Record<string, unknown>): Promise<void> {
     await this.call("POST", "/hook", event);
   }
-
-  /** Ask the daemon/UI to focus another node. */
-  async focus(id: string): Promise<void> {
-    await this.call("POST", "/focus", { id });
-  }
 }

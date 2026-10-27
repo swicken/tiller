@@ -19,8 +19,6 @@ export interface BridgeConfig {
   nodeId: string;
   endpoint: string;
   tokenFile: string;
-  parentId?: string;
-  sessionDir?: string;
   /**
    * The daemon-minted Tiller session id (`TL_SESSION_ID`). The node record, transcript path and
    * resume all key off this value, so the bridge must never replace it with Pi's own header UUID.
@@ -48,10 +46,7 @@ const nonEmpty = (value: string | undefined): string | undefined => {
  * Parse the Tiller environment. Returns a result object rather than throwing so the caller can
  * surface a single human-readable error and stay inert.
  */
-export function parseBridgeConfig(
-  env: Record<string, string | undefined>,
-  options: { defaultPollIntervalMs?: number } = {},
-): ParseBridgeConfigResult {
+export function parseBridgeConfig(env: Record<string, string | undefined>): ParseBridgeConfigResult {
   const nodeId = nonEmpty(env.TL_NODE_ID);
   if (!nodeId) return { ok: false, error: "TL_NODE_ID is required" };
 
@@ -70,7 +65,7 @@ export function parseBridgeConfig(
   const tokenFile = nonEmpty(env.TL_TOKEN_FILE);
   if (!tokenFile) return { ok: false, error: "TL_TOKEN_FILE is required" };
 
-  let pollIntervalMs = options.defaultPollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  let pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   const rawPoll = nonEmpty(env.TL_PI_POLL_MS);
   if (rawPoll !== undefined) {
     const parsed = Number(rawPoll);
@@ -97,8 +92,6 @@ export function parseBridgeConfig(
       nodeId,
       endpoint: endpoint.replace(/\/+$/, ""),
       tokenFile,
-      parentId: nonEmpty(env.TL_PARENT_ID),
-      sessionDir: nonEmpty(env.TL_SESSION_DIR),
       sessionId: nonEmpty(env.TL_SESSION_ID),
       pollIntervalMs,
       hookTools: ["1", "true", "yes", "on"].includes(

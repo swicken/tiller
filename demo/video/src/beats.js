@@ -1,4 +1,4 @@
-// The cut, beat by beat (demo-plan.md), tuned to capture run 4. Plain data so node scripts
+// The cut, beat by beat, tuned to the last capture. Plain data so node scripts
 // can import it too.
 export const FPS = 30;
 

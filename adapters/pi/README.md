@@ -77,7 +77,7 @@ mod). Pi loads the directory through `jiti`, so no build step is required.
 | `TL_ENDPOINT` | yes | Daemon base URL, e.g. `http://127.0.0.1:7654`. |
 | `TL_TOKEN_FILE` | yes | File holding the node bearer token (0600). |
 | `TL_SESSION_ID` | no | The daemon-minted Tiller session id reported as `session_id`. Missing means unmanaged. |
-| `TL_PARENT_ID` | no | Recorded but not otherwise used by the bridge. |
+| `TL_PARENT_ID` | no | Parent node id; not used by the bridge itself. |
 | `TL_SESSION_DIR` | no | Tiller session directory; not used by the bridge itself. |
 | `TL_PI_POLL_MS` | no | Developer override, never set by the daemon. Inbox poll interval in ms, `>= 100`. Default `1000`. |
 | `TL_PI_HOOK_TOOLS` | no | `1`/`true`/`yes`/`on` to forward tool activity as `/hook`. The daemon always sets `1`. |
