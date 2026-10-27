@@ -4,16 +4,14 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
-import { PROFILES, isSupportedEffort } from '../shared/harness-policy.js';
+import { HARNESSES, PROFILES, isSupportedEffort } from '../shared/harness-policy.js';
 import { EFFORTS, ISOLATIONS, type Harness, type Profile, type Role } from '../shared/protocol.js';
-import { CLAUDE_ACCOUNT_NAME, CLAUDE_ACCOUNT_NAME_RULE, SETTINGS_HARNESSES, SETTINGS_PROFILES, SETTINGS_PROFILE_DEFAULTS, type SettingsEntry } from '../shared/settings.js';
+import { CLAUDE_ACCOUNT_NAME, CLAUDE_ACCOUNT_NAME_RULE, SETTINGS_PROFILE_DEFAULTS, type SettingsEntry } from '../shared/settings.js';
 import { homeDir } from './home.js';
 import { expandHome } from './util.js';
 
 export const MERGE_STYLES = ['merge', 'squash', 'ff-only'] as const;
 export type MergeStyle = (typeof MERGE_STYLES)[number];
-export const NOTIFY_KINDS = ['needsYou', 'done', 'errored', 'exited'] as const;
-export type NotifyKind = (typeof NOTIFY_KINDS)[number];
 export const NOTIFY_LEVELS = ['banner', 'sound', 'silent'] as const;
 export type NotifyLevel = (typeof NOTIFY_LEVELS)[number];
 /** "HH:MM-HH:MM", local time; the end may be earlier than the start (across midnight). */
@@ -260,7 +258,7 @@ export function configEntries(cwd: string | null, home = homeDir()): Record<Key,
  */
 export function effectiveProfileEntries(entries: Record<string, SettingsEntry>): Record<string, SettingsEntry> {
   const resolved = { ...entries };
-  for (const harness of SETTINGS_HARNESSES) for (const profile of SETTINGS_PROFILES) {
+  for (const harness of HARNESSES) for (const profile of PROFILES) {
     const role = profile === 'orchestrator' ? 'orchestrator' : 'worker';
     for (const leaf of ['model', 'effort'] as const) {
       const key = `profiles.${harness}.${profile}.${leaf}`;
@@ -276,7 +274,7 @@ export function effectiveProfileEntries(entries: Record<string, SettingsEntry>):
  * a project mapped to one account would silently run in Claude's default home, so callers that pick an account fail closed on this instead.
  */
 export function claudeAccountsError(home = homeDir()): string | undefined {
-  const path = join(home, 'config.json'), claude = homeClaude(path), listError = claudeAccountListError(home);
+  const path = join(home, 'config.json'), claude = homeClaude(path), listError = accountListError(path, claude?.accounts);
   if (listError) return listError;
   const account = claude?.account;
   if (account !== undefined && !(Array.isArray(claude?.accounts) && claude.accounts.some((a: { name?: unknown }) => a?.name === account))) {
@@ -287,7 +285,11 @@ export function claudeAccountsError(home = homeDir()): string | undefined {
 
 /** Why the home file's claude.accounts list itself is invalid, or undefined (claude.account aside). */
 export function claudeAccountListError(home = homeDir()): string | undefined {
-  const path = join(home, 'config.json'), accounts = homeClaude(path)?.accounts;
+  const path = join(home, 'config.json');
+  return accountListError(path, homeClaude(path)?.accounts);
+}
+
+function accountListError(path: string, accounts: unknown): string | undefined {
   if (accounts === undefined) return undefined;
   const r = ClaudeAccounts.safeParse(accounts);
   return r.success ? undefined : `claude.accounts in ${path} is invalid: ${r.error.issues.map((i) => `${['claude', 'accounts', ...i.path].join('.')}: ${i.message}`).join('; ')}`;

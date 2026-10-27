@@ -19,6 +19,12 @@ const release = (tag: string) => {
   git(seed, 'tag', tag); git(seed, 'push', '-q', 'origin', 'main', '--tags');
   return publish(tag);
 };
+/** Put a fake npm running `script` first on PATH; returns the env for applyUpdate. */
+function fakeNpm(script: string) {
+  const bin = join(dir, 'bin'); mkdirSync(bin);
+  writeFileSync(join(bin, 'npm'), `#!/bin/sh\n${script}\n`); chmodSync(join(bin, 'npm'), 0o755);
+  return { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+}
 function setupCheckout() {
   if (!template) {
     dir = mkdtempSync(join(tmpdir(), 'tiller-release-test-'));
@@ -147,10 +153,9 @@ describe('release checkout', () => {
     git(work, 'merge', '--ff-only', target);
     const current = { ...await checkUpdate(work, source), runtimeSha: status.runtimeSha };
     expect(current).toMatchObject({ eligible: true, sha: target, runtimeSha: status.runtimeSha, releases: [] });
-    const bin = join(dir, 'bin'), calls = join(dir, 'calls'); mkdirSync(bin);
-    writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho "$*" >> '${calls}'\n`); chmodSync(join(bin, 'npm'), 0o755);
+    const calls = join(dir, 'calls'), env = fakeNpm(`echo "$*" >> '${calls}'`);
     const restart = vi.fn(async (sha: string) => expect(sha).toBe(target));
-    await applyUpdate({ repo: work, log: join(dir, 'log'), expected: current, source, restart, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    await applyUpdate({ repo: work, log: join(dir, 'log'), expected: current, source, restart, env });
     expect(readFileSync(calls, 'utf8')).toContain('run ui:build');
     expect(restart).toHaveBeenCalledOnce();
     expect(git(work, 'rev-parse', 'HEAD')).toBe(target);
@@ -163,13 +168,12 @@ describe('release checkout', () => {
     await checkUpdate(work, source);
     git(work, 'merge', '--ff-only', target);
     const current = { ...await checkUpdate(work, source), runtimeSha };
-    const bin = join(dir, 'bin'), calls = join(dir, 'calls'); mkdirSync(bin);
-    writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho "$*" >> '${calls}'\n`); chmodSync(join(bin, 'npm'), 0o755);
+    const calls = join(dir, 'calls'), env = fakeNpm(`echo "$*" >> '${calls}'`);
     const restart = vi.fn(async (sha: string) => {
       expect(sha).toBe(target);
       if (restart.mock.calls.length === 1) throw new Error('temporary restart failure');
     });
-    await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: current, source, restart, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })).rejects.toThrow('temporary restart failure');
+    await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: current, source, restart, env })).rejects.toThrow('temporary restart failure');
     expect(restart).toHaveBeenCalledTimes(2);
     expect(readFileSync(calls, 'utf8')).toContain('run ui:build');
     expect(git(work, 'rev-parse', 'HEAD')).toBe(target);
@@ -184,10 +188,9 @@ describe('release checkout', () => {
     git(work, 'merge', '--ff-only', checkout);
     const expected = { ...await checkUpdate(work, source), runtimeSha };
     expect(expected.sha).toBe(checkout);
-    const bin = join(dir, 'bin'), calls = join(dir, 'calls'); mkdirSync(bin);
-    writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho "$*" >> '${calls}'\n`); chmodSync(join(bin, 'npm'), 0o755);
+    const calls = join(dir, 'calls'), env = fakeNpm(`echo "$*" >> '${calls}'`);
     const restart = vi.fn(async (sha: string) => expect(sha).toBe(target));
-    await applyUpdate({ repo: work, log: join(dir, 'log'), expected, source, restart, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    await applyUpdate({ repo: work, log: join(dir, 'log'), expected, source, restart, env });
     expect(readFileSync(calls, 'utf8')).toContain('run ui:build');
     expect(restart).toHaveBeenCalledOnce();
     expect(git(work, 'rev-parse', 'HEAD')).toBe(target);
@@ -292,11 +295,10 @@ describe('release checkout', () => {
     mkdirSync(join(seed, 'ui')); commit('ui/app', 'old'); release('v0.1.1');
     git(work, 'merge', '--ff-only', (await checkUpdate(work, source)).target!.sha);
     commit('ui/app', 'new'); release('v0.1.2');
-    const s = await checkUpdate(work, source), bin = join(dir, 'bin'); mkdirSync(bin);
-    const builds = join(dir, 'builds');
-    writeFileSync(join(bin, 'npm'), `#!/bin/sh\ngit rev-parse HEAD >> '${builds}'\nexit 1\n`); chmodSync(join(bin, 'npm'), 0o755);
+    const s = await checkUpdate(work, source), builds = join(dir, 'builds');
+    const env = fakeNpm(`git rev-parse HEAD >> '${builds}'\nexit 1`);
     const restart = vi.fn(async () => {});
-    await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: s, source, restart, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })).rejects.toThrow('rollback incomplete');
+    await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: s, source, restart, env })).rejects.toThrow('rollback incomplete');
     expect(restart).not.toHaveBeenCalled();
     expect(git(work, 'rev-parse', 'HEAD')).toBe(s.sha);
     expect(readFileSync(builds, 'utf8').trim().split('\n')).toEqual([s.target!.sha, s.sha]);
@@ -317,17 +319,15 @@ describe('release checkout', () => {
     mkdirSync(join(seed, 'ui')); commit('ui/app', 'old'); release('v0.1.1');
     git(work, 'merge', '--ff-only', (await checkUpdate(work, source)).target!.sha);
     commit('ui/app', 'new'); release('v0.1.2');
-    const s = await checkUpdate(work, source), bin = join(dir, 'bin'); mkdirSync(bin);
-    writeFileSync(join(bin, 'npm'), '#!/bin/sh\necho keep > ui/app\nexit 1\n'); chmodSync(join(bin, 'npm'), 0o755);
-    await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: s, source, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })).rejects.toThrow('rollback incomplete');
+    const s = await checkUpdate(work, source), env = fakeNpm('echo keep > ui/app\nexit 1');
+    await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: s, source, env })).rejects.toThrow('rollback incomplete');
     expect(readFileSync(join(work, 'ui/app'), 'utf8')).toBe('keep\n');
   });
   it('refuses restart and preserves a checkout moved by a build', async () => {
     mkdirSync(join(seed, 'ui')); commit('ui/app', 'new'); release('v0.1.1');
-    const s = await checkUpdate(work, source), bin = join(dir, 'bin'); mkdirSync(bin);
-    writeFileSync(join(bin, 'npm'), '#!/bin/sh\ngit checkout -qb user-branch\nexit 0\n'); chmodSync(join(bin, 'npm'), 0o755);
+    const s = await checkUpdate(work, source), env = fakeNpm('git checkout -qb user-branch\nexit 0');
     const restart = vi.fn(async () => {});
-    await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: s, source, restart, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } })).rejects.toThrow('HEAD or branch changed during update');
+    await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: s, source, restart, env })).rejects.toThrow('HEAD or branch changed during update');
     expect(restart).not.toHaveBeenCalled();
     expect(git(work, 'symbolic-ref', '--short', 'HEAD')).toBe('user-branch');
     expect(git(work, 'rev-parse', 'HEAD')).toBe(s.target!.sha);
@@ -344,10 +344,8 @@ describe('release checkout', () => {
     git(work, 'merge', '--ff-only', (await checkUpdate(work, source)).target!.sha);
     mkdirSync(join(work, 'src-tauri/target/release/bundle/macos/Tiller.app'), { recursive: true });
     commit('src-tauri/config', 'new'); release('v0.1.2');
-    const s = await checkUpdate(work, source), bin = join(dir, 'bin'); mkdirSync(bin);
-    const paths = join(dir, 'paths'), failed = join(dir, 'failed');
-    writeFileSync(join(bin, 'npm'), `#!/bin/sh\necho "$PATH" >> '${paths}'\nif [ ! -e '${failed}' ]; then touch '${failed}'; exit 1; fi\n`); chmodSync(join(bin, 'npm'), 0o755);
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const s = await checkUpdate(work, source), paths = join(dir, 'paths'), failed = join(dir, 'failed');
+    const env = fakeNpm(`echo "$PATH" >> '${paths}'\nif [ ! -e '${failed}' ]; then touch '${failed}'; exit 1; fi`);
     await expect(applyUpdate({ repo: work, log: join(dir, 'log'), expected: s, source, env })).rejects.toThrow('npm run app:build failed');
     expect(readFileSync(paths, 'utf8').trim().split('\n')).toEqual([`/opt/homebrew/opt/rustup/bin:${env.PATH}`, `/opt/homebrew/opt/rustup/bin:${env.PATH}`]);
     expect(git(work, 'rev-parse', 'HEAD')).toBe(s.sha);

@@ -14,7 +14,7 @@ type Mgr = Pick<NodeManager, 'view' | 'turnStartedAt'>;
 const succeeded = (v: NodeView | undefined) => v?.outcome?.outcome === 'succeeded' && v.outcome.gate !== 'failed';
 
 /** Where a pending node's dependencies stand: every one now met, and the first failed afterSuccess one as "n-x: <outcome line>". */
-export function checkDeps(m: Mgr, p: Pending, since: number): { met: string[]; unmet: string[]; blocked?: string } {
+function checkDeps(m: Mgr, p: Pending, since: number): { met: string[]; unmet: string[]; blocked?: string } {
   const met = new Set(p.met);
   for (const id of p.after) if (turnDone(m, id, since)) met.add(id);
   for (const id of p.afterSuccess) if (succeeded(m.view(id))) met.add(id);
@@ -34,7 +34,7 @@ export function checkDeps(m: Mgr, p: Pending, since: number): { met: string[]; u
 /** Working now, or launched with a prompt whose first turn has not begun. */
 export const working = (rt?: NodeRuntime) => !!rt && (!!rt.starting || (!!rt.session && rt.status?.state === 'working'));
 
-/** Claude nodes working now, or launched with a prompt whose first turn has not begun. */
+/** Agent nodes working now, or launched with a prompt whose first turn has not begun. */
 function workingCount(m: NodeManager): number {
   return m.registry.list().filter((n) => isAgentKind(n.kind) && working(m.runtimes.get(n.id))).length;
 }

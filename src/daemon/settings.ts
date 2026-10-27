@@ -129,8 +129,8 @@ function moveProject(data: Record<string, unknown>, project: string, account: st
 export function updateSettings(manager: NodeManager, update: SettingsUpdate): SettingsSnapshot {
   const { scope, nodeId } = update, changes = { ...update.changes };
   const { path, projectPath, homePath } = target(manager, scope, nodeId);
-  settingsSnapshot(manager, scope, nodeId); // Refuse unreadable inherited layers before writing.
   const before = read(path);
+  if (scope === 'project') read(homePath); // Refuse an unreadable inherited layer before writing.
   if (revision(before.raw) !== update.revision) throw new SettingsError(409, 'Settings changed; reload before saving');
   // A repo's account is chosen in the home file (agents can edit the repo's), so it is checked against the home revision.
   let home: { data: Record<string, unknown>; revision: string } | undefined;

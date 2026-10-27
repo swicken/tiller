@@ -1,7 +1,8 @@
-import { harnessFor, isAgentKind, type NodeView, type Usage, type UsageSource } from './protocol.js';
+import { limitResetPassed, limitStale } from './format.js';
+import { HARNESS_LABELS, harnessFor, isAgentKind, type Harness, type NodeView, type Usage, type UsageSource } from './protocol.js';
 
-export const usageToolName = (tool: string) => ({ claude: 'Claude Code', codex: 'Codex', pi: 'Pi' })[tool] ?? tool;
-export const usageStale = (source: UsageSource, now: number) => source.at !== undefined && (source.availability === 'unavailable' || source.rateLimits.some((l) => (l.resetsAt && Date.parse(l.resetsAt) <= now) || (l.observedAt !== undefined && now - l.observedAt > 300_000)) || now - source.at > 5 * 60_000);
+export const usageToolName = (tool: string) => tool === 'claude' ? 'Claude Code' : HARNESS_LABELS[tool as Harness] ?? tool;
+export const usageStale = (source: UsageSource, now: number) => source.at !== undefined && (source.availability === 'unavailable' || source.rateLimits.some((l) => limitResetPassed(l, now) || limitStale(l, now)) || now - source.at > 5 * 60_000);
 
 /** Only reports tied to this node or its Tiller Claude account; an unidentified account is never borrowed from another agent. */
 export function selectedUsage(node: NodeView | undefined, sources: UsageSource[] | undefined, legacy?: Usage): UsageSource[] {

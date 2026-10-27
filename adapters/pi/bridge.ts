@@ -58,8 +58,6 @@ export interface TillerBridgeDeps {
   onDelivered?: (message: InboxMessage) => void;
   /** Called when a submitted-but-unaccepted message disappears from the daemon inbox. */
   onExpired?: (message: InboxMessage) => void;
-  /** Called with the count of held/being-delivered messages. */
-  onPending?: (count: number) => void;
   /** Called for poll/claim/send/ack failures. */
   onError?: (error: unknown, phase: string) => void;
   /** Default 1000 ms. */
@@ -101,7 +99,8 @@ export class TillerBridge {
   private readonly now: () => number;
   /** Guard stale inbox snapshots/late acceptance after retirement. Framed prompts contain unique ids. */
   private readonly retired = new Set<string>();
-  private readonly held: HeldMessage[] = [];
+  /** At most one claimed message is held at a time. */
+  private held?: HeldMessage;
   /** Steers the running turn was aborted for once; never abort again on later polls. */
   private readonly steersAborted = new Set<string>();
   private timer: unknown;
@@ -119,7 +118,7 @@ export class TillerBridge {
 
   /** Messages claimed but not yet accepted and acked. */
   get pendingCount(): number {
-    return this.held.length;
+    return this.held ? 1 : 0;
   }
 
   /** Start the poll loop. Idempotent; the first poll runs immediately. */
@@ -161,7 +160,6 @@ export class TillerBridge {
       this.deps.onError?.(error, "poll");
     } finally {
       this.polling = false;
-      this.deps.onPending?.(this.pendingCount);
     }
   }
 
@@ -172,7 +170,7 @@ export class TillerBridge {
    */
   async confirmAccepted(text: string): Promise<void> {
     if (this.stopped) return;
-    const message = this.held[0];
+    const message = this.held;
     if (!message) return;
     if (!message.submitted || message.accepted || message.retiring) return;
     // Only the injected message that Pi actually ran is confirmed; an unrelated human prompt
@@ -183,7 +181,7 @@ export class TillerBridge {
   }
 
   private isKnown(id: string): boolean {
-    return this.retired.has(id) || this.held.some((message) => message.id === id);
+    return this.retired.has(id) || this.held?.id === id;
   }
 
   private async claim(message: InboxMessage): Promise<boolean> {
@@ -217,16 +215,15 @@ export class TillerBridge {
     // At most one claimed message is held at a time, so a submitted-but-unaccepted message is
     // never bypassed and the message behind it stays withdrawable in the daemon. Still check
     // whether the daemon dropped it (TTL/restart/close) so it cannot wedge the queue forever.
-    if (this.held.length > 0) {
-      const held = this.held[0];
+    const held = this.held;
+    if (held) {
       if (held.submitted && !held.accepted) {
         if (messages.some((message) => message.id === held.id)) {
           held.inboxMisses = 0;
         } else {
           held.inboxMisses += 1;
           if (held.inboxMisses >= EXPIRY_MISSES) {
-            const at = this.held.indexOf(held);
-            if (at >= 0) this.held.splice(at, 1);
+            this.held = undefined;
             this.retired.add(held.id);
             this.deps.onExpired?.(held);
           }
@@ -257,7 +254,7 @@ export class TillerBridge {
       }
       if (this.stopped) return;
       // Submitted by the flush that follows, or released if Pi became busy during the claim.
-      this.held.push(this.newHeld(message));
+      this.held = this.newHeld(message);
       return;
     }
   }
@@ -277,7 +274,7 @@ export class TillerBridge {
   /** Submit or ack the held message. Never runs two submissions at once. */
   private async flush(): Promise<void> {
     if (this.delivering || this.stopped) return;
-    const message = this.held[0];
+    const message = this.held;
     if (!message) return;
     this.delivering = true;
     try {
@@ -300,7 +297,6 @@ export class TillerBridge {
       await this.release(message);
     } finally {
       this.delivering = false;
-      this.deps.onPending?.(this.pendingCount);
     }
   }
 
@@ -338,8 +334,7 @@ export class TillerBridge {
       this.deps.onError?.(error, "release");
       return;
     }
-    const at = this.held.indexOf(message);
-    if (at >= 0) this.held.splice(at, 1);
+    this.drop(message);
   }
 
   /** Retirement is a distinct terminal state; a late acceptance cannot turn it into delivery. */
@@ -352,9 +347,15 @@ export class TillerBridge {
       return; // retry retirement only, never submission
     }
     this.retired.add(message.id);
-    const at = this.held.indexOf(message);
-    if (at >= 0) this.held.splice(at, 1);
+    this.drop(message);
     this.deps.onUnconfirmed?.(message);
+  }
+
+  /** Stop holding `message`. False if it was not the held one (already dropped, or never held). */
+  private drop(message: HeldMessage): boolean {
+    if (this.held !== message) return false;
+    this.held = undefined;
+    return true;
   }
 
   /** Ack a submitted, accepted message. A failure keeps it for a later retry; success releases it. */
@@ -363,11 +364,7 @@ export class TillerBridge {
     message.acking = true;
     try {
       await this.deps.client.ack(message.id);
-      const at = this.held.indexOf(message);
-      if (at >= 0) {
-        this.held.splice(at, 1);
-        this.deps.onDelivered?.(message);
-      }
+      if (this.drop(message)) this.deps.onDelivered?.(message);
     } catch (error) {
       this.deps.onError?.(error, "ack");
     } finally {

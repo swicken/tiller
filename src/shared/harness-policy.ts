@@ -1,6 +1,7 @@
 /** Agent CLIs supported by Tiller. Legacy records default to Claude. */
 export const HARNESSES = ['claude', 'pi', 'codex'] as const;
 export type Harness = (typeof HARNESSES)[number];
+export const HARNESS_LABELS: Record<Harness, string> = { claude: 'Claude', pi: 'Pi', codex: 'Codex' };
 
 /** Task behavior, independent of the coordination role and selected harness. */
 export const PROFILES = ['orchestrator', 'implementation', 'explorer', 'mechanical', 'reviewer'] as const;
