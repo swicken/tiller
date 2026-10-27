@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { ReactElement, ReactNode } from 'react';
+import { elements as walk } from './test-tree';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StatusBar } from './StatusBar';
 import { Dialogs } from './dialogs/Dialogs';
@@ -17,13 +18,8 @@ vi.mock('./store', async (original) => {
 vi.mock('./conn', () => ({ send: vi.fn(), refreshUsage: vi.fn() }));
 vi.mock('./hooks', () => ({ useNow: () => 100, toggleDnd: vi.fn() }));
 vi.mock('react', async (original) => ({ ...await original<typeof import('react')>(), useState: (initial: unknown) => [initial, vi.fn()], useRef: () => ({ current: null }), useMemo: (fn: () => unknown) => fn(), useEffect: (fn: () => unknown) => effects.push(fn) }));
-type Element = ReactElement<Record<string, any>>;
-function elements(node: ReactNode): Element[] {
-  if (Array.isArray(node)) return node.flatMap(elements);
-  if (!node || typeof node !== 'object' || !('props' in node)) return [];
-  const element = node as Element;
-  return [element, ...elements(element.props.children), ...elements(element.props.footer)];
-}
+// A modal's footer prop holds nodes too.
+const elements = (node: ReactNode) => walk(node, 'footer');
 function command(key: string) {
   const element = elements(Palette()).find((el) => el.key === `cmd:${key}`);
   if (!element) throw Error(`Missing command ${key}`);

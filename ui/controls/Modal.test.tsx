@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import type { ReactElement, ReactNode } from 'react';
+import { elements } from '../test-tree';
 import { Modal } from './Modal';
 
 // Exercise the real component handlers without adding a DOM dependency.
@@ -18,13 +18,6 @@ vi.mock('react', async (original) => ({
   },
   useLayoutEffect: (effect: () => void) => { if (!hooks.effects.length) hooks.effects.push(effect); },
 }));
-type Element = ReactElement<Record<string, any>>;
-function elements(node: ReactNode): Element[] {
-  if (Array.isArray(node)) return node.flatMap(elements);
-  if (!node || typeof node !== 'object' || !('props' in node)) return [];
-  const element = node as Element;
-  return [element, ...elements(element.props.children)];
-}
 function render(props: Partial<Parameters<typeof Modal>[0]> = {}) {
   hooks.cursor = 0;
   return Modal({ title: 'Notes', children: <input autoFocus />, ...props });

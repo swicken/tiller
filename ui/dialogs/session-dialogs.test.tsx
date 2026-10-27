@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import type { ReactElement, ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { elements, type Element } from '../test-tree';
 import { Dialogs } from './Dialogs';
 import { getState, openDialog, update } from '../store';
 import { mk } from '../fixtures';
@@ -15,13 +16,6 @@ vi.mock('../store', async (original) => {
   const store = await original<typeof import('../store')>();
   return { ...store, useStore: (select: (s: ReturnType<typeof store.getState>) => unknown) => select(store.getState()) };
 });
-type Element = ReactElement<Record<string, any>>;
-function elements(node: ReactNode): Element[] {
-  if (Array.isArray(node)) return node.flatMap(elements);
-  if (!node || typeof node !== 'object' || !('props' in node)) return [];
-  const element = node as Element;
-  return [element, ...elements(element.props.children)];
-}
 function render(): Element {
   const dialog = Dialogs() as Element;
   return (dialog.type as (props: object) => Element)(dialog.props);
