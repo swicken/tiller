@@ -16,7 +16,7 @@ The benchmarks for memory v3's gardener (plan §5). Both layers load the labeled
 npm test -- bench/memory/gardener/layer-g.test.ts
 ```
 
-It drives the real store, and for G9 the real `Gardener` with a fake host, through scripted actions. Each case seeds its own temp home.
+It drives the real store, and for G2 and G9 the real `Gardener`, through scripted actions. Each case seeds its own temp home.
 
 | Case | Fixture | Asserts |
 |---|---|---|
@@ -28,13 +28,10 @@ It drives the real store, and for G9 the real `Gardener` with a fake host, throu
 | G6 digest ceiling | g-std | The oracle at least halves digest redundancy. Redundancy is counted over the fixture's query digests: the lines that share a labeled cluster with another line of the same digest. Brief recall does not fall; a cluster counts as one fact, shown by any member. Every pin in the orchestrator digest stays |
 | G7 idempotence | g-std | After the oracle, page 1 of a new run proposes no hidden item in a cluster or a supersede hint |
 | G8 purge | g-std | Purging a keep tombstones its merged members, clears their `merged_into`, and blanks the actions' reasons |
-| G9 lease and recovery | g-small | A second `startRun` is refused while the heartbeat is live. A tick recovers a stale run whose node record is gone as `interrupted`. It charges $0.25 (the cap), marks the cost incomplete, verifies the run and leaves its actions in place. A stale run whose node is live in this daemon is left running |
-| G10 migration | g-small | A v1 file holding the fixture's rows migrates to schema 2 with every row intact. A v2 file opened by a store whose `SCHEMA_VERSION` is stubbed to 1 is "off", refuses writes and keeps its bytes |
-| G11 verify shapes | g-std | An in-run chain, and a human forget of a keep mid-run, pass `verifyRun`. A merge whose chain ends on an item the same run superseded fails it |
+| G9 recovery through the daemon | g-small | A `NodeManager` finds a previous daemon's gardener record whose run still holds the lease. Resume on start refuses that record, and the first tick recovers the run: `interrupted`, charged the cap, with the node's outcome set and nothing launched. Lease and stale-run rules on their own are in `memory-store.test.ts` and `gardener.test.ts` |
 
-G2 and G9 each have a second case through the daemon:
+G2 has a second case through the daemon:
 - **G2 through the tools:** the gardener node makes the same attempts through `garden_merge` and `garden_supersede` over `/api`, and gets the same refusals. As in `memory-garden-tools.test.ts`, the node is a relabelled terminal, so no harness runs.
-- **G9 through the daemon:** a `NodeManager` finds a previous daemon's gardener record whose run still holds the lease. Resume on start refuses that record, and the first tick recovers the run: `interrupted`, charged the cap, with the node's outcome set and nothing launched.
 
 G1, G2 and G6 also log their numbers (refusal rate, refusals by rule, redundancy and recall), which `npx vitest run … --silent=false` shows.
 

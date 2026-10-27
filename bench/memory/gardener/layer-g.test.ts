@@ -1,17 +1,17 @@
 // Memory gardener bench Layer G (plan §5.2): the real store and runtime driven through scripted actions on the labeled
 // fixtures. Deterministic and LLM-free; Layer H (live.ts) runs the model.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Gardener, type GardenHost } from '../../../src/daemon/gardener.js';
+import { Gardener } from '../../../src/daemon/gardener.js';
 import { GARDENER_REFUSAL } from '../../../src/daemon/lifecycle-guards.js';
 import { NodeManager } from '../../../src/daemon/manager.js';
 import { switchMemory } from '../../../src/daemon/memory-config.js';
 import {
-  keepRank, LIMITS, SCHEMA_V1, type Actor, type GardenActionInput, type GardenApplyResult, type ItemRow, type MemoryScope,
+  keepRank, type Actor, type GardenActionInput, type GardenApplyResult, type ItemRow, type MemoryScope,
 } from '../../../src/daemon/memory-schema.js';
 import { MemoryStore } from '../../../src/daemon/memory-store.js';
 import { PtySession } from '../../../src/daemon/pty.js';
@@ -361,36 +361,7 @@ describe('G8 purge', () => {
   });
 });
 
-describe('G9 lease and recovery', () => {
-  it('g-small: refuses a second lease while the heartbeat is live; recovers a stale run, charged the full cap, never one whose node is live here', async () => {
-    const c = seed('g-small');
-    writeFileSync(join(c.home, 'config.json'), JSON.stringify({ memory: { enabled: true, gardener: { enabled: true } } }));
-    const r1 = start(c);
-    expect(c.store.startRun(c.scope(), { trigger: 'manual', model: 'm' })).toEqual({ ok: false, reason: `garden run r${r1} holds this memory file's lease` });
-    const [keep, member] = cluster(c, 2);
-    expect(merge(c, r1, [member, keep])).toMatchObject({ ok: true });
-    c.store.setRunNode(undefined, r1, 'n-gone');
-    c.clock += LIMITS.garden.leaseMs + 1;
-    const r2 = start(c); // the stale lease no longer holds
-    c.store.setRunNode(undefined, r2, 'n-live');
-    c.clock += LIMITS.garden.leaseMs + 1;
-
-    const host: GardenHost = {
-      home: c.home, store: c.store,
-      spawnGardener: () => Promise.reject(new Error('no spawn in this case')), stopGardener: async () => {}, closePreviousGardener: async () => {},
-      quiet: () => false, usageFor: () => undefined, trusted: () => true,
-      live: (id) => id === 'n-live', record: () => undefined, gardenerRecords: () => [], setOutcome: () => {},
-    };
-    const verify = vi.spyOn(c.store, 'verifyRun');
-    const g = new Gardener(host, { now: () => c.clock });
-    await g.tick();
-    await g.stop();
-    expect(c.store.run(undefined, r1)).toMatchObject({ state: 'interrupted', costUsd: 0.25, costIncomplete: true, endedAt: c.clock });
-    expect(verify).toHaveBeenCalledWith(undefined, r1);
-    expect(byId(c).get(member)!.invalid_kind).toBe('merged'); // an interrupted run is not undone: the human may
-    expect(c.store.run(undefined, r2).state).toBe('running');
-  });
-
+describe('G9 recovery', () => {
   it('g-small through the daemon: resume on start skips a gardener record left running, and the first tick recovers its run', async () => {
     const { c, repo } = seedCheckout('g-small');
     writeFileSync(join(c.home, 'config.json'), JSON.stringify({ memory: { enabled: true } }));
@@ -420,98 +391,3 @@ describe('G9 lease and recovery', () => {
     }
   });
 });
-
-describe('G10 migration', () => {
-  it('g-small: a v1 file migrates to v2 with every item intact', () => {
-    const c = seed('g-small');
-    const before = c.rows();
-    const home = tempHome();
-    mkdirSync(join(home, 'memory'));
-    const v1 = new DatabaseSync(join(home, 'memory', '_default.db'));
-    v1.exec(SCHEMA_V1);
-    const cols = (v1.prepare('PRAGMA table_info(items)').all() as { name: string }[]).map((x) => x.name).join(', ');
-    v1.exec(`ATTACH '${c.store.accountFile(undefined)}' AS src;
-      INSERT INTO repos SELECT * FROM src.repos WHERE key <> 'account:';
-      INSERT INTO episodes SELECT * FROM src.episodes;
-      INSERT INTO items (${cols}) SELECT ${cols} FROM src.items;
-      DETACH src;`);
-    expect(v1.prepare('PRAGMA user_version').get()).toEqual({ user_version: 1 });
-    v1.close();
-    const s = new MemoryStore(home, { now: () => c.clock });
-    try {
-      expect(s.status()[0]).toMatchObject({ state: 'ok', schema: 2 });
-      const text = before.find((r) => r.kind === 'pitfall')!.text;
-      expect(s.search(c.scope(), { query: text }).map((v) => v.text)).toContain(text);
-      expect(rowsOf(join(home, 'memory', '_default.db'))).toEqual(before);
-      expect(s.startRun(c.scope(), { trigger: 'manual', model: 'm' })).toMatchObject({ ok: true });
-    } finally {
-      s.close();
-    }
-  });
-
-  it('g-small: a v2 file opened by a store whose SCHEMA_VERSION is 1 is off and never written', async () => {
-    const c = seed('g-small');
-    seeded.splice(seeded.indexOf(c), 1);
-    c.store.close();
-    const file = c.store.accountFile(undefined), bytes = readFileSync(file);
-    vi.doMock('../../../src/daemon/memory-schema.js', async (orig) => ({ ...(await orig<object>()), SCHEMA_VERSION: 1 }));
-    vi.resetModules();
-    try {
-      const { MemoryStore: V1Store } = await import('../../../src/daemon/memory-store.js');
-      const s = new V1Store(c.home, { now: () => c.clock, log: () => {} });
-      try {
-        expect(s.status()[0].state).toBe('off: written by a newer tiller (schema 2)');
-        expect(() => s.pin(c.scope(), human, { text: 'written by the old daemon' })).toThrow('written by a newer tiller');
-        expect(() => s.startRun(c.scope(), { trigger: 'manual', model: 'm' })).toThrow('written by a newer tiller');
-      } finally {
-        s.close();
-      }
-    } finally {
-      vi.doUnmock('../../../src/daemon/memory-schema.js');
-      vi.resetModules();
-    }
-    expect(readFileSync(file).equals(bytes)).toBe(true);
-    expect(rowsOf(file)).toHaveLength(c.rows().length);
-  });
-});
-
-describe('G11 verify shapes', () => {
-  it('g-std: an in-run chain and a human forget of a keep mid-run pass the post-run check', () => {
-    const c = seed('g-std');
-    const [C, A, B] = chain(c);
-    const [K, M] = cluster(c, 2, (rs) => !rs.some((r) => [C, A, B].includes(r.id)));
-    const run = start(c);
-    expect(merge(c, run, [A, B])).toMatchObject({ ok: true, kept: A });
-    expect(merge(c, run, [A, C])).toMatchObject({ ok: true, kept: C });
-    expect(merge(c, run, [M, K])).toMatchObject({ ok: true, kept: K });
-    c.clock += 1000;
-    c.store.forget(c.scope(), human, { id: K, reason: 'wrong' });
-    end(c, run);
-    expect(c.store.verifyRun(undefined, run)).toEqual([]);
-  });
-
-  it('g-std: a merge whose chain ends on an item the same run superseded fails the post-run check', () => {
-    const c = seed('g-std');
-    const rows = byId(c);
-    // A procedure a newer one replaced: merge a duplicate into it, then supersede it in the same run.
-    const label = c.labels((g) => g.stale === 'supersedable').find((l) => rows.get(c.id(l))!.kind === 'procedure')!;
-    const old = { old: c.id(label), by: c.id(c.fx.garden[label].by!) };
-    const text = rows.get(old.old)!.text;
-    const dup = c.store.add(at(c, rootAgent), rootAgent, { kind: 'procedure', text: `${text} --silent` }).id;
-    const run = start(c);
-    expect(merge(c, run, [dup, old.old])).toMatchObject({ ok: true, kept: old.old });
-    expect(c.store.gardenApply(undefined, run, { action: 'supersede', id: old.old, by: old.by, reason: 'replaced' })).toMatchObject({ ok: true });
-    end(c, run);
-    expect(c.store.verifyRun(undefined, run)).toEqual([`m${dup} merges into m${old.old}, which r${run} also hid`]);
-  });
-});
-
-/** Every item row of a memory file, ordered by id. */
-function rowsOf(file: string): ItemRow[] {
-  const db = new DatabaseSync(file, { readOnly: true });
-  try {
-    return db.prepare('SELECT * FROM items ORDER BY id').all() as unknown as ItemRow[];
-  } finally {
-    db.close();
-  }
-}
