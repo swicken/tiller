@@ -360,7 +360,8 @@ export type ServerMessage =
   | { t: 'update'; update: UpdateStatus }
   | { t: 'claudeAccounts'; accounts: ClaudeAccountView[] } // reply to the claudeAccounts request
   // nodes, like 'node' messages, omit prompt, pending.prompt and sessionHistory
-  | { t: 'snapshot'; nodes: NodeView[]; update?: UpdateStatus; usage?: Usage; usageSources?: UsageSource[]; dnd?: Dnd; drain?: Drain }
+  | { t: 'snapshot'; nodes: NodeView[]; update?: UpdateStatus; usage?: Usage; usageSources?: UsageSource[]; dnd?: Dnd; drain?: Drain; sessionOrder?: string[] } // sessionOrder: root ids in tab order
+  | { t: 'sessionOrder'; ids: string[] }    // the human rearranged the session tabs
   | { t: 'drain'; drain?: Drain }            // a restart started, progressed or ended waiting for agents
   | ({ t: 'dnd' } & Dnd)                     // do not disturb changed
   | { t: 'usageSources'; sources: UsageSource[] }
@@ -421,6 +422,7 @@ export type ClientMessage =
   | { t: 'send'; id: string; text: string; mode?: SendMode } // a message from the human, as `tl send` delivers it; replies sent
   | { t: 'mute'; id: string; muted: boolean }  // the human mutes or unmutes a node's OS notifications
   | { t: 'dnd'; on: boolean; minutes?: number } // do not disturb on (for minutes, else until turned off) or off
+  | { t: 'sessionOrder'; ids: string[] }    // save the session tab order (root ids, left to right); broadcast to every client
   ;
 
 // Outcome of delivering a message into an agent node (PLAN.md §6).

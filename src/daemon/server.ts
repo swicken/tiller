@@ -76,6 +76,7 @@ const clientMessage = z.discriminatedUnion('t', [
   z.object({ t: z.literal('followup'), id, prompt: z.string().min(1), title: z.string().min(1).optional() }),
   z.object({ t: z.literal('send'), id, text: z.string().min(1), mode: z.enum(['queue', 'now']).optional() }),
   z.object({ t: z.literal('mute'), id, muted: z.boolean() }),
+  z.object({ t: z.literal('sessionOrder'), ids: z.array(id).max(10_000) }),
   z.object({ t: z.literal('dnd'), on: z.boolean(), minutes: z.number().positive().max(7 * 24 * 60).optional() }),
 ]) satisfies z.ZodType<ClientMessage>;
 
@@ -191,6 +192,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
   manager.on('notify', (n: NotifyEvent) => broadcast({ t: 'notify', ...n }));
   manager.on('usageSources', (sources) => broadcast({ t: 'usageSources', sources }));
   manager.on('usage', (usage: Usage) => broadcast({ t: 'usage', usage }));
+  manager.on('sessionOrder', (ids: string[]) => broadcast({ t: 'sessionOrder', ids }));
   // While a restart drains, every node change may change who it waits for.
   let lastDrain = '';
   const syncDrain = () => {
@@ -298,6 +300,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
         if (!manager.mute(m.id, m.muted)) sendTo(c, { t: 'error', message: `no such node: ${m.id}`, id: m.id });
         return;
       case 'dnd': setDnd(m.on, m.minutes); return;
+      case 'sessionOrder': manager.setSessionOrder(m.ids); return;
     }
   }
 
@@ -329,7 +332,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
           c.kind = msg.client;
           syncUpdateChecks();
           clearTimeout(authTimer);
-          sendTo(c, { t: 'snapshot', update: updates.status(), nodes: manager.list().map(forUi), usage: manager.usage, usageSources: manager.usageRegistry.sources, dnd, drain: manager.drainView() });
+          sendTo(c, { t: 'snapshot', update: updates.status(), nodes: manager.list().map(forUi), usage: manager.usage, usageSources: manager.usageRegistry.sources, dnd, drain: manager.drainView(), sessionOrder: manager.sessionOrder() });
         } else {
           ws.close(4401, 'auth required');
         }

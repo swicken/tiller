@@ -175,6 +175,7 @@ export interface NodeRuntime {
  *   'data'    (id: string, data: string)  raw PTY output
  *   'notify'  (n: NotifyEvent)
  *   'usage'   (u: Usage)                  a node reported account-level rate limits
+ *   'sessionOrder' (ids: string[])       the human rearranged the session tabs
  */
 export class NodeManager extends EventEmitter {
   readonly home: string;
@@ -797,6 +798,20 @@ export class NodeManager extends EventEmitter {
 
   rename(id: string, title: string): void {
     if (this.registry.update(id, { title })) this.emitNode(id);
+  }
+
+  /** Root ids in tab order: the human's arrangement, then any root it does not name, oldest first. */
+  sessionOrder(): string[] {
+    const roots = this.registry.list().filter((n) => n.parentId === null).sort((a, b) => a.createdAt - b.createdAt).map((n) => n.id);
+    const saved = this.registry.sessionOrder.filter((id) => roots.includes(id));
+    return [...saved, ...roots.filter((id) => !saved.includes(id))];
+  }
+
+  /** Save the human's tab order, dropping ids that are not session roots, and announce it. */
+  setSessionOrder(ids: string[]): void {
+    const roots = new Set(this.registry.list().filter((n) => n.parentId === null).map((n) => n.id));
+    this.registry.setSessionOrder([...new Set(ids)].filter((id) => roots.has(id)));
+    this.emit('sessionOrder', this.sessionOrder());
   }
 
   /** Stop or restore a node's notifications (kept in its record); false when there is no such node. */

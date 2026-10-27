@@ -9,6 +9,8 @@ export class NodeRegistry {
   private liveIds: string[] = [];
   /** Why the daemon stopped cleanly; absent after a crash or kill. The next start reads it and clears it. */
   private stopReason: string | undefined;
+  /** Root ids in the order the human arranged the session tabs. */
+  private order: string[] = [];
   private closed = false;
 
   constructor(private file: string) {}
@@ -26,6 +28,7 @@ export class NodeRegistry {
       this.nodes = new Map((data.nodes as NodeRecord[]).map((n) => [n.id, n]));
       this.liveIds = Array.isArray(data.live) ? data.live.filter((x: unknown): x is string => typeof x === 'string') : [];
       this.stopReason = typeof data.stopped === 'string' ? data.stopped : undefined;
+      this.order = Array.isArray(data.sessionOrder) ? data.sessionOrder.filter((x: unknown): x is string => typeof x === 'string') : [];
     } catch {
       try { renameSync(this.file, `${this.file}.corrupt-${Date.now()}`); } catch { /* best effort */ }
       this.nodes = new Map();
@@ -79,7 +82,15 @@ export class NodeRegistry {
     this.save();
   }
 
+  get sessionOrder(): string[] { return this.order; }
+
+  setSessionOrder(ids: string[]): void {
+    this.order = ids;
+    this.save();
+  }
+
   remove(id: string): boolean {
+    this.order = this.order.filter((x) => x !== id);
     const had = this.nodes.delete(id);
     if (had) this.save();
     return had;
@@ -91,7 +102,7 @@ export class NodeRegistry {
     clearTimeout(this.timer);
     this.timer = undefined;
     const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ version: 1, nodes: this.list(), live: this.liveIds, stopped: this.stopReason }, null, 2));
+    writeFileSync(tmp, JSON.stringify({ version: 1, nodes: this.list(), live: this.liveIds, stopped: this.stopReason, sessionOrder: this.order }, null, 2));
     renameSync(tmp, this.file);
   }
 

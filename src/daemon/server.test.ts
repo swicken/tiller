@@ -101,6 +101,25 @@ describe('websocket', () => {
     await until(() => vi.mocked(server.updates.stop).mock.calls.length > stopped || undefined);
   });
 
+  it('saves the session tab order in state.json, broadcasts it, and fills in roots it does not name', async () => {
+    const mk = (title: string, parentId: string | null = null) => manager.registry.create({ parentId, kind: 'terminal', title, cwd: home });
+    const a = mk('a'), b = mk('b'), c = mk('c'), child = mk('child', a.id);
+    await connect();
+    const snap = await until(() => seen.find((m) => m.t === 'snapshot'));
+    expect(snap.t === 'snapshot' && snap.sessionOrder).toEqual([a.id, b.id, c.id]);
+    // Children, unknown and repeated ids are dropped; roots left out follow, oldest first.
+    send({ t: 'sessionOrder', ids: [c.id, 'n-gone', child.id, a.id, c.id] });
+    const sent = await until(() => seen.find((m) => m.t === 'sessionOrder'));
+    expect(sent).toEqual({ t: 'sessionOrder', ids: [c.id, a.id, b.id] });
+    manager.registry.remove(a.id);
+    manager.registry.flush();
+    expect(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).sessionOrder).toEqual([c.id]);
+    const next = new NodeManager({ home, shell: '/bin/sh' });
+    const d = next.registry.create({ parentId: null, kind: 'terminal', title: 'd', cwd: home });
+    expect(next.sessionOrder()).toEqual([c.id, b.id, d.id]);
+    await next.shutdown();
+  });
+
   it('rejects a bad token', async () => {
     await connect('wrong');
     const code = await new Promise((ok) => ws!.once('close', ok));
