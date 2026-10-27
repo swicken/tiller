@@ -13,7 +13,7 @@ import { mountMcp } from './mcp.js';
 import { inbox } from './messaging.js';
 import { transcriptFor } from './transcript.js';
 import * as wt from './worktree.js';
-import { refreshGit, refreshMovedTips } from './worktree-lifecycle.js';
+import { queueMerge, refreshGit, refreshMovedTips } from './worktree-lifecycle.js';
 
 const g = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 const commit = (dir: string, file: string) => { writeFileSync(join(dir, file), `${file}\n`); g(dir, 'add', file); g(dir, 'commit', '-qm', `add ${file}`); };
@@ -335,6 +335,136 @@ describe('worktree nodes', () => {
       await new Promise((r) => server.close(r));
     }
   });
+
+  it('archives a branch with no commits as empty, and one whose commits are in base as merged', async () => {
+    setup();
+    const empty = await spawnW(), merged = await spawnW();
+    commit(merged.cwd, 'a.txt');
+    g(repo, 'merge', '-q', '--no-ff', '--no-edit', `tl/${merged.id}`);
+    await m.close(empty.id, true);
+    await m.close(merged.id, true);
+    const fates = Object.fromEntries((await history(m.home)).map((a) => [a.id, [a.branchFate, a.base, a.brief]]));
+    expect(fates).toEqual({ [empty.id]: ['empty', undefined, '(no commits)'], [merged.id]: ['merged', 'dev', '(merged into dev)'] });
+  });
+});
+
+describe('read-only (detached) worktree nodes', () => {
+  const spawnD = (extra: Partial<SpawnRequest> = {}) => spawnW({ isolation: 'detached', ...extra });
+
+  it('checks out base with HEAD detached and no branch; an unknown base is refused', async () => {
+    setup();
+    g(repo, 'checkout', '-q', '-b', 'feat');
+    commit(repo, 'f.txt');
+    const feat = g(repo, 'rev-parse', 'HEAD');
+    g(repo, 'checkout', '-q', 'dev');
+    const v = await spawnD({ base: 'feat' });
+    const path = join(repo, '.claude', 'worktrees', v.id);
+    expect(v.worktree).toEqual({ repo, path, base: 'feat', baseSha: feat });
+    expect(g(path, 'rev-parse', 'HEAD')).toBe(feat);
+    expect(g(path, 'branch', '--show-current')).toBe('');
+    expect(g(repo, 'branch', '--list', 'tl/*')).toBe('');
+    expect((await spawnD()).worktree).toMatchObject({ base: 'dev', baseSha: g(repo, 'rev-parse', 'dev') }); // no base: the cwd's HEAD
+    await expect(spawnD({ base: 'nope' })).rejects.toThrow('base branch nope does not exist');
+    expect(g(repo, 'branch', '--list', 'nope')).toBe('');
+  });
+
+  it('refuses a merge; a clean close removes the tree and archives it as read-only', async () => {
+    setup();
+    const v = await spawnD();
+    await expect(m.merge(v.id)).rejects.toThrow(`${v.id} has a read-only (detached) worktree: there is no branch to merge`);
+    await m.close(v.id, true);
+    expect(existsSync(v.cwd)).toBe(false);
+    expect(g(repo, 'worktree', 'list').split('\n')).toHaveLength(1);
+    const [a] = await history(m.home);
+    expect([a!.branch, a!.branchFate, a!.base, a!.brief]).toEqual([undefined, 'detached', 'dev', '(read-only)']);
+  });
+
+  it('close refuses uncommitted files and stray commits on the detached HEAD; keep puts them on a branch', async () => {
+    setup();
+    const v = await spawnD();
+    writeFileSync(join(v.cwd, 'b.txt'), 'b\n');
+    await expect(m.close(v.id, true)).rejects.toThrow(/^worktree kept: 1 dirty file, 0 unmerged commits in a read-only \(detached\) worktree; close with keep or discard$/);
+    g(v.cwd, 'add', 'b.txt');
+    g(v.cwd, 'commit', '-qm', 'stray');
+    await expect(m.close(v.id, true)).rejects.toThrow(/^worktree kept: 0 dirty files, 1 unmerged commit in a read-only \(detached\) worktree; close with keep or discard$/);
+    expect(existsSync(v.cwd)).toBe(true);
+    expect(await m.close(v.id, true, 'keep')).toBe(`kept branch tl/${v.id}`);
+    expect(existsSync(v.cwd)).toBe(false);
+    expect(g(repo, 'log', '-1', '--format=%s', `tl/${v.id}`)).toBe('stray');
+    const [a] = await history(m.home);
+    expect([a!.branch, a!.branchFate]).toEqual([`tl/${v.id}`, 'kept']);
+  });
+
+  it('discard drops a stray commit, and its git state counts it', async () => {
+    setup();
+    const v = await spawnD();
+    commit(v.cwd, 'a.txt');
+    await refreshGit(m, v.id);
+    expect(m.view(v.id)!.status.git).toMatchObject({ base: 'dev', ahead: 1, dirty: 0 });
+    expect(m.view(v.id)!.status.git!.branch).toBeUndefined();
+    await m.close(v.id, true, 'discard');
+    expect(existsSync(v.cwd)).toBe(false);
+    expect(g(repo, 'branch', '--list', 'tl/*')).toBe('');
+    expect((await history(m.home))[0]!.branchFate).toBe('discarded');
+  });
+
+  it('a whenIdle merge of a working read-only node is refused at once, queueing nothing', async () => {
+    setup();
+    const v = await spawnD();
+    m.applyHook(v.id, { hook_event_name: 'UserPromptSubmit' });
+    const settle = vi.fn();
+    await expect(queueMerge(m, v.id, 'n-caller', settle)).rejects.toThrow(`${v.id} has a read-only (detached) worktree: there is no branch to merge`);
+    m.applyHook(v.id, { hook_event_name: 'Stop' });
+    await null;
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('the tip watch sees a base move under a read-only node, which never gets a conflict check', async () => {
+    setup();
+    const v = await spawnD();
+    writeFileSync(join(v.cwd, 'README'), 'theirs\n');
+    g(v.cwd, 'commit', '-qam', 'theirs'); // a stray commit that would conflict with base
+    m.applyHook(v.id, { hook_event_name: 'Stop' });
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 1, behind: 0 });
+    writeFileSync(join(repo, 'README'), 'ours\n');
+    g(repo, 'commit', '-qam', 'ours'); // no hook: only the tip watch sees dev move
+    const err = vi.spyOn(console, 'error');
+    await refreshMovedTips(m);
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 1, behind: 1 });
+    expect(m.view(v.id)!.status.git!.conflicts).toBeUndefined();
+    expect(m.view(v.id)!.status.git!.branch).toBeUndefined();
+    expect(err.mock.calls.flat().join(' ')).not.toContain('merge-tree'); // never asked: there is no branch to merge into
+    err.mockRestore();
+  });
+
+  it('a read-only node whose worktree is gone has an empty diff', async () => {
+    setup();
+    const v = await spawnD();
+    await exited(v.id);
+    rmSync(v.cwd, { recursive: true, force: true });
+    expect(await m.diff(v.id)).toEqual({ base: 'dev', files: [] });
+  });
+
+  it('judges a detached orphan at its HEAD: startup removes a clean one and lists one with a commit; force reports it', async () => {
+    setup();
+    await spawnW(); // records the repo in worktree-repos.json
+    const sha = g(repo, 'rev-parse', 'HEAD');
+    const orphan = async (id: string) => {
+      const path = join(repo, '.claude', 'worktrees', id);
+      await wt.addDetached(repo, path, sha);
+      await wt.writeMarker(path, { home: m.home, nodeId: id, base: 'dev', baseSha: sha });
+      return path;
+    };
+    const busy = await orphan('n-0000000d');
+    commit(busy, 'x.txt');
+    const idle = await orphan('n-0000000e');
+    const r = await m.worktrees({ clean: 'startup' });
+    expect(r.removed.map((x) => x.what)).toEqual([`worktree ${idle}`]);
+    expect(r.orphans).toEqual([expect.objectContaining({ nodeId: 'n-0000000d', branch: undefined, dirty: [], unmerged: [expect.stringContaining('add x.txt')] })]);
+    expect((await m.worktrees({ cwd: repo, clean: 'safe' })).orphans).toHaveLength(1);
+    const forced = await m.worktrees({ cwd: repo, clean: 'force' });
+    expect(forced.removed).toEqual([{ what: `worktree ${busy}`, commits: [expect.stringContaining('add x.txt')], files: [] }]);
+  });
 });
 
 describe('git state and merge', () => {
@@ -590,7 +720,7 @@ describe('git state and merge', () => {
     setup();
     g(repo, 'branch', '-m', 'main');
     const main = g(repo, 'rev-parse', 'main');
-    await expect(m.spawn({ kind: 'claude', title: 'w', cwd: repo, base: 'feat/x' })).rejects.toThrow('base is for isolation "worktree" only');
+    await expect(m.spawn({ kind: 'claude', title: 'w', cwd: repo, base: 'feat/x' })).rejects.toThrow('base is for isolation "worktree" or "detached" only');
     await expect(spawnW({ base: 'bad..name' })).rejects.toThrow('not a valid branch name: bad..name');
     const v = await spawnW({ base: 'feat/x' });
     expect(v.worktree).toMatchObject({ base: 'feat/x', baseSha: main });

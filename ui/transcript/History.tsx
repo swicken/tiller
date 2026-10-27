@@ -10,9 +10,9 @@ import { getState, openDialog, useStore, viewArchived } from '../store';
 import { OutcomeGlyph } from './parts';
 import { TranscriptPane } from './TranscriptPane';
 
-/** "tl/n-123 merged into main", "tl/n-123 kept", "tl/n-123 discarded", or the bare branch when its fate is unknown. */
+/** "tl/n-123 merged into main", "tl/n-123 no commits", "tl/n-123 kept", "tl/n-123 discarded", "detached @ main" for a read-only node, or the bare branch when its fate is unknown. */
 export const branchLine = (a: ArchivedNode) =>
-  !a.branchFate ? a.branch : `${a.branch} ${a.branchFate === 'merged' && a.base ? `merged into ${a.base}` : a.branchFate}`;
+  a.branchFate === 'detached' ? `detached @ ${a.base ?? 'its base'}` : !a.branchFate ? a.branch : `${a.branch} ${a.branchFate === 'merged' && a.base ? `merged into ${a.base}` : a.branchFate === 'empty' ? 'no commits' : a.branchFate}`;
 
 /** Closed nodes of this tree or all trees, newest first, filtered by the daemon; picking one shows it in the main pane. */
 export function HistoryPanel() {
@@ -53,9 +53,9 @@ export function HistoryPanel() {
                 <span className="title">{a.title}</span>
                 <span className="age" title={`closed ${new Date(a.closedAt).toLocaleString()}`}>{fmtAge(now - a.closedAt)} ago</span>
               </span>
-              {(a.branch || a.spentUsd !== undefined) && (
+              {(branchLine(a) || a.spentUsd !== undefined) && (
                 <span className="meta">
-                  {a.branch && <span className="part"><span className="branch" title={branchLine(a)}>⎇ {branchLine(a)}</span></span>}
+                  {branchLine(a) && <span className="part"><span className="branch" title={branchLine(a)}>⎇ {branchLine(a)}</span></span>}
                   {a.spentUsd !== undefined && <span className="part">{fmtUsd(a.spentUsd, a.spentIncomplete)}</span>}
                 </span>
               )}
@@ -86,7 +86,7 @@ export function ArchivePane({ a }: { a: ArchivedNode }) {
         </div>
         <div className="tb2">
           <span className="cwd" title={a.cwd}>{a.cwd}</span>
-          {a.branch && <span className="tag">⎇ {branchLine(a)}</span>}
+          {branchLine(a) && <span className="tag">⎇ {branchLine(a)}</span>}
           {a.spentUsd !== undefined && <span>{fmtUsd(a.spentUsd, a.spentIncomplete)}</span>}
         </div>
         {a.brief && <p className="brief">{a.brief}</p>}

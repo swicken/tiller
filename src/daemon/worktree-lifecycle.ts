@@ -23,8 +23,8 @@ const GIT_DEBOUNCE_MS = 15_000;
 /** Limit for each worktree setup or teardown command. */
 const SETUP_TIMEOUT_MS = 10 * 60_000;
 
-/** What stands between a node's worktree and its removal. */
-export interface WorktreeCheck { dirty: string[]; unmerged: string[]; sharing: string[] }
+/** What stands between a node's worktree and its removal. detached: a read-only worktree, whose unmerged commits sit on a detached HEAD. */
+export interface WorktreeCheck { dirty: string[]; unmerged: string[]; sharing: string[]; detached?: boolean }
 
 /**
  * Why closing a worktree node must not go ahead, or undefined. Another live node working inside the tree always
@@ -34,12 +34,14 @@ export function closeRefusal(c: WorktreeCheck, mode?: 'keep' | 'discard'): strin
   const unsafe = !mode && (c.dirty.length > 0 || c.unmerged.length > 0);
   const sharing = c.sharing.length ? `in use by ${c.sharing.join(', ')}` : '';
   if (!unsafe) return sharing ? `worktree ${sharing}; close those nodes first` : undefined;
-  const msg = `worktree kept: ${count(c.dirty.length, 'dirty file')}, ${count(c.unmerged.length, 'unmerged commit')}; close with keep or discard`;
+  const where = c.detached ? ' in a read-only (detached) worktree' : '';
+  const msg = `worktree kept: ${count(c.dirty.length, 'dirty file')}, ${count(c.unmerged.length, 'unmerged commit')}${where}; close with keep or discard`;
   return sharing ? `${msg}; ${sharing}` : msg;
 }
 
 export interface WorktreeReport {
-  nodes: { nodeId: string; title: string; repo: string; path: string; branch: string; base: string; missing?: boolean }[];
+  /** branch is absent for a read-only (detached) worktree. */
+  nodes: { nodeId: string; title: string; repo: string; path: string; branch?: string; base: string; missing?: boolean }[];
   /** Worktrees with this daemon's marker but no node, left by a crash between creating the worktree and saving the record. */
   orphans: { nodeId: string; repo: string; path: string; branch?: string; base: string; dirty: string[]; unmerged: string[]; error?: string }[];
   /** <prefix>n-<hex> branches with neither a worktree nor a node, such as those kept by close with keep. */
@@ -82,32 +84,32 @@ const claudeTrustsAny = (home: string, dir: string): boolean => claudeHomes(home
 
 /**
  * Give a node its worktree, branched from the tip of branch `baseBranch` (absent: the HEAD of the checkout its cwd is in),
- * and launch it, after the setup commands when configured. A failure removes the worktree and branch and throws; the
- * caller deals with the record.
+ * and launch it, after the setup commands when configured. `detached` checks that commit out with no branch, for a
+ * read-only node. A failure removes the worktree and branch and throws; the caller deals with the record.
  */
-export async function addWorktree(m: NodeManager, id: string, prompt: string | undefined, baseBranch?: string): Promise<void> {
+export async function addWorktree(m: NodeManager, id: string, prompt: string | undefined, baseBranch?: string, detached = false): Promise<void> {
   const rt = m.runtimes.get(id)!;
   rt.busy = 'creating';
   try {
-    await createWorktree(m, id, prompt, baseBranch);
+    await createWorktree(m, id, prompt, baseBranch, detached);
   } finally {
     rt.busy = undefined;
   }
 }
 
-async function createWorktree(m: NodeManager, id: string, prompt: string | undefined, baseBranch?: string): Promise<void> {
+async function createWorktree(m: NodeManager, id: string, prompt: string | undefined, baseBranch: string | undefined, detached: boolean): Promise<void> {
   const rec = m.registry.get(id)!;
   const repo = await wt.mainCheckout(rec.cwd);
   const { base, baseSha } = baseBranch ? { base: baseBranch, baseSha: await wt.branchSha(rec.cwd, baseBranch) } : await wt.headInfo(rec.cwd);
   if (!baseSha) throw new Error(`base branch ${base} no longer exists`);
   const config = loadConfig(repo, m.home); // the main checkout's file, whichever branch rec.cwd has checked out
   const path = join(repo, wt.WORKTREES_DIR, id);
-  const worktree: Worktree = { repo, path, branch: config.worktrees.branchPrefix + id, base, baseSha };
+  const worktree: Worktree = { repo, path, ...(detached ? {} : { branch: config.worktrees.branchPrefix + id }), base, baseSha };
   m.registry.update(id, { cwd: path, worktree });
   let added = false;
   try {
     rememberRepo(m, repo); // first, so startup reconciliation looks here even if a crash loses the record
-    await wt.add(repo, path, worktree.branch, baseSha);
+    await (worktree.branch ? wt.add(repo, path, worktree.branch, baseSha) : wt.addDetached(repo, path, baseSha));
     added = true;
     await wt.writeMarker(path, { home: m.home, nodeId: id, base, baseSha });
     await wt.ensureExcluded(repo);
@@ -120,22 +122,25 @@ async function createWorktree(m: NodeManager, id: string, prompt: string | undef
     if (setup.length) setupThenLaunch(m, id, worktree, setup, prompt); // in the background: it may take minutes
     else m.launch(id, prompt, false);
   } catch (err) {
-    if (added) await teardown(m, id, worktree).then(() => wt.remove(repo, path, true)).then(() => wt.deleteBranch(repo, worktree.branch)).catch(logError);
+    if (added) await teardown(m, id, worktree).then(() => wt.remove(repo, path, true)).then(() => worktree.branch && wt.deleteBranch(repo, worktree.branch)).catch(logError);
     throw err;
   }
   refreshGit(m, id).catch(logError);
 }
 
+export const detachedMergeRefusal = (id: string) => `${id} has a read-only (detached) worktree: there is no branch to merge`;
+
 export type MergeResult = { base: string; sha: string; style: MergeStyle };
 
-/** The refusals that hold whatever the node is doing, checked at once: no worktree, setup running. */
-function mergeTarget(m: NodeManager, id: string): Worktree {
+/** The refusals that hold whatever the node is doing, checked at once: no worktree, a read-only one, setup running. */
+function mergeTarget(m: NodeManager, id: string): Worktree & { branch: string } {
   const rec = m.registry.get(id);
   if (!rec) throw new Error(`no such node: ${id}`);
   const w = rec.worktree;
   if (!w) throw new Error(`${id} has no worktree of its own to merge`);
+  if (!w.branch) throw new Error(detachedMergeRefusal(id));
   if (m.runtimes.get(id)!.setup) throw new Error('worktree setup is running');
-  return w;
+  return { ...w, branch: w.branch };
 }
 
 async function refuseProtected(m: NodeManager, w: Worktree): Promise<void> {
@@ -223,8 +228,11 @@ export async function closeWorktreeNode(m: NodeManager, id: string, title: strin
   rt.busy = 'closing';
   try {
     await gitSettled(rt);
-    const refusal = closeRefusal((await worktreeCheck(m, id))!, mode);
+    const check = (await worktreeCheck(m, id))!;
+    const refusal = closeRefusal(check, mode);
     if (refusal) throw new Error(refusal);
+    // Whether it did anything, judged before removal deletes the branch: a branch with no commits merged nothing.
+    const committed = (await tipOf(w).then((tip) => !!tip && wt.hasCommits(w.repo, tip, w.baseSha)).catch(() => false)) || check.dirty.length > 0;
     const setup = rt.setup;
     setup?.abort.abort();
     await setup?.done;
@@ -238,7 +246,10 @@ export async function closeWorktreeNode(m: NodeManager, id: string, title: strin
       throw err;
     }
     // A plain close got here only with the branch merged (closeRefusal and removeWorktree check it); keep notes a kept branch.
-    m.closed(id, note, note ? { branchFate: 'kept' } : mode === 'discard' ? { branchFate: 'discarded' } : { branchFate: 'merged', base: w.base });
+    m.closed(id, note, note ? { branchFate: 'kept', ...(w.branch ? {} : { branch: keptBranch(m, id, w) }) }
+      : mode === 'discard' && committed ? { branchFate: 'discarded' }
+      : !w.branch ? { branchFate: 'detached', base: w.base }
+      : committed ? { branchFate: 'merged', base: w.base } : { branchFate: 'empty' });
     return note;
   } finally {
     rt.busy = undefined;
@@ -250,16 +261,19 @@ export async function worktreeCheck(m: NodeManager, id: string): Promise<Worktre
   const w = m.registry.get(id)?.worktree;
   if (!w) return undefined;
   const sharing = m.registry.list().filter((n) => n.id !== id && m.session(n.id) && inside(n.cwd, w.path)).map((n) => n.id);
-  if (!existsSync(w.path)) return { dirty: [], unmerged: [], sharing }; // missing: close keeps an unmerged branch, so nothing is lost
-  const [dirty, unmerged] = await Promise.all([wt.dirtyFiles(w.path), wt.unmergedCommits(w.repo, w.branch, w.base, w.baseSha)]);
+  const detached = w.branch ? {} : { detached: true };
+  if (!existsSync(w.path)) return { dirty: [], unmerged: [], sharing, ...detached }; // missing: close keeps an unmerged branch, so nothing is lost
+  // A read-only worktree's commits are judged at its detached HEAD: removing the tree would lose those not in base.
+  const tip = (await tipOf(w))!;
+  const [dirty, unmerged] = await Promise.all([wt.dirtyFiles(w.path), wt.unmergedCommits(w.repo, tip, w.base, w.baseSha)]);
   // A squash merge leaves the branch's own commits outside base; it still counts as merged until the branch moves.
-  return { dirty, unmerged: unmerged.length && (await mergedAt(w)) ? [] : unmerged, sharing };
+  return { dirty, unmerged: unmerged.length && (await mergedAt(w)) ? [] : unmerged, sharing, ...detached };
 }
 
 async function removeWorktree(m: NodeManager, id: string, title: string, w: Worktree, mode?: 'keep' | 'discard'): Promise<string | undefined> {
   if (!existsSync(w.path)) {
     await wt.prune(w.repo);
-    if (!(await wt.branchSha(w.repo, w.branch))) return undefined;
+    if (!w.branch || !(await wt.branchSha(w.repo, w.branch))) return undefined;
     if (mode === 'discard' || (!mode && !(await wt.unmergedCommits(w.repo, w.branch, w.base, w.baseSha)).length)) {
       await wt.deleteBranch(w.repo, w.branch);
       return undefined;
@@ -269,6 +283,12 @@ async function removeWorktree(m: NodeManager, id: string, title: string, w: Work
   if (mode === 'keep' && (await wt.dirtyFiles(w.path)).length) {
     await wt.git(w.path, ['add', '-A']);
     await wt.git(w.path, ['commit', '-q', '--no-verify', '-m', `WIP: tiller node "${title}" (${id})`]);
+  }
+  if (mode === 'keep' && !w.branch) {
+    // A read-only tree has no branch to keep: put its stray commits on one, or remove it with nothing lost.
+    const head = await wt.headSha(w.path);
+    if (await wt.hasCommits(w.repo, head, w.baseSha)) await wt.git(w.repo, ['branch', keptBranch(m, id, w), head]);
+    else mode = undefined;
   } else if (!mode) {
     const c = (await worktreeCheck(m, id))!; // again: the agent may have written something before it died
     if (c.dirty.length || c.unmerged.length) throw new Error(`worktree kept: changed during close (${c.dirty.length} uncommitted file(s), ${c.unmerged.length} unmerged commit(s))`);
@@ -276,9 +296,17 @@ async function removeWorktree(m: NodeManager, id: string, title: string, w: Work
   await wt.unlockForRemoval(w.repo, w.path, id);
   await teardown(m, id, w);
   await wt.remove(w.repo, w.path, mode === 'discard');
-  if (mode === 'keep') return `kept branch ${w.branch}`;
-  await wt.deleteBranch(w.repo, w.branch); // merged (checked above) or discarded
+  if (mode === 'keep') return `kept branch ${w.branch ?? keptBranch(m, id, w)}`;
+  if (w.branch) await wt.deleteBranch(w.repo, w.branch); // merged (checked above) or discarded
   return undefined;
+}
+
+/** The branch close with keep puts a read-only worktree's stray commits on: the one a worktree node would have had. */
+const keptBranch = (m: NodeManager, id: string, w: Worktree) => loadConfig(w.repo, m.home).worktrees.branchPrefix + id;
+
+/** The worktree's branch, or for a read-only one the commit its detached HEAD is at; undefined when that tree is gone. */
+async function tipOf(w: Worktree): Promise<string | undefined> {
+  return w.branch ?? (existsSync(w.path) ? wt.headSha(w.path) : undefined);
 }
 
 /** See NodeManager.worktrees. */
@@ -302,9 +330,10 @@ async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 's
     const marker = await wt.readMarker(e.path);
     if (!marker || marker.home !== m.home || m.registry.get(marker.nodeId)?.worktree) continue; // not ours, or a node's
     const dirty = await wt.dirtyFiles(e.path);
-    // A detached orphan has no branch to compare; only force removes it.
-    const unmerged = e.branch ? await wt.unmergedCommits(repo, e.branch, marker.base, marker.baseSha) : ['(detached HEAD)'];
-    const safe = !dirty.length && !!e.branch && (clean === 'startup' ? !(await wt.hasCommits(repo, e.branch, marker.baseSha)) : !unmerged.length);
+    // A detached orphan (a read-only node's) is judged at its HEAD: removing it loses the commits there.
+    const tip = e.branch ?? (await wt.headSha(e.path));
+    const unmerged = await wt.unmergedCommits(repo, tip, marker.base, marker.baseSha);
+    const safe = !dirty.length && (clean === 'startup' ? !(await wt.hasCommits(repo, tip, marker.baseSha)) : !unmerged.length);
     const orphan = { nodeId: marker.nodeId, repo, path: e.path, branch: e.branch, base: marker.base, dirty, unmerged };
     if (clean && (clean === 'force' || safe) && !live(e.path)) {
       try {
@@ -325,10 +354,10 @@ async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 's
     if (n.worktree?.repo !== repo) continue;
     setMissing(m, n.id, !entries.some((e) => wt.samePath(e.path, n.worktree!.path)));
     const w = m.registry.get(n.id)!.worktree!;
-    r.nodes.push({ nodeId: n.id, title: n.title, repo, path: w.path, branch: w.branch, base: w.base, missing: w.missing });
+    r.nodes.push({ nodeId: n.id, title: n.title, repo, path: w.path, ...(w.branch ? { branch: w.branch } : {}), base: w.base, missing: w.missing });
   }
   const prefix = loadConfig(repo, m.home).worktrees.branchPrefix;
-  const used = new Set([...entries.flatMap((e) => (e.branch ? [e.branch] : [])), ...m.registry.list().flatMap((n) => (n.worktree ? [n.worktree.branch] : []))]);
+  const used = new Set([...entries.flatMap((e) => (e.branch ? [e.branch] : [])), ...m.registry.list().flatMap((n) => (n.worktree?.branch ? [n.worktree.branch] : []))]);
   const leftover = (await wt.branches(repo, prefix)).filter((b) => !used.has(b) && /^n-[0-9a-f]{8}$/.test(b.slice(prefix.length)));
   if (!leftover.length) return;
   // The nodes and their recorded bases are gone, so judge against the main checkout's HEAD: as unmergedCommits does,
@@ -412,9 +441,10 @@ async function readGit(m: NodeManager, id: string): Promise<void> {
   const w = m.registry.get(id)?.worktree;
   if (!w || m.stopped) return;
   const missing = !existsSync(w.path);
+  const tip = await tipOf(w).catch(() => undefined);
   const [counts, stat, merged, tips] = await Promise.all([
     // Fails when the branch is gone: then zero counts. Any other failure keeps the last state.
-    wt.aheadBehind(w.repo, w.branch, w.base, w.baseSha).catch(async (err: Error) => { if (await wt.branchSha(w.repo, w.branch)) throw err; return undefined; }),
+    tip ? wt.aheadBehind(w.repo, tip, w.base, w.baseSha).catch(async (err: Error) => { if (w.branch && (await wt.branchSha(w.repo, w.branch))) throw err; return undefined; }) : undefined,
     wt.diffStat(w).catch((err: Error) => err),
     mergedAt(w),
     wt.branchTips(w.repo).catch(() => undefined),
@@ -425,23 +455,28 @@ async function readGit(m: NodeManager, id: string): Promise<void> {
   const rt = m.runtimes.get(id);
   if (!rt || m.stopped) return; // closed or shut down meanwhile
   // Merging base can conflict only when both sides have commits; the answer holds until a tip moves. A failed git call
-  // (a timeout under load) keeps the last answer and caches nothing, so the next refresh asks again.
+  // (a timeout under load) keeps the last answer and caches nothing, so the next refresh asks again. A read-only tree
+  // never merges, so it is never checked; its key still lets the tip watch see its base move.
   const key = tips && tipKey(w, tips), last = tipsSeen.get(rt);
-  const fresh = !key ? undefined : last?.key === key ? last.conflicts : counts?.ahead && counts.behind ? await baseConflicts(w, key) : [];
+  const fresh = !key ? undefined : !w.branch ? [] : last?.key === key ? last.conflicts : counts?.ahead && counts.behind ? await baseConflicts(w, key) : [];
   if (m.runtimes.get(id) !== rt || m.stopped) return;
   if (fresh) tipsSeen.set(rt, { key: key!, conflicts: fresh });
   const conflicts = fresh ?? last?.conflicts ?? [];
   if (missing) setMissing(m, id, true); // only resume and the worktree sweep clear it: they also check `git worktree list`
   const lines = counts ? { ...counts, additions, deletions } : { ahead: 0, behind: 0, additions: 0, deletions: 0 };
-  const next: GitState = { branch: w.branch, base: w.base, ...lines, dirty, ...(merged ? { mergedAt: merged } : {}), ...(conflicts.length ? { conflicts } : {}) };
+  const next: GitState = { ...(w.branch ? { branch: w.branch } : {}), base: w.base, ...lines, dirty, ...(merged ? { mergedAt: merged } : {}), ...(conflicts.length ? { conflicts } : {}) };
   if (JSON.stringify(next) === JSON.stringify(rt.git)) return;
   rt.git = next;
   m.emitNode(id);
 }
 
-/** Per node runtime: the base and branch tips its last refresh saw, and the files merging that base would conflict in. */
+/**
+ * Per node runtime: the base and branch tips its last refresh saw, and the files merging that base would conflict in. A
+ * read-only tree's key has only the base: its detached HEAD is not a ref, and moves only by commits made inside the tree,
+ * whose hooks refresh it anyway.
+ */
 const tipsSeen = new WeakMap<object, { key: string; conflicts: string[] }>();
-const tipKey = (w: Worktree, tips: Map<string, string>) => `${tips.get(w.base) ?? w.baseSha} ${tips.get(w.branch) ?? ''}`;
+const tipKey = (w: Worktree, tips: Map<string, string>) => `${tips.get(w.base) ?? w.baseSha} ${(w.branch && tips.get(w.branch)) ?? ''}`;
 
 /** The files that would conflict if base were merged into the branch (git merge-tree; nothing is touched); undefined, logged, when git fails. */
 async function baseConflicts(w: Worktree, key: string): Promise<string[] | undefined> {
@@ -477,7 +512,7 @@ export function refreshGitSoon(m: NodeManager, id: string): void {
 
 /** When the node's branch was last merged, if it has not moved since. */
 async function mergedAt(w: Worktree): Promise<number | undefined> {
-  return w.merged && ((await wt.branchSha(w.repo, w.branch)) ?? '') === w.merged.tip ? w.merged.at : undefined;
+  return w.merged && w.branch && ((await wt.branchSha(w.repo, w.branch)) ?? '') === w.merged.tip ? w.merged.at : undefined;
 }
 
 /** The configured setup or teardown commands for a repo, or none unless `tl trust` or some Claude home trusts it. */

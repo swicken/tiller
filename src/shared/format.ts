@@ -1,4 +1,4 @@
-import type { Outcome, RateLimit, Usage } from './protocol.js';
+import type { Outcome, RateLimit, Usage, Worktree } from './protocol.js';
 
 const FAMILY =/^claude-(opus|sonnet|haiku|fable)-(\d+)-(\d+)$/;
 
@@ -8,6 +8,9 @@ export function shortModel(model?: string): string {
   const m = FAMILY.exec(model);
   return m ? `${m[1]} ${m[2]}.${m[3]}` : model.replace(/^claude-/, '');
 }
+
+/** A worktree's branch, or `detached @ base` for a read-only one. */
+export const branchLabel = (w: Pick<Worktree, 'branch' | 'base'>): string => w.branch ?? `detached @ ${w.base}`;
 
 export const shortEffort = (level: string): string => (level === 'medium' ? 'med' : level);
 

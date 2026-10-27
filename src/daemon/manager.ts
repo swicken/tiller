@@ -357,7 +357,8 @@ export class NodeManager extends EventEmitter {
    * mode unless that is bypassPermissions; isolation from the config for an agent node whose role is worker or none.
    * Isolation "worktree" gives the node <main checkout>/.claude/worktrees/<id> on branch <prefix><id>, branched from its
    * base (see wt.pickBase: req.base, else the cwd's HEAD branch, else a new task branch); the repo must have a commit
-   * and be trusted by Claude. Any failure removes the worktree and branch and discards the record.
+   * and be trusted by Claude. Isolation "detached" checks out req.base, else the cwd's HEAD, with no branch, for a
+   * read-only node. Any failure removes the worktree and branch and discards the record.
    */
   async spawn(req: SpawnRequest): Promise<NodeView> {
     if (!req.byHuman && req.parentId && this.runtimes.get(req.parentId)?.busy === 'changing harness') throw new Error('parent is changing harness');
@@ -377,14 +378,20 @@ export class NodeManager extends EventEmitter {
     });
     this.checkLimits(req, config.limits);
     this.checkDependencies(req);
-    if (req.base && isolation !== 'worktree') throw new Error('base is for isolation "worktree" only');
+    if (req.base && isolation === 'none') throw new Error('base is for isolation "worktree" or "detached" only');
     let base: { base: string; created: boolean } | undefined, head: { base: string; baseSha: string } | undefined;
-    if (isolation === 'worktree') {
+    if (isolation !== 'none') {
       const repo = await wt.mainCheckout(req.cwd);
       head = await wt.headInfo(req.cwd);
-      if (adapter?.id === 'claude' && !trustedForWorktree(repo, readClaudeJson(account && claudeConfigDir(this.home, account)))) throw new Error(`refusing isolation "worktree": Claude does not trust ${repo} yet; run claude once in ${repo} to trust it`);
-      const protectedBranches = await wt.protectedBranches(repo, config.worktrees.protected);
-      base = await wt.pickBase(req.cwd, head, { requested: req.base, protected: protectedBranches, pattern: config.worktrees.taskBranch, title: req.title });
+      if (adapter?.id === 'claude' && !trustedForWorktree(repo, readClaudeJson(account && claudeConfigDir(this.home, account)))) throw new Error(`refusing isolation "${isolation}": Claude does not trust ${repo} yet; run claude once in ${repo} to trust it`);
+      if (isolation === 'detached') {
+        // A read-only tree checks out an existing branch, or the cwd's HEAD: it never merges, so it needs no task branch.
+        if (req.base && !(await wt.branchSha(req.cwd, req.base))) throw new Error(`base branch ${req.base} does not exist`);
+        base = req.base ? { base: req.base, created: false } : undefined;
+      } else {
+        const protectedBranches = await wt.protectedBranches(repo, config.worktrees.protected);
+        base = await wt.pickBase(req.cwd, head, { requested: req.base, protected: protectedBranches, pattern: config.worktrees.taskBranch, title: req.title });
+      }
     }
     const rec = this.registry.create({ // the resolved fields, so restart keeps them
       parentId, kind: req.kind, ...(req.harness ? { harness: req.harness } : {}), title: req.title, cwd: req.cwd,
@@ -401,7 +408,7 @@ export class NodeManager extends EventEmitter {
     this.runtimes.set(rec.id, {});
     if (arm(this, rec.id, { ...req, base: base?.base }, isolation)) return this.emitNode(rec.id)!;
     try {
-      if (isolation === 'worktree') await addWorktree(this, rec.id, req.prompt, base!.base);
+      if (isolation !== 'none') await addWorktree(this, rec.id, req.prompt, base?.base, isolation === 'detached');
       else {
         this.writeFiles(rec.id);
         this.runtimes.get(rec.id)!.status = { state: initialState(req.kind), changedAt: Date.now() };

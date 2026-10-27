@@ -1,4 +1,4 @@
-import { fmtAge, shortEffort, shortModel, usageLine } from '../shared/format.js';
+import { branchLabel, fmtAge, shortEffort, shortModel, usageLine } from '../shared/format.js';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import type http from 'node:http';
@@ -15,7 +15,7 @@ import { loadConfig, type Config } from './config.js';
 import { ADMIN_TOKEN_FILE } from './home.js';
 import { findArchived, history } from './archive.js';
 import type { NodeManager } from './manager.js';
-import { closeRefusal, queueMerge, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
+import { closeRefusal, detachedMergeRefusal, queueMerge, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
 import { MAX_PATCH_BYTES, MergeConflict } from './worktree.js';
 import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS, spawnKind } from './spawnfields.js';
@@ -62,9 +62,9 @@ function worktreeSummary(v: NodeView) {
   return { path: w.path, branch: w.branch, base: w.base, ahead: g?.ahead, behind: g?.behind, dirty: g?.dirty, missing: !!w.missing, merged: !!g?.mergedAt, conflicts: g?.conflicts };
 }
 
-/** `⎇ tl/n-3f2a ↑3 ↓1 conflicts:2 dirty merged` for the tree line. */
+/** `⎇ tl/n-3f2a from main ↑3 ↓1 conflicts:2 dirty merged`, or `⎇ detached @ main`, for the tree line. */
 function branchText(w: ReturnType<typeof worktreeSummary>): string {
-  return [`⎇ ${w.branch} from ${w.base}`, w.ahead && `↑${w.ahead}`, w.behind && `↓${w.behind}`, w.conflicts && `conflicts:${w.conflicts.length}`, w.dirty && 'dirty', w.merged && 'merged', w.missing && '(worktree missing)'].filter(Boolean).join(' ');
+  return [w.branch ? `⎇ ${w.branch} from ${w.base}` : `⎇ ${branchLabel(w)}`, w.ahead && `↑${w.ahead}`, w.behind && `↓${w.behind}`, w.conflicts && `conflicts:${w.conflicts.length}`, w.dirty && 'dirty', w.merged && 'merged', w.missing && '(worktree missing)'].filter(Boolean).join(' ');
 }
 
 function modelInfo(n: ReturnType<typeof summarize>): string {
@@ -95,7 +95,7 @@ function tree(nodes: ReturnType<typeof summarize>[]): string {
 function worktreeText(r: WorktreeReport): string {
   const unmerged = (n: number) => (n ? `, ${n} unmerged commit(s)` : '');
   const out = [
-    ...r.nodes.map((n) => `node ${n.nodeId} "${n.title}" ${n.branch} from ${n.base} at ${n.path}${n.missing ? ' (missing)' : ''}`),
+    ...r.nodes.map((n) => `node ${n.nodeId} "${n.title}" ${n.branch ? `${n.branch} from ${n.base}` : branchLabel(n)} at ${n.path}${n.missing ? ' (missing)' : ''}`),
     ...r.orphans.map((o) => `orphan ${o.path} ${o.branch ?? '(detached)'} from ${o.base}${o.dirty.length ? `, ${o.dirty.length} uncommitted file(s)` : ''}${unmerged(o.unmerged.length)}${o.error ? ` (not removed: ${o.error})` : ''}`),
     ...r.kept.map((k) => `kept branch ${k.branch} in ${k.repo}${unmerged(k.unmerged.length)}`),
     ...r.removed.flatMap((x) => [`removed ${x.what}`, ...x.commits.map((c) => `  commit ${c}`), ...x.files.map((f) => `  file ${f}`)]),
@@ -107,7 +107,7 @@ function worktreeText(r: WorktreeReport): string {
 function diffText(d: Diff, stat: boolean): string {
   const counts = (x: { additions: number; deletions: number }) => `+${x.additions} −${x.deletions}`;
   const total = d.files.reduce((t, f) => ({ additions: t.additions + f.additions, deletions: t.deletions + f.deletions }), { additions: 0, deletions: 0 });
-  const head = `${d.branch} against ${d.base}: ${d.files.length} file(s), ${counts(total)}`;
+  const head = `${d.branch ?? 'detached HEAD'} against ${d.base}: ${d.files.length} file(s), ${counts(total)}`;
   const body = d.files.map((f) => {
     const line = `${counts(f)}\t${f.path} (${f.status}${f.binary ? ', binary' : ''})`;
     return stat || !f.patch ? line : f.patch.trimEnd();
@@ -253,7 +253,7 @@ const tools = {
   spawn: tool(
     'Start node',
     `Open a child node and return its id. kind (default: your own harness) "claude": Claude Code; "agent": \`harness\` (claude, pi or codex; default yours); "terminal": a login shell. \`cwd\` must exist; default your own. \`role\`: "worker" (default), "orchestrator" or "none". \`profile\` (orchestrator, implementation, explorer, mechanical, reviewer) is independent of role and defaults from it (orchestrator, else implementation); explorer and reviewer instruct read-only work but enforce no tool restrictions. Explicit \`model\`/\`effort\` win over presets, which win over config. Claude children inherit a same-harness parent's permissionMode. Pi and Codex refuse permissionMode and preset options they cannot enforce; the error names them.
-isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its own workspace trust) gives the child a git worktree at <main checkout>/.claude/worktrees/<id> on a new branch; the reply carries worktree { path, branch, base }. \`base\` is the branch it forks from and merges into, created at the HEAD of \`cwd\`'s checkout if missing; give every worker of a task the same base so merges accumulate. Without base it is the branch checked out at \`cwd\`, unless that is protected (worktrees.protected, default main, master and origin's default) or detached: then a new worktrees.taskBranch branch (default "tl/{slug}") is made. Omitted isolation follows project config (default "none"), so a child whose cwd is in an existing worktree shares it.
+isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its own workspace trust) gives the child a git worktree at <main checkout>/.claude/worktrees/<id> on a new branch; "detached" gives a read-only one at base's tip with no branch (reviewers, auditors: no merge; close refuses stray commits); the reply carries worktree { path, branch, base }. \`base\` is the branch it forks from and merges into, created at the HEAD of \`cwd\`'s checkout if missing; give every worker of a task the same base so merges accumulate. Without base it is the branch checked out at \`cwd\`, unless that is protected (worktrees.protected, default main, master and origin's default) or detached: then a new worktrees.taskBranch branch (default "tl/{slug}") is made. Omitted isolation follows project config (default "none"), so a child whose cwd is in an existing worktree shares it.
 \`preset\`: .tiller/agents/<name>.md in \`cwd\`'s main checkout, else ~/.tiller/agents/<name>.md (built-in "reviewer", "researcher"); it sets role text, model, effort, permissionMode, isolation and tool restrictions, and your arguments override it.
 \`requestId\`: a retry with the same one returns the original node (replayed: true); reusing it with different arguments is an error.
 \`after\`/\`afterSuccess\` (ids in your scope): the node starts armed, with no process, and launches once each \`after\` node finishes a turn begun after this spawn (or exits) and each \`afterSuccess\` node reports succeeded (gate passed, if configured). A failed report blocks it and you get a message; close it to drop it. With daemon.maxWorking agents working it is queued and launched in creation order. The reply then has state "armed" or "queued" and what it waits on.
@@ -404,7 +404,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         if (refusal) throw new Error(views.length > 1 ? `${v.id}: ${refusal}` : refusal);
         if (a.worktree === 'discard') {
           approved.set(v.id, check);
-          destroys.push(`${v.title}: discards ${check.unmerged.length} commit(s) and ${check.dirty.length} changed file(s) on ${v.worktree!.branch}`);
+          destroys.push(`${v.title}: discards ${check.unmerged.length} commit(s) and ${check.dirty.length} changed file(s) on ${branchLabel(v.worktree!)}`);
         }
       }
       const list = views.map((v) => `${v.title} (${v.id})`).join(', ');
@@ -462,6 +462,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     async (c, a) => {
       const v = requireOwned(c, nodeId(a), false);
       if (!v.worktree) throw new Error(`${v.id} has no worktree of its own to merge`);
+      if (!v.worktree.branch) throw new Error(detachedMergeRefusal(v.id));
       const skip = c.caller === HUMAN || loadConfig(v.worktree.repo, c.manager.home).approvals.merge;
       const later = a.whenIdle && v.status.state === 'working' && !v.status.exited;
       if (!skip && !(await c.confirm(`${who(c)} wants to merge ${v.title} (${v.id}): branch ${v.worktree.branch} into ${v.worktree.base}${later ? ' when its turn ends' : ''}`))) {
