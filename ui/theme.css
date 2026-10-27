@@ -1,5 +1,6 @@
+/* Dark: the default, and the theme when no script runs. */
 :root {
-  color-scheme: dark light;
+  color-scheme: dark;
   --bg: #0e1116;
   --surface: #141920;
   --surface-2: #1b212a;
@@ -26,29 +27,7 @@
   --l1: 16px; /* vertical centre of a row's first line: where connectors meet it */
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #ffffff;
-    --surface: #f5f7fa;
-    --surface-2: #eaeef3;
-    --hover: #e8edf3;
-    --sel: #d6e6fd;
-    --fg: #1f2933;
-    --dim: #5f6b7a;
-    --line: #d3dae3;
-    --accent: #0b64d8;
-    --accent-fg: #ffffff;
-    --working: #0a7e8c;
-    --needs: #b36b00;
-    --done: #1a7f37;
-    --bad: #cf222e;
-    --idle: #8c959f;
-    --shadow: 0 8px 32px rgb(31 41 51 / 0.2);
-    --logo-invert: 0;
-  }
-}
-
-/* Light, tuned for WCAG AA text and state contrast. */
+/* Light, tuned for WCAG AA text and state contrast: theme.test.ts checks the pairs against this block. */
 :root[data-theme='light'] {
   color-scheme: light;
   --bg: #ffffff;

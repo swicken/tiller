@@ -2,6 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Set the theme before the stylesheet paints. This repeats THEME_KEY, parseThemePref and resolveTheme from theme.ts;
+      // theme.test.ts runs it against them.
+      (() => {
+        let p = null;
+        try { p = localStorage.getItem('tl.theme'); } catch {}
+        const light = p === 'light' || (p !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches);
+        document.documentElement.dataset.theme = light ? 'light' : 'dark';
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tiller</title>
     <link rel="icon" href="data:," />
