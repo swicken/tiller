@@ -544,17 +544,17 @@ describe('Claude accounts form', () => {
     } finally { vi.unstubAllEnvs(); }
   });
 
-  it('reconfigures by name: kept accounts keep their projects and memory setting, new ones get none and their directory, the default stays', () => {
+  it('reconfigures by name: kept accounts keep their projects and other fields, new ones get none and their directory, the default stays', () => {
     const before = snapshot('home').revision;
     const work = join(root, 'cw'), moved = join(root, 'moved'), added = join(root, 'added');
     fs.writeFileSync(homeFile(), JSON.stringify({ limits: { maxDepth: 3 }, claude: { account: 'personal', accounts: [
-      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: work, projects: [project], memory: false }, { name: 'side', configDir: '~/never-created', projects: ['/s'] },
+      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: work, projects: [project], memory: false, gardener: false }, { name: 'side', configDir: '~/never-created', projects: ['/s'] },
     ] } }));
     expect(() => configure([{ name: 'personal' }], before)).toThrow(/Settings changed/);
     // side keeps a directory that does not exist yet (it is only checked when new or changed); old is gone.
     configure([{ name: 'personal' }, { name: 'work', configDir: moved, create: true }, { name: 'side', configDir: join(homedir(), 'never-created') }, { name: 'new', configDir: added, create: true }]);
     expect(homeJson()).toEqual({ limits: { maxDepth: 3 }, claude: { account: 'personal', accounts: [
-      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: moved, projects: [project], memory: false }, { name: 'side', configDir: '~/never-created', projects: ['/s'] }, { name: 'new', configDir: added },
+      { name: 'personal', projects: ['~/p'] }, { name: 'work', configDir: moved, projects: [project], memory: false, gardener: false }, { name: 'side', configDir: '~/never-created', projects: ['/s'] }, { name: 'new', configDir: added },
     ] } });
     expect([moved, added].map((d) => fs.statSync(d).mode & 0o777)).toEqual([0o700, 0o700]);
     // There is no rename: a different name is a new account, so work's repositories do not follow it.

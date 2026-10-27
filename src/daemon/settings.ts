@@ -210,7 +210,7 @@ export function updateSettings(manager: NodeManager, update: SettingsUpdate): Se
 /**
  * Replace claude.accounts in the home file from the Settings form, creating the configDirs asked for. With none configured
  * this seeds the list and claude.account. Otherwise accounts are kept, added or removed by name: there is no rename, a kept
- * account keeps its projects and memory setting (only its configDir may change), a new one has none, and claude.account's account stays.
+ * account keeps its projects and other fields (only its configDir may change), a new one has none, and claude.account's account stays.
  */
 export function saveClaudeAccounts(manager: NodeManager, save: ClaudeAccountsSave): SettingsSnapshot {
   const { homePath } = target(manager, 'home');
@@ -219,7 +219,7 @@ export function saveClaudeAccounts(manager: NodeManager, save: ClaudeAccountsSav
   const listError = claudeAccountListError(dirname(homePath));
   if (listError) throw new SettingsError(422, `${listError}; fix it in the file`);
   const claude = before.data.claude as Record<string, unknown> | undefined;
-  const existing = (claude?.accounts ?? []) as { name: string; configDir?: string; projects?: string[]; memory?: boolean }[];
+  const existing = (claude?.accounts ?? []) as { name: string; configDir?: string; [field: string]: unknown }[];
   // The form lists accounts from a WebSocket store, which can lag the HTTP revision: a list from before an added account is stale.
   const names = (list: string[]) => JSON.stringify([...list].sort());
   if (names(existing.map((a) => a.name)) !== names(save.openedWith)) throw new SettingsError(409, 'Settings changed; reload before saving');
@@ -235,7 +235,8 @@ export function saveClaudeAccounts(manager: NodeManager, save: ClaudeAccountsSav
     if (old?.configDir && !configDir) throw new SettingsError(400, `${name}: keep a config directory; without one it would use Claude's default home (~/.claude) and its login`);
     // An unchanged directory keeps its spelling in the file (the form shows it expanded).
     const dir = configDir && old?.configDir && expandHome(configDir) === expandHome(old.configDir) ? old.configDir : configDir;
-    return { name, ...(dir ? { configDir: dir } : {}), ...(old?.projects ? { projects: old.projects } : {}), ...(old?.memory !== undefined ? { memory: old.memory } : {}) };
+    const { name: _name, configDir: _configDir, ...kept } = old ?? {}; // projects, memory, gardener and the rest stay as they were
+    return { name, ...(dir ? { configDir: dir } : {}), ...kept };
   });
   const result = ConfigFile.safeParse({ claude: { accounts, account: current } });
   if (!result.success) throw new SettingsError(400, result.error.issues.map((i) => `${i.path.map(String).join('.')}: ${i.message}`).join('; '));
