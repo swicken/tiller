@@ -10,7 +10,7 @@ A node's role is `orchestrator`, `worker` or `none`. By default a root node is a
 
 The role text is the built-in default (`DEFAULT_PROMPTS` in `src/daemon/launch.ts`) unless an override file exists. A file at `<repo>/.tiller/orchestrator.md` or `worker.md` wins for nodes whose directory is that repo; otherwise `~/.tiller/prompts/orchestrator.md` or `worker.md` applies to every repo. The files are read at each launch or resume, so an edit applies to the next node you start. `tl prompts` prints the files in effect for the current directory, or `built-in` where there is none.
 
-The built-in orchestrator prompt tells the orchestrator to coordinate rather than do the work: split a task into independent streams, spawn one worker per stream with a self-contained brief, wait without polling, read each worker's outcome, have non-trivial changes reviewed by a node with the restricted `reviewer` preset on Claude or Pi, or the portable `reviewer` profile on Codex (at most two rounds before asking the human), check the diff, merge (queued with `whenIdle` while the worker is still in a turn), and close finished workers. The built-in worker prompt tells the worker to do exactly its brief and to ask its parent, not the human, when the brief is unclear.
+The built-in orchestrator prompt tells the orchestrator to give each task the parallelism it deserves: do small, sequential or mostly-reading work itself, on the task branch and with the project's checks, and delegate only independent streams with disjoint files, fresh-context reviews, or work that would flood its context. When it delegates, it spawns one worker per stream with a self-contained brief and the task branch as base, waits without polling, reads each worker's outcome, has non-trivial changes reviewed by a node with the restricted `reviewer` preset on Claude or Pi, or the portable `reviewer` profile on Codex (at most two rounds before asking the human), checks the diff, merges (queued with `whenIdle` while the worker is still in a turn), and closes finished workers. The built-in worker prompt tells the worker to do exactly its brief and to ask its parent, not the human, when the brief is unclear.
 
 ## Model, effort and permission mode
 
@@ -24,7 +24,7 @@ Task profiles select behavior independently of coordination roles. Select one wi
 
 | Profile | Guidance |
 |---|---|
-| `orchestrator` | Delegate work, coordinate results and verify integration. |
+| `orchestrator` | Do small work directly, delegate independent work, verify integration. |
 | `implementation` | Complete a scoped change and run relevant checks. |
 | `explorer` | Read-only investigation with concrete evidence and uncertainties. |
 | `mechanical` | Narrow, specified edits; shown as **Mechanical worker** in the UI. |
