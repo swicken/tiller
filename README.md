@@ -108,7 +108,7 @@ Use Node.js 24+ and run `npm ci` from the repository root. `npm run ui:dev` star
 | Production UI build | `npm run ui:build` |
 | Native app tests | `cargo test --locked --all-targets --manifest-path src-tauri/Cargo.toml` |
 
-Vitest runs up to two test files at once to bound resource use for real Git and child-process fixtures. Implementation workers run focused tests for their changes; reviewers run targeted checks as needed. This repository's automatic completion gate checks root, Pi adapter and UI types, so it does not replace focused tests. Run the full suite once on the final integrated tree before publication. [GitHub CI](.github/workflows/ci.yml) also checks release helpers, the production UI build and Rust on macOS. See [AGENTS.md](AGENTS.md) for the contribution workflow.
+Vitest runs up to one test file per two CPU cores at once (at least two) to bound resource use for real Git and child-process fixtures. Implementation workers run focused tests for their changes; reviewers run targeted checks as needed. This repository's automatic completion gate checks root, Pi adapter and UI types, so it does not replace focused tests. Run the full suite once on the final integrated tree before publication. [GitHub CI](.github/workflows/ci.yml) also checks release helpers, the production UI build and Rust on macOS. See [AGENTS.md](AGENTS.md) for the contribution workflow.
 
 ## Documentation
 

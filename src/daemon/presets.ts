@@ -28,7 +28,7 @@ export type Preset = Omit<z.infer<typeof Frontmatter>, 'name'> & { name: string;
 
 const NAME = /^[\w.-]+$/;
 
-export const presetDirs = (cwd: string, home: string): string[] => [join(cwd, '.tiller', 'agents'), join(home, 'agents')];
+const presetDirs = (cwd: string, home: string): string[] => [join(cwd, '.tiller', 'agents'), join(home, 'agents')];
 
 /**
  * Parses `---` frontmatter of `key: value` lines, where a value may be `[a, b]` or followed by `- item` lines, then

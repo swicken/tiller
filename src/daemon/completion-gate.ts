@@ -1,8 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import type { NodeView } from '../shared/protocol.js';
 import { loadConfig, type Config } from './config.js';
-import { tillerTrusts } from './trust.js';
-import { claudeTrustsAny } from './worktree-lifecycle.js';
+import { commandsTrusted } from './worktree-lifecycle.js';
 import { runCommands } from './worktree.js';
 
 /** Lines of gate output that go back to the worker. */
@@ -11,7 +10,7 @@ const GATE_TAIL_LINES = 60;
 /** The completion gate configured for a project directory that `tl trust` or any Claude home trusts. `tl gate` uses it too. */
 export function gateFor(dir: string, home: string): Config['gate'] {
   const gate = loadConfig(dir, home).gate;
-  return gate && (tillerTrusts(home, dir) || claudeTrustsAny(home, dir)) ? gate : undefined;
+  return gate && commandsTrusted(home, dir) ? gate : undefined;
 }
 
 /** One node's gate attempts, retained until its runtime is discarded. */

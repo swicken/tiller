@@ -1,4 +1,4 @@
-// <sessionDir>/archive.jsonl: one ArchivedNode per closed Claude node, so it can be found, read, followed up or forked
+// <sessionDir>/archive.jsonl: one ArchivedNode per closed agent node, so it can be found, read, followed up or forked
 // later. The sessions sweep deletes it with the rest of the directory.
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';

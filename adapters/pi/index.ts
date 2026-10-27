@@ -33,7 +33,7 @@
 
 import { randomBytes } from "node:crypto";
 import { TillerBridge } from "./bridge.ts";
-import { readToken, TillerClient } from "../shared/client.ts";
+import { readToken, TillerClient, type TillerModEventName } from "../shared/client.ts";
 import {
   missingCapabilities,
   nativePiVersion,
@@ -192,10 +192,7 @@ export default function tillerPiExtension(
       }
     });
 
-  const forwardModEvent = (
-    event: "turn.start" | "turn.complete" | "session.measure",
-    payload: object,
-  ): Promise<void> =>
+  const forwardModEvent = (event: TillerModEventName, payload: object): Promise<void> =>
     lifecycle.enqueue(async () => {
       try {
         await client?.modEvent(event, payload as Record<string, unknown>);
@@ -245,12 +242,7 @@ export default function tillerPiExtension(
     // transcript path. The session_before_* guards below normally cancel this; if a build does not
     // honor them, fail closed rather than leave the node pointing at a different conversation.
     if (isManagedSession() && (event?.reason === "new" || event?.reason === "resume" || event?.reason === "fork")) {
-      report(`tiller: refusing managed session replacement (${event.reason}); shutting down`, "error");
-      try {
-        ctx.shutdown?.();
-      } catch {
-        /* no shutdown available */
-      }
+      failClosed(ctx, `tiller: refusing managed session replacement (${event.reason}); shutting down`);
       return;
     }
 
@@ -278,12 +270,7 @@ export default function tillerPiExtension(
     if (typeof ctx.abort !== "function") missing.push("ctx.abort");
     if (typeof ctx.shutdown !== "function") missing.push("ctx.shutdown");
     if (missing.length > 0) {
-      report(`tiller: incompatible Pi build (missing ${missing.join(", ")}); not activating`, "error");
-      try {
-        ctx.shutdown?.();
-      } catch {
-        /* no shutdown available */
-      }
+      failClosed(ctx, `tiller: incompatible Pi build (missing ${missing.join(", ")}); not activating`);
       return;
     }
 
@@ -327,15 +314,10 @@ export default function tillerPiExtension(
         description: MCP_DESCRIPTION,
       });
     } catch (error) {
-      report(`tiller: could not register MCP server: ${String(error)}; shutting down`, "error");
       client.dispose();
       client = undefined;
       config = undefined;
-      try {
-        ctx.shutdown?.();
-      } catch {
-        /* no shutdown available */
-      }
+      failClosed(ctx, `tiller: could not register MCP server: ${String(error)}; shutting down`);
       return;
     }
 

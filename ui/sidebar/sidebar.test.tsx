@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import type { ReactElement, ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { elements, type Element } from '../test-tree';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Sidebar, readSidebarDetails, saveSidebarDetails } from './Sidebar';
 import { SidebarInspector } from './SidebarInspector';
@@ -24,13 +25,6 @@ vi.mock('../conn', () => ({ send: vi.fn() }));
 vi.mock('./SidebarInspector', () => ({ SidebarInspector: () => null }));
 vi.mock('../TerminalPane', () => ({ TerminalPane: () => null }));
 vi.mock('../hooks', () => ({ useNow: () => 10_000, useDocumentSync: () => {} }));
-type Element = ReactElement<Record<string, any>>;
-function elements(node: ReactNode): Element[] {
-  if (Array.isArray(node)) return node.flatMap(elements);
-  if (!node || typeof node !== 'object' || !('props' in node)) return [];
-  const element = node as Element;
-  return [element, ...elements(element.props.children)];
-}
 function find(node: ReactNode, match: (el: Element) => boolean): Element {
   const el = elements(node).find(match);
   if (!el) throw Error('Missing control');

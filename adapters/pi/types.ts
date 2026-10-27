@@ -18,20 +18,12 @@ export interface PiMcpServerConfig {
   /** How the server's tools reach the model. Tiller wants them directly callable. */
   exposure?: "codemode" | "deferred" | "direct" | "hidden";
   description?: string;
-  toolExposure?: Record<string, "codemode" | "deferred" | "direct" | "hidden">;
-  enabled?: boolean;
-  timeout?: number;
 }
 
 /** Options accepted by `pi.sendUserMessage()`. */
 export interface PiSendUserMessageOptions {
   deliverAs?: "steer" | "followUp";
   expandPromptTemplates?: boolean;
-}
-
-/** A single tool-usage counter, as Pi stores it on `usage` entries and messages. */
-export interface PiUsageLike {
-  cost?: { total?: number };
 }
 
 /** Context usage returned by `ctx.getContextUsage()`. */
@@ -50,12 +42,10 @@ export interface PiSessionManagerLike {
 
 /** The `ExtensionContext` members the bridge reads. */
 export interface PiExtensionContextLike {
-  readonly mode?: string;
   isIdle(): boolean;
   abort(): void;
   /** Graceful process shutdown; present in every real Pi context. */
   shutdown?(): void;
-  hasPendingMessages?(): boolean;
   getContextUsage?(): PiContextUsageLike | undefined;
   sessionManager?: PiSessionManagerLike;
   model?: { id?: string; provider?: string } | undefined;
@@ -70,10 +60,7 @@ export interface PiExtensionApiLike {
   unregisterMcpServer?(name: string): void;
   /** Native Pi is fire-and-forget: it catches/logs prompt errors and returns void. */
   sendUserMessage(content: string, options?: PiSendUserMessageOptions): void;
-  appendEntry?(customType: string, data?: unknown): void;
   on(event: string, handler: (event: any, ctx: PiExtensionContextLike) => unknown): () => void;
-  getSessionName?(): string | undefined;
-  setSessionName?(name: string): void;
 }
 
 /** Plain data about the live Pi session, captured from the event context. */

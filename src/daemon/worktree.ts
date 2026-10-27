@@ -3,13 +3,14 @@
 // the config run through a shell (runCommands), by design.
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { closeSync, existsSync, openSync, realpathSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, openSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { Diff, DiffFile, Worktree } from '../shared/protocol.js';
 import type { MergeStyle } from './config.js';
 import { normalizeRemote } from './memory-schema.js';
+import { canonical, pidAlive } from './util.js';
 
 const run = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;
@@ -53,7 +54,7 @@ export function repoKeySync(dir: string): string {
   let origin: string | undefined;
   try { origin = execFileSync('git', ['-C', dir, 'config', '--get', 'remote.origin.url'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || undefined; } catch { /* no origin */ }
   if (origin) return `git:${normalizeRemote(/^[a-z][a-z0-9+.-]*:\/\//i.test(origin) || /^[^/:]+:/.test(origin) ? origin : resolve(dir, origin))}`;
-  try { return `path:${realpathSync(dir)}`; } catch { return `path:${resolve(dir)}`; }
+  return `path:${canonical(dir)}`;
 }
 
 /** The checkout's HEAD: its branch name (or the sha when detached) and sha. */
@@ -116,9 +117,6 @@ export const remove = (repo: string, path: string, force: boolean) =>
 
 export const prune = (repo: string) => git(repo, ['worktree', 'prune']);
 
-export const branchExists = (repo: string, branch: string) =>
-  git(repo, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`]).then(() => true, () => false);
-
 /** -D: callers delete only after their own merged check, or on an explicit discard. `-d` would test against the main checkout's HEAD, not the base. */
 export const deleteBranch = (repo: string, branch: string) => git(repo, ['branch', '-D', branch]);
 
@@ -133,11 +131,6 @@ export interface WorktreeEntry {
   branch?: string;
   /** The lock reason ('' for a lock without one); absent when not locked. */
   locked?: string;
-}
-
-/** `path` with symlinks resolved, as `git worktree list` reports it (git registers resolved paths); `path` itself when it does not exist. */
-export function canonical(path: string): string {
-  try { return realpathSync(path); } catch { return path; }
 }
 
 /** Whether two paths name the same place once symlinks are resolved: compare a recorded path with a listed one this way. */
@@ -358,10 +351,6 @@ export async function hasCommits(repo: string, branch: string, baseSha: string):
   return (await git(repo, ['rev-list', '--count', `${baseSha}..${branch}`])).trim() !== '0';
 }
 
-const pidAlive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
-};
-
 /** A lock Claude took for session `id` ("claude session <id> (pid N start …)") whose process is gone: ours to lift. */
 export function staleClaudeLock(reason: string, id: string): boolean {
   const m = /^claude session (\S+) \(pid (\d+)/.exec(reason);
@@ -441,4 +430,9 @@ async function copyEntry(src: string, dst: string): Promise<void> {
     try { await run('cp', ['-cRP', src, dst], { timeout: SLOW_TIMEOUT_MS }); return; } catch { /* not APFS, or cp failed: fall through */ }
   }
   await cp(src, dst, { recursive: true, verbatimSymlinks: true, force: true });
+}
+
+/** Whether the worktree's directory exists and git still lists it. */
+export async function isListed(w: Pick<Worktree, 'repo' | 'path'>): Promise<boolean> {
+  return existsSync(w.path) && (await listWorktrees(w.repo)).some((e) => samePath(e.path, w.path));
 }

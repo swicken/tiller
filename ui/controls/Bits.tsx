@@ -47,6 +47,9 @@ export function NodeMeta({ node, detail, subtree }: { node: NodeView; detail?: b
   return <div className="meta">{parts.map((p, i) => <span className="part" key={i}>{p}</span>)}</div>;
 }
 
+/** A reported outcome in the sidebar's words. */
+export const outcomeLabel = (o: Pick<Outcome, 'outcome'>) => (o.outcome === 'failed' ? 'Needs changes' : 'succeeded');
+
 /** What a node reported through report_outcome: the verdict, then whichever structured fields it filled. */
 export function OutcomeDetails({ o }: { o: Outcome }) {
   const list = (title: string, items?: string[]) => items?.length ? <><h3>{title}</h3><ul>{items.map((x, i) => <li key={i}>{x}</li>)}</ul></> : null;

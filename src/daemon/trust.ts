@@ -1,9 +1,9 @@
 // Explicit human opt-in for repository commands, independent of any agent CLI's trust database.
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { canonical } from './util.js';
 
 const file = (home: string) => join(home, 'trusted-projects.json');
-const canonical = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
 
 export function trustedProjects(home: string): string[] {
   try {

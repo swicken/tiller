@@ -122,8 +122,6 @@ function step(prev: NodeStatus, event: HookEvent, now: number): NodeStatus {
       return done(prev, now, { doneSource: 'stop', errored: true, lastAssistantMessage: str(event.last_assistant_message) ?? prev.lastAssistantMessage });
 
     case 'SessionStart': // the manager records its session_id and transcript_path on the node's record
-      return next(prev, { state: 'unknown', activity: undefined }, now);
-
     case 'SessionEnd':
       return next(prev, { state: 'unknown', activity: undefined }, now);
 

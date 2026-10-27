@@ -1,12 +1,10 @@
-import type { ClaudeAccountView, UsageSource } from '../../src/shared/protocol';
-import { MEMORY_ACCOUNT_KEY, SETTINGS_FIELDS, SETTINGS_EFFORTS, SETTINGS_PROFILES, type SettingsField } from '../../src/shared/settings';
+import { PROFILES, type ClaudeAccountView, type Harness, type UsageSource } from '../../src/shared/protocol';
+import { MEMORY_ACCOUNT_KEY, SETTINGS_FIELDS, type SettingsField } from '../../src/shared/settings';
 export type { SettingsSnapshot } from '../../src/shared/settings';
 import type { SettingsScope, SettingsSnapshot } from '../../src/shared/settings';
 export type { SettingsScope as Scope } from '../../src/shared/settings';
 /** scope: the only scope that shows the field (UI-only; the daemon enforces the same split). */
 export type Field = SettingsField & { help?: string; scope?: SettingsScope };
-export const profiles = SETTINGS_PROFILES;
-export const efforts = SETTINGS_EFFORTS;
 const fieldHelp: Record<string, string> = {
   'notifications.kinds.needsYou': 'An agent is waiting for your input or approval.',
   'notifications.kinds.errored': 'An agent encounters an error.',
@@ -39,7 +37,7 @@ function field(key: string, label: string, extra: { help?: string; scope?: Setti
   if (!metadata) throw new Error(`Missing settings metadata: ${key}`);
   return { ...metadata, help: fieldHelp[key], label: label.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase()), ...extra };
 }
-export const profileFields = (harness: keyof typeof efforts): Field[] => profiles.flatMap((profile) => [
+export const profileFields = (harness: Harness): Field[] => PROFILES.flatMap((profile) => [
   field(`profiles.${harness}.${profile}.model`, `${profile} model`, { help: harness === 'pi' ? 'Provider/model ID accepted by Pi.' : 'Model ID accepted by this harness.' }),
   field(`profiles.${harness}.${profile}.effort`, `${profile} effort`),
 ]);
@@ -105,7 +103,8 @@ export function buildChanges(snapshot: SettingsSnapshot, drafts: Record<string, 
 /** The error of a claudeAccounts reply for an invalid accounts config: the daemon sends it as one view with no login command. */
 export const accountsError = (accounts?: ClaudeAccountView[]) => (accounts?.length === 1 && accounts[0].error && !accounts[0].loginCommand ? accounts[0].error : undefined);
 
-export const accountOptionLabel = (a: ClaudeAccountView) => `${a.name} · ${a.loggedIn ? [a.email, a.orgName].filter(Boolean).join(', ') || 'logged in' : a.loggedIn === false ? 'not logged in' : 'login unknown'}`;
+/** An account option: its name (with markDefault, " (default)" on the default one) and login state. */
+export const accountOptionLabel = (a: ClaudeAccountView, markDefault = false) => `${a.name}${markDefault && a.isDefault ? ' (default)' : ''} · ${a.loggedIn ? [a.email, a.orgName].filter(Boolean).join(', ') || 'logged in' : a.loggedIn === false ? 'not logged in' : 'login unknown'}`;
 
 /** Where the saved Claude account of root nodes comes from, at this scope. */
 export function accountStatus(snapshot: SettingsSnapshot): string {

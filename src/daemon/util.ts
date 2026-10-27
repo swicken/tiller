@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import type http from 'node:http';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
@@ -26,6 +26,17 @@ export const expandHome = (path: string) => resolve(path.startsWith('~/') ? join
 export function requireDir(path: string, name: string): void {
   if (!isAbsolute(path) || !statSync(path, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${name} must be the absolute path of a directory: ${path}`);
 }
+
+/**
+ * `path` with symlinks resolved, as `git worktree list` reports it (git registers resolved paths); `path` made absolute when it
+ * does not exist. Trust lists, account projects and worktree paths compare in this form.
+ */
+export const canonical = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
+
+/** Whether process `pid` may exist: only ESRCH proves it gone (EPERM means it runs under another user). */
+export const pidAlive = (pid: number): boolean => {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code !== 'ESRCH'; }
+};
 
 /** For `.catch(logError)` on fire-and-forget promises. */
 export const logError = (err: unknown): void => console.error('tiller:', err);
