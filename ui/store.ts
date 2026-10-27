@@ -3,6 +3,7 @@ import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary
 import type { ReviewComment } from './diff';
 import { pickInitial, rootOf } from './sidebar/sessions';
 import { insertSorted, type Nodes } from './sidebar/tree';
+import { readPref, writePref } from './prefs';
 import { wantedNode } from './url';
 
 export type Tone = 'info' | 'ok' | 'warn' | 'bad';
@@ -87,8 +88,8 @@ export interface State {
   removals: number;
 }
 
-const stored = (() => { try { return localStorage.getItem('tl.panel') === '1'; } catch { return false; } })();
-const storedTools = (() => { try { return localStorage.getItem('tl.showTools') === '1'; } catch { return false; } })();
+const stored = readPref('tl.panel') === '1';
+const storedTools = readPref('tl.showTools') === '1';
 
 let state: State = {
   nodes: {}, order: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
@@ -133,11 +134,11 @@ export const expectSpawn = () => update(() => ({ awaitSpawn: true }));
 export const toggleCollapsed = (id: string) =>
   update((s) => ({ collapsed: s.collapsed.includes(id) ? without(s.collapsed, id) : [...s.collapsed, id] }));
 export const togglePanel = () => update((s) => {
-  try { localStorage.setItem('tl.panel', s.panel ? '0' : '1'); } catch { /* per-viewer convenience only */ }
+  writePref('tl.panel', s.panel ? '0' : '1');
   return { panel: !s.panel };
 });
 export const toggleShowTools = () => update((s) => {
-  try { localStorage.setItem('tl.showTools', s.showTools ? '0' : '1'); } catch { /* per-viewer convenience only */ }
+  writePref('tl.showTools', s.showTools ? '0' : '1');
   return { showTools: !s.showTools };
 });
 

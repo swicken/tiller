@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { readPref, writePref } from '../prefs';
 
 /** A length the viewer prefers, saved in localStorage under `key` within [min, max]. */
 export interface ResizePreference { key: string; initial: number; min: number; max: number }
@@ -6,16 +7,11 @@ export interface ResizePreference { key: string; initial: number; min: number; m
 const clamp = ({ min, max }: ResizePreference, value: number) => Math.round(Math.min(max, Math.max(min, value)));
 
 export function readPreference(pref: ResizePreference): number {
-  try {
-    const raw = localStorage.getItem(pref.key), value = raw === null ? NaN : Number(raw);
-    if (Number.isFinite(value) && value >= pref.min && value <= pref.max) return value;
-  } catch { /* per-viewer convenience only */ }
-  return pref.initial;
+  const raw = readPref(pref.key), value = raw === null ? NaN : Number(raw);
+  return Number.isFinite(value) && value >= pref.min && value <= pref.max ? value : pref.initial;
 }
 
-export function savePreference(pref: ResizePreference, value: number) {
-  try { localStorage.setItem(pref.key, String(clamp(pref, value))); } catch { /* resizing still works without storage */ }
-}
+export const savePreference = (pref: ResizePreference, value: number) => writePref(pref.key, String(clamp(pref, value)));
 
 /**
  * A role="separator" handle: drag, arrow keys (Shift for bigger steps), Home/End and double-click to reset.
