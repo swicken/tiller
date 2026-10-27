@@ -1,24 +1,23 @@
-// Layer B0 (bench plan §2, §3.3) and the Layer B scorer: each scenario's $0 preflight (the planted lesson reaches the
-// digest, R1's gate, the solved and trapped overlays), the paired statistics against known values, and scoring of
-// synthetic arms. Deterministic and LLM-free.
+// Layer B0 (bench plan §2, §3.3) and the Layer B scorer: each scenario's planted lesson reaching the digest, the paired
+// statistics against known values, and scoring of synthetic arms. Deterministic and LLM-free. The rest of the $0
+// preflight (R1's gate, the solved and trapped overlays) runs scenario scripts, not daemon code: it is
+// `npm run bench:memory:layer-b -- --scenario all --dry-run`, which every live run also passes first.
 import { describe, expect, it } from 'vitest';
 import { bootstrapCi, mcnemarExact, median, wilcoxon } from './lib/stats.js';
 import { SCENARIOS } from './layer-b/scenarios.js';
 import { scoreArm, summarize, type ArmRaw, type Trial } from './layer-b/score.js';
 import { preflight } from './layer-b/trial.js';
 
-describe('Layer B0 preflight', () => {
+describe('Layer B0', () => {
   for (const s of SCENARIOS) {
     it(`${s.id} ${s.name}`, () => {
-      const p = preflight(s);
+      const p = preflight(s, false);
       expect(p.checks.filter((c) => !c.ok).map((c) => c.what)).toEqual([]);
       expect(p.digest.startsWith('# Memory')).toBe(true);
+      // The plan's literal brief does not reach the changelog pitfall (D-1), which is why S1 names src/format.js.
+      if (s.id === 'S1p') expect(p.checks[0].what).toMatch(/is not in the digest/);
     }, 30_000);
   }
-
-  it("S1p: the plan's literal brief does not reach the changelog pitfall (D-1), which is why S1 names src/format.js", () => {
-    expect(preflight(SCENARIOS.find((s) => s.id === 'S1p')!).checks[0].what).toMatch(/is not in the digest/);
-  }, 30_000);
 });
 
 describe('paired statistics', () => {

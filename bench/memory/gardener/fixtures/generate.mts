@@ -3,10 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { contained, ftsTerms } from '../../../../src/daemon/memory-schema.js';
-
-function rng(seed: number) {
-  return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
+import { rng } from '../../lib/stats.js';
 
 const AREAS = ['billing', 'invoices', 'auth', 'sessions', 'uploads', 'search', 'reports', 'exports', 'webhooks', 'notifications', 'scheduler',
   'payments', 'accounts', 'profiles', 'audit', 'metrics', 'gateway', 'importer', 'catalog', 'inventory', 'checkout', 'shipping', 'refunds',
