@@ -4,18 +4,19 @@
 // stops it and scores the store against the fixture's labels. See README.md.
 //   npm run bench:gardener -- --dry-run
 //   npm run bench:gardener -- --fixtures all --runs 5 --yes
-import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULTS } from '../../../src/daemon/config.js';
 import { LIMITS, type GardenActionView, type GardenRunView } from '../../../src/daemon/memory-schema.js';
 import { MemoryStore } from '../../../src/daemon/memory-store.js';
 import { repoKeySync } from '../../../src/daemon/worktree.js';
 import { readClaudeJson, trustPolicy } from '../../../src/daemon/worktree-lifecycle.js';
+import { benchRoot, startDaemon } from '../lib/daemon.js';
+import { median } from '../lib/stats.js';
 import { digestMeasure, FIXTURE_NAMES, loadFixture, Seeded } from './fixture.js';
 
 const { values: opts } = parseArgs({
@@ -33,9 +34,7 @@ const fixtures = opts.fixtures === 'all' ? [...FIXTURE_NAMES] : opts.fixtures.sp
 for (const f of fixtures) if (!(FIXTURE_NAMES as readonly string[]).includes(f)) throw new Error(`unknown fixture ${f}; one of ${FIXTURE_NAMES.join(', ')} or all`);
 const K = Number(opts.runs);
 if (!Number.isInteger(K) || K < 1) throw new Error('--runs takes a positive integer');
-const ROOT = resolve(opts.root);
-const REPO = fileURLToPath(new URL('../../..', import.meta.url));
-const LIVE_HOME = join(homedir(), '.tiller');
+const ROOT = benchRoot(opts.root);
 /** The trial homes keep the default cap. */
 const maxUsdPerRun = DEFAULTS['memory.gardener.maxUsdPerRun'];
 
@@ -79,7 +78,6 @@ interface Trial {
   idem: number;
 }
 
-const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
 
 /** A POST with no timeout: memory_garden run with wait lasts as long as the run (up to LIMITS.garden.timeoutMinutes). */
@@ -93,25 +91,6 @@ function post(port: number, token: string, tool: string, body: object): Promise<
     req.on('error', fail);
     req.end(JSON.stringify(body));
   });
-}
-
-async function startDaemon(home: string) {
-  const env: NodeJS.ProcessEnv = { ...process.env, TL_HOME: home, TL_PORT: '0' };
-  // This may itself run inside a tiller node: the daemon and its gardener must see only the throwaway home.
-  for (const k of Object.keys(env)) if (k.startsWith('TL_') && k !== 'TL_HOME' && k !== 'TL_PORT') delete env[k];
-  const log = openSync(join(home, 'daemon.log'), 'a');
-  const child = spawn(process.execPath, ['--import', 'tsx', 'src/daemon/index.ts'], { cwd: REPO, env, stdio: ['ignore', log, log] });
-  const exited = new Promise<void>((ok) => child.on('exit', () => ok()));
-  for (let i = 0; i < 120 && !existsSync(join(home, 'port')); i++) await sleep(250);
-  const port = Number(readFileSync(join(home, 'port'), 'utf8'));
-  if (!port || port === 7788) throw new Error(`the trial daemon reports port ${port}`);
-  const stop = async () => {
-    child.kill('SIGTERM');
-    if (await Promise.race([exited.then(() => true), sleep(30_000).then(() => false)])) return;
-    child.kill('SIGKILL');
-    await exited;
-  };
-  return { port, token: readFileSync(join(home, 'admin-token'), 'utf8').trim(), stop };
 }
 
 const live = (a: GardenActionView) => a.undoneAt === undefined;
@@ -134,10 +113,8 @@ const ratio = (n: number, d: number) => (d ? n / d : undefined);
 
 async function trial(name: string, n: number): Promise<Trial> {
   const fx = loadFixture(name);
-  mkdirSync(ROOT, { recursive: true });
   const checkout = mkdtempSync(join(ROOT, `garden-${name}-`));
   const home = mkdtempSync(join(tmpdir(), 'tl-gbench-'));
-  if (resolve(home) === LIVE_HOME || resolve(home).startsWith(`${LIVE_HOME}/`)) throw new Error('refusing the live ~/.tiller');
   try {
     git(checkout, 'init', '-q');
     git(checkout, 'remote', 'add', 'origin', `https://${fx.repos.app.replace(/^git:/, '')}`);
@@ -234,7 +211,6 @@ const fmt = (x: number | undefined) => (x === undefined ? 'n/a' : x.toFixed(3));
 const mean = (xs: (number | undefined)[]) => { const v = xs.filter((x): x is number => x !== undefined); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : undefined; };
 const min = (xs: (number | undefined)[]) => { const v = xs.filter((x): x is number => x !== undefined); return v.length ? Math.min(...v) : undefined; };
 const max = (xs: number[]) => Math.max(...xs);
-const median = (xs: number[]) => { const v = [...xs].sort((a, b) => a - b); return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2; };
 let missed = 0;
 const target = (ok: boolean, what: string) => {
   if (!ok) missed++;

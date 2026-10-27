@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { ArchivedNode } from '../../src/shared/protocol.js';
 import { ftsTerms } from '../../src/daemon/memory-schema.js';
 import type { Tree } from './lib/archive.js';
+import { benchRoot } from './lib/daemon.js';
 import { Case, type Fixture } from './lib/fixture.js';
 import { readSafetensors } from './retrieval/embedders.js';
 import {
@@ -17,7 +18,7 @@ import {
 } from './retrieval/eval.js';
 import { verify } from './retrieval/models.js';
 import type { FtsVariant, Noise, QueryScore, RankerName } from './retrieval/types.js';
-import { checkRoot, distractors, gate, scaledStores, scoreTree } from './replay.js';
+import { distractors, gate, scaledStores, scoreTree } from './replay.js';
 
 const cfg = makeConfig(NaN, 'F0');
 const cleanup: (() => void)[] = [];
@@ -269,10 +270,10 @@ describe('replay.ts', () => {
   it('refuses a --root inside the repo, ~/.tiller or the home it reads', () => {
     const repo = fileURLToPath(new URL('../../', import.meta.url));
     const home = scratch('tl-bench-home-');
-    expect(() => checkRoot(join(repo, 'bench', 'out'), home)).toThrow(/inside/);
-    expect(() => checkRoot(join(homedir(), '.tiller', 'bench'), home)).toThrow(/inside/);
-    expect(() => checkRoot(join(home, 'results'), home)).toThrow(/inside/);
-    expect(checkRoot(join(scratch('tl-bench-root-'), 'new'), home)).toMatch(/new$/);
+    expect(() => benchRoot(join(repo, 'bench', 'out'), [home])).toThrow(/inside/);
+    expect(() => benchRoot(join(homedir(), '.tiller', 'bench'), [home])).toThrow(/inside/);
+    expect(() => benchRoot(join(home, 'results'), [home])).toThrow(/inside/);
+    expect(benchRoot(join(scratch('tl-bench-root-'), 'new'), [home])).toMatch(/new$/);
   });
 
   const ROOT = 'n-00000000';

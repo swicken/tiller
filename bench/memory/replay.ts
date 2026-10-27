@@ -6,12 +6,13 @@
 //   npm run bench:memory:replay -- --retrieval [--scale 5000,20000] --root DIR [--home ~/.tiller]
 //       [--deps DIR] [--explore minilm,bge,arctic] [--workspace ~/workspace]
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { basename, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { LIMITS } from '../../src/daemon/memory-schema.js';
+import { benchRoot, realPath } from './lib/daemon.js';
 import { ArchiveReplay, clusters, gateTrees, hotFiles, isExcludedRepo, labels, replayAsOf, type Tree } from './lib/archive.js';
 import { embedders } from './retrieval/embedders.js';
 import {
@@ -20,35 +21,6 @@ import {
 } from './retrieval/eval.js';
 import { EXPLORATORY, type CandidateKey } from './retrieval/models.js';
 import type { Embedder, Noise, QueryScore, RankerName, RetrievalQuery, RetrievalResult } from './retrieval/types.js';
-
-const REPO = fileURLToPath(new URL('../../', import.meta.url));
-
-// --- Where results may go ---
-
-/** The real path of p, or of its nearest existing ancestor joined with the rest. */
-function real(p: string): string {
-  const abs = resolve(p);
-  if (existsSync(abs)) return realpathSync(abs);
-  const up = dirname(abs);
-  return up === abs ? abs : join(real(up), basename(abs));
-}
-
-/** The checkout this script runs from and its main checkout (a worktree's common git dir), as real paths. */
-function checkouts(): string[] {
-  const out = [real(REPO)];
-  try {
-    const common = execFileSync('git', ['-C', REPO, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' }).trim();
-    out.push(real(dirname(common)));
-  } catch { /* not a git checkout: the directory alone */ }
-  return out;
-}
-
-/** Throws when root is inside the repo, ~/.tiller or the --home being read: results must never land there. */
-export function checkRoot(root: string, home: string, forbidden = [...checkouts(), real(join(homedir(), '.tiller')), real(home)]): string {
-  const r = real(root);
-  for (const f of forbidden) if (r === f || r.startsWith(f + sep)) throw new Error(`--root ${root} is inside ${f}; choose a scratch directory outside the repo and ~/.tiller`);
-  return r;
-}
 
 // --- R1 (§2.2) ---
 
@@ -113,8 +85,8 @@ const cut = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)
  * (by path or name); oldest first, deduplicated.
  */
 export function distractors(workspace: string, exclude: Pick<Tree, 'cwd' | 'repo'>[]): Distractor[] {
-  const paths = new Set(exclude.map((t) => real(t.cwd))), names = new Set(exclude.map((t) => t.repo));
-  const repos = findRepos(workspace).filter((r) => !isExcludedRepo(real(r)) && !paths.has(real(r)) && !names.has(basename(r)));
+  const paths = new Set(exclude.map((t) => realPath(t.cwd))), names = new Set(exclude.map((t) => t.repo));
+  const repos = findRepos(workspace).filter((r) => !isExcludedRepo(realPath(r)) && !paths.has(realPath(r)) && !names.has(basename(r)));
   const all: Distractor[] = [];
   for (const r of repos) {
     let log: string;
@@ -189,7 +161,7 @@ export const PADDING_RULE = {
 };
 
 export interface GateOptions {
-  /** Checked with checkRoot by the caller. */
+  /** Checked with benchRoot by the caller. */
   root: string;
   home: string;
   sets: GateSet[];
@@ -337,7 +309,7 @@ function main(argv: string[]): Promise<RetrievalResult> {
   const scale = values.scale?.split(',').map(Number);
   if (scale?.some((n) => !Number.isInteger(n) || n <= 0)) throw new Error('--scale takes item counts, as 5000,20000');
   const home = resolve(values.home ?? process.env.TL_HOME ?? join(homedir(), '.tiller'));
-  const root = checkRoot(values.root, home);
+  const root = benchRoot(values.root, [home]);
   return gate({
     root, home, sets: ['r2a', ...(values.retrieval ? ['r1' as const] : []), ...(scale ? ['s' as const] : [])], explore, name: 'replay',
     ...(scale ? { scale } : {}), ...(values.deps ? { deps: resolve(values.deps) } : {}), ...(values.workspace ? { workspace: resolve(values.workspace) } : {}),
