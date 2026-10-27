@@ -4,6 +4,7 @@ Use the behavior references for current contracts and configuration:
 
 | Area | Reference |
 | --- | --- |
+| Installing Tiller and what `bin/setup` checks | [install.md](install.md) |
 | Configuration keys, defaults and scope | [config.md](config.md) |
 | Harness adapters, launch policy, repository trust, Claude accounts and usage quotas | [harnesses.md](harnesses.md) |
 | Message delivery, steering and receipts | [messaging.md](messaging.md) |

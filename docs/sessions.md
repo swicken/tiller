@@ -2,6 +2,10 @@
 
 A tree is a root node and everything under it. This document covers what survives a restart of a node, of the daemon or of the machine, and how. The design behind the session directory is in [design/artifacts-plan.md](design/artifacts-plan.md).
 
+## Where files live
+
+Everything the daemon keeps is under `~/.tiller`, or `TL_HOME` when set: the node registry (`state.json`), per-node files under `nodes/<id>/`, the admin token `tl` uses, `config.json` ([config.md](config.md)), presets under `agents/` and the log `daemon.log`. Each tree of nodes has a session directory, `sessions/<rootId>/`, for notes and the event log ([session directories](#session-directories)). The daemon listens on 127.0.0.1, port 7788 unless `TL_PORT` says otherwise. Inside a node, `tl` talks to the node's own daemon (`TL_ENDPOINT`) and refuses rather than guess when `TL_HOME` or `TL_PORT` names a different one; to address another daemon from a node, run `tl` without `TL_NODE_ID`, `TL_TOKEN_FILE`, `TL_ENDPOINT` and the inherited `TL_PORT`.
+
 ## Session directories
 
 Each tree gets a directory, `~/.tiller/sessions/<rootId>/`, created when the root launches. Every node in the tree has its path in the environment variable `TL_SESSION_DIR`, a sentence in its system prompt telling it to keep notes that must outlive its context there, with `handoff.md` as the current state of the work (kept short and rewritten in place, not appended to as a log; history goes in a separate file), and permission to write there without prompting. The directory is keyed by the root's id, not by Claude's session id, so it survives a node restart, `tl reload` and a reboot, unlike Claude's own scratchpad under `/tmp`. A `meta.json` in it records the root's title, directory and creation time, so the files remain identifiable after the root is gone.
