@@ -1,6 +1,6 @@
 # Front ends and notifications
 
-All front ends are clients of the same daemon, so closing one never stops the agents. A session, in the front ends, is one tree shown at a time, with a switcher between trees. The **Rename session** pencil beside **New session** changes the current tree's root title, even when a child is selected.
+All front ends are clients of the same daemon, so closing one never stops the agents. A session, in the front ends, is one tree shown at a time, with a switcher between trees. The **Rename session** pencil at the right edge of the switcher, or a right-click anywhere on it, edits the current tree's root title in place, even when a child is selected; clicking the rest of the switcher opens the session list. Any node's **More actions → Rename** edits its title in place where that menu was opened, in the title bar or in its sidebar row. In the editor, Enter saves, Escape cancels and clicking away saves; an empty name is ignored.
 
 ## The native app (macOS)
 
