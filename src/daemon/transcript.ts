@@ -79,16 +79,13 @@ function parseLines(raw: string): Entry[] {
   });
 }
 
-/** Claude content blocks: a string, or an array of text / tool_use blocks. */
-function claudeParts(content: unknown): Message['parts'] {
+/**
+ * Claude or Pi content blocks: a string, or an array of text and tool blocks (Claude's `tool_use`, Pi's `toolCall`);
+ * other blocks (Pi's image and thinking) are dropped.
+ */
+function contentParts(content: unknown, toolType: 'tool_use' | 'toolCall'): Message['parts'] {
   const blocks: Array<{ type?: unknown; text?: unknown; name?: unknown }> = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
-  return blocks.flatMap((b): Message['parts'] => (b?.type === 'text' && typeof b.text === 'string' && b.text.trim() ? [{ text: b.text.trim() }] : b?.type === 'tool_use' && typeof b.name === 'string' ? [{ tool: b.name }] : []));
-}
-
-/** Pi content blocks: a string, or an array of TextContent / ToolCall blocks (image and thinking blocks are dropped). */
-function piParts(content: unknown): Message['parts'] {
-  const blocks: Array<{ type?: unknown; text?: unknown; name?: unknown }> = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
-  return blocks.flatMap((b): Message['parts'] => (b?.type === 'text' && typeof b.text === 'string' && b.text.trim() ? [{ text: b.text.trim() }] : b?.type === 'toolCall' && typeof b.name === 'string' ? [{ tool: b.name }] : []));
+  return blocks.flatMap((b): Message['parts'] => (b?.type === 'text' && typeof b.text === 'string' && b.text.trim() ? [{ text: b.text.trim() }] : b?.type === toolType && typeof b.name === 'string' ? [{ tool: b.name }] : []));
 }
 
 /** A Pi message timestamp (Unix ms) with the ISO entry timestamp as a fallback. */
@@ -129,7 +126,7 @@ export function parseMessages(raw: string, harness: Harness = 'claude'): Message
   if (harness !== 'pi') {
     return entries.flatMap((e): Message[] => {
       if (e.type !== 'user' && e.type !== 'assistant') return [];
-      const parts = claudeParts(e.message?.content);
+      const parts = contentParts(e.message?.content, 'tool_use');
       if (!parts.length) return [];
       const at = typeof e.timestamp === 'string' ? Date.parse(e.timestamp) : NaN;
       return [{ role: e.type, parts, ...(Number.isNaN(at) ? {} : { at }) }];
@@ -138,7 +135,7 @@ export function parseMessages(raw: string, harness: Harness = 'claude'): Message
   return piActiveBranch(entries).flatMap((e): Message[] => {
     const role = e.type === 'message' ? e.message?.role : undefined;
     if (role !== 'user' && role !== 'assistant') return [];
-    const parts = piParts(e.message?.content);
+    const parts = contentParts(e.message?.content, 'toolCall');
     if (!parts.length) return [];
     const at = piAt(e);
     return [{ role, parts, ...(at === undefined ? {} : { at }) }];

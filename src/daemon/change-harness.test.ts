@@ -227,11 +227,11 @@ it('preserves owned worktree identity and refuses missing worktrees', async () =
   const { id } = await spawn();
   const w = { repo: home, path: home, branch: 'tl/keep', base: 'tl/task', baseSha: 'abc' };
   manager.registry.update(id, { worktree: w });
-  vi.spyOn(worktree, 'listWorktrees').mockResolvedValue([{ path: home, branch: w.branch }]);
+  vi.spyOn(worktree, 'isListed').mockResolvedValue(true);
   expect(await change(id, 'pi')).toEqual({ ok: true });
   expect(manager.view(id)!.worktree).toEqual(w);
   expect(processes.at(-1)!.opts.cwd).toBe(home);
-  vi.mocked(worktree.listWorktrees).mockResolvedValue([]);
+  vi.mocked(worktree.isListed).mockResolvedValue(false);
   expect(await change(id, 'codex')).toMatchObject({ ok: false, error: 'worktree missing' });
 });
 

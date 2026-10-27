@@ -1,6 +1,6 @@
 // Records the demo: a temp daemon running real Claude agents on the sample repo, the browser UI in headless Chromium
-// driven through the beats of demo-plan.md. One long video is recorded and cut into per-beat clips with ffmpeg.
-//   node run.mjs [--out DIR]
+// driven through the demo beats. One long video is recorded and cut into per-beat clips with ffmpeg.
+//   node run.mjs [--out DIR]   (clips go to $DEMO_DIR/clips by default; DEMO_DIR defaults to ~/.tiller-demo)
 // Each run uses a fresh scratch directory and a freshly made sample repo. The daemon is stopped by pid at the end.
 import { spawn, spawnSync } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
@@ -14,11 +14,12 @@ import { makeSampleRepo } from './make-sample-repo.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const { values: opts } = parseArgs({ options: { out: { type: 'string' } } });
-const OUT = resolve(opts.out ?? join(homedir(), '.tiller/sessions/n-8f9599e6/demo/clips'));
+const DEMO = process.env.DEMO_DIR ?? join(homedir(), '.tiller-demo');
+const OUT = resolve(opts.out ?? join(DEMO, 'clips'));
 const SCRATCH = realpathSync(mkdtempSync(join(tmpdir(), 'tiller-demo-')));
 const TL_HOME = join(SCRATCH, 'home');
 // A stable path, so Claude's folder trust for it (recorded on the first run) carries over to later runs.
-const SAMPLE = join(homedir(), '.tiller/sessions/n-8f9599e6/demo/sample-repo');
+const SAMPLE = resolve(DEMO, 'sample-repo');
 
 const TASK = 'Add a --json flag to the CLI, write its tests, and document it in the README. Use one worker per part, in '
   + 'worktrees. Spawn one reviewer node with preset reviewer to check the branches before merging, then merge.';

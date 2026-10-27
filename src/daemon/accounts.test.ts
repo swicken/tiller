@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findArchived } from './archive.js';
-import { gateFor, NodeManager, type SpawnRequest } from './manager.js';
+import { gateFor } from './completion-gate.js';
+import { NodeManager, type SpawnRequest } from './manager.js';
 import { PtySession, type SpawnOpts } from './pty.js';
 
 class FakeSession {

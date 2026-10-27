@@ -1,8 +1,8 @@
 // `tl autostart`: a launchd user agent that starts bin/tld at login and relaunches it after a crash, but not after a
 // clean exit such as `tl stop`.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { DEFAULT_PORT, PORT_FILE } from './home.js';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { daemonPort } from './home.js';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,10 +68,7 @@ export function agentMatches(home: string, port: number, path = plistPath()): bo
     if (r.status !== 0) return false;
     const env = JSON.parse(r.stdout) as Record<string, unknown>;
     if (env.TL_HOME !== home) return false;
-    let configuredPort = DEFAULT_PORT;
-    if (typeof env.TL_PORT === 'string' && env.TL_PORT) configuredPort = Number(env.TL_PORT);
-    else { try { configuredPort = Number(readFileSync(join(home, PORT_FILE), 'utf8').trim()) || DEFAULT_PORT; } catch { /* default port */ } }
-    return configuredPort === port;
+    return daemonPort(home, typeof env.TL_PORT === 'string' ? env.TL_PORT : '') === port;
   } catch { return false; }
 }
 

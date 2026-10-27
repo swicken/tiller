@@ -49,7 +49,7 @@ const PI_TOOLS: Record<string, string> = {
  * The adapter registers tiller's MCP server as tl_<node prefix>_<random> (mcpName in adapters/pi/config.ts), so this node's
  * tiller tools are mcp__tl_<node prefix>_*; a user server that merely starts with tl_ does not match.
  */
-export const piTillerTools = (nodeId: string) => `mcp__tl_${nodeId.replace(/^n[-_]/, '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 8)}_*`;
+const piTillerTools = (nodeId: string) => `mcp__tl_${nodeId.replace(/^n[-_]/, '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 8)}_*`;
 
 export function piToolName(name: string, nodeId: string): string {
   if (name === 'mcp__tiller') return piTillerTools(nodeId);
@@ -59,7 +59,7 @@ export function piToolName(name: string, nodeId: string): string {
 }
 
 /** A preset's tools as Pi's --tools allowlist, which always keeps tiller's MCP tools, and disallowedTools as --exclude-tools. */
-export function piToolArgs(p: Partial<Preset>, nodeId: string): string[] {
+function piToolArgs(p: Partial<Preset>, nodeId: string): string[] {
   const name = (tool: string) => piToolName(tool, nodeId), args: string[] = [];
   if (p.tools) args.push('--tools', [...new Set([...p.tools.map(name), piTillerTools(nodeId)])].join(','));
   if (p.disallowedTools) args.push('--exclude-tools', [...new Set(p.disallowedTools.map(name))].join(','));
@@ -96,7 +96,7 @@ function piPackagesCached(cwd: string, path: string): PiPackage[] {
  * The packages in the user's and the project's Pi settings, from `pi list`: each source line is followed by its install path
  * when it is installed, and a source with filters is marked "(filtered)".
  */
-export function piPackages(cwd: string, path: string): PiPackage[] {
+function piPackages(cwd: string, path: string): PiPackage[] {
   // prune: parses pi list's human-readable output, as Pi has no machine-readable listing; revisit if Pi adds one.
   const out = execFileSync('pi', ['list'], { cwd, env: { ...process.env, PATH: path, NO_COLOR: '1', FORCE_COLOR: '0' }, encoding: 'utf8', timeout: 10_000 });
   const packages: PiPackage[] = [];

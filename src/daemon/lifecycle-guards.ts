@@ -14,7 +14,7 @@ const setupRunning: Guard = [(_, rt) => !!rt.setup, () => 'worktree setup is run
  * node exists, plus anything async or op-specific (a resume's worktree listing, a harness change's target), themselves.
  * Close skips pending, setup and the gate; restart skips needsSetup, which it retries; resume skips the gate.
  */
-export const GUARDS: Record<LifecycleOp, Guard[]> = {
+const GUARDS: Record<LifecycleOp, Guard[]> = {
   resume: [
     pending,
     [(rec) => !isAgentKind(rec.kind), () => 'Only agent nodes can be resumed'],

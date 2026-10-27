@@ -8,14 +8,11 @@ import { SidebarInspector } from './SidebarInspector';
 import { SidebarResize } from './SidebarResize';
 import { flattenSession, type Row } from './tree';
 import { selectNode, toggleCollapsed, toggleHistory, useStore, viewMemory } from '../store';
+import { readPref, writePref } from '../prefs';
 
 const DETAILS_KEY = 'tl.sidebarDetails';
-export function readSidebarDetails(): boolean {
-  try { return localStorage.getItem(DETAILS_KEY) !== '0'; } catch { return true; }
-}
-export function saveSidebarDetails(open: boolean) {
-  try { localStorage.setItem(DETAILS_KEY, open ? '1' : '0'); } catch { /* per-viewer convenience only */ }
-}
+export const readSidebarDetails = () => readPref(DETAILS_KEY) !== '0';
+export const saveSidebarDetails = (open: boolean) => writePref(DETAILS_KEY, open ? '1' : '0');
 
 export function useRows(): Row[] {
   const nodes = useStore((s) => s.nodes);

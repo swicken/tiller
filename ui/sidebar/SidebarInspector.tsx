@@ -1,22 +1,19 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { isAgentKind, PROFILE_LABELS, profileFor, type NodeView } from '../../src/shared/protocol';
 import { fmtTokens, shortModel } from '../../src/shared/format';
-import { CtxBar, DiffCounts, StateDot } from '../controls/Bits';
+import { CtxBar, DiffCounts, outcomeLabel, StateDot } from '../controls/Bits';
 import { Icon } from '../controls/icons';
 import { KIND_LABEL, kindTag, statusKind } from './tree';
+import { readPreference, useResizeHandle } from './useResizeHandle';
 import './sidebar-inspector.css';
 
-const STORAGE_KEY = 'tl.sidebarInspectorHeight';
-const DEFAULT_HEIGHT = 300;
-const MIN_HEIGHT = 160;
-const MAX_HEIGHT = 560;
-const clampPreference = (height: number) => Math.round(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, height)));
+const HEIGHT = { key: 'tl.sidebarInspectorHeight', initial: 300, min: 160, max: 560 };
 
 /** Reserve 120px for the tree; in short windows share the remaining space. */
 export function inspectorBounds(available: number) {
   const space = Math.max(0, available);
-  const max = Math.floor(Math.min(MAX_HEIGHT, space - Math.min(120, space * 0.45)));
-  return { min: Math.min(MIN_HEIGHT, max), max };
+  const max = Math.floor(Math.min(HEIGHT.max, space - Math.min(120, space * 0.45)));
+  return { min: Math.min(HEIGHT.min, max), max };
 }
 
 export function inspectorHeight(preferred: number, available: number) {
@@ -24,32 +21,11 @@ export function inspectorHeight(preferred: number, available: number) {
   return Math.round(Math.max(min, Math.min(max, preferred)));
 }
 
-export function readInspectorHeight() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY), height = raw === null ? NaN : Number(raw);
-    if (Number.isFinite(height) && height >= MIN_HEIGHT && height <= MAX_HEIGHT) return height;
-  } catch { /* Layout preferences are optional. */ }
-  return DEFAULT_HEIGHT;
-}
-
-function saveHeight(height: number) {
-  try { localStorage.setItem(STORAGE_KEY, String(clampPreference(height))); } catch { /* Resizing works without storage. */ }
-}
+export const readInspectorHeight = () => readPreference(HEIGHT);
 
 export function SidebarInspector({ node, onClose }: { node: NodeView | null; onClose: () => void }) {
   const root = useRef<HTMLElement>(null);
-  const handle = useRef<HTMLDivElement>(null);
-  const [preferred, setPreferred] = useState(readInspectorHeight);
-  const latest = useRef(preferred);
   const [available, setAvailable] = useState(() => typeof window === 'undefined' ? 600 : window.innerHeight);
-  const drag = useRef<{ id: number; y: number; height: number; preferred: number } | null>(null);
-  const [resizing, setResizing] = useState(false);
-  const { min, max } = inspectorBounds(available);
-  const height = inspectorHeight(preferred, available);
-  const change = (value: number) => {
-    latest.current = clampPreference(value);
-    setPreferred(latest.current);
-  };
 
   useLayoutEffect(() => {
     const parent = root.current?.closest<HTMLElement>('.sidebar-session-body');
@@ -62,25 +38,12 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
     const observer = new ResizeObserver(measure);
     observer.observe(parent);
     window.addEventListener('resize', measure);
-    const el = handle.current;
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', measure);
-      const active = drag.current;
-      drag.current = null;
-      if (active && el?.hasPointerCapture(active.id)) el.releasePointerCapture(active.id);
     };
   }, []);
-
-  const finish = (commit: boolean) => {
-    const active = drag.current;
-    if (!active) return;
-    drag.current = null;
-    if (commit) saveHeight(latest.current);
-    else change(active.preferred);
-    setResizing(false);
-    if (handle.current?.hasPointerCapture(active.id)) handle.current.releasePointerCapture(active.id);
-  };
+  const { size: height, props } = useResizeHandle(HEIGHT, inspectorBounds(available), (preferred) => inspectorHeight(preferred, available), 'y');
 
   const s = node?.status;
   const git = s?.git;
@@ -89,39 +52,8 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
   const row = (label: string, value: React.ReactNode) => <div className="inspector-fact"><dt>{label}</dt><dd>{value}</dd></div>;
 
   return <section id="sidebar-inspector" ref={root} aria-label="Selected node details" style={{ height }}>
-    <div className="inspector-resize" ref={handle} role="separator" tabIndex={0}
-      aria-label="Details height" aria-orientation="horizontal" aria-controls="sidebar-inspector-content"
-      aria-valuemin={min} aria-valuemax={max} aria-valuenow={height} aria-valuetext={`${height} pixels`}
-      data-resizing={resizing || undefined}
-      title="Drag to resize details. Up/Down resize; Home/End set minimum/maximum. Double-click to reset."
-      onPointerDown={(e) => {
-        if (e.button !== 0 || drag.current) return;
-        e.preventDefault();
-        e.currentTarget.focus();
-        e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { id: e.pointerId, y: e.clientY, height, preferred: latest.current };
-        setResizing(true);
-      }}
-      onPointerMove={(e) => {
-        const active = drag.current;
-        if (!active || active.id !== e.pointerId) return;
-        const next = inspectorHeight(active.height + active.y - e.clientY, available);
-        if (next !== inspectorHeight(latest.current, available)) change(next);
-      }}
-      onPointerUp={(e) => { if (drag.current?.id === e.pointerId) finish(true); }}
-      onPointerCancel={(e) => { if (drag.current?.id === e.pointerId) finish(false); }}
-      onLostPointerCapture={() => finish(false)}
-      onDoubleClick={() => { change(DEFAULT_HEIGHT); saveHeight(DEFAULT_HEIGHT); }}
-      onKeyDown={(e) => {
-        if (e.altKey || e.ctrlKey || e.metaKey || drag.current) return;
-        const step = e.shiftKey ? 40 : 16;
-        const next = e.key === 'Home' ? min : e.key === 'End' ? max
-          : e.key === 'ArrowUp' ? Math.min(max, height + step) : e.key === 'ArrowDown' ? Math.max(min, height - step) : undefined;
-        if (next === undefined) return;
-        e.preventDefault();
-        e.stopPropagation();
-        if (next !== height) { change(next); saveHeight(next); }
-      }} />
+    <div {...props} className="inspector-resize" aria-label="Details height" aria-controls="sidebar-inspector-content"
+      title="Drag to resize details. Up/Down resize; Home/End set minimum/maximum. Double-click to reset." />
     <div id="sidebar-inspector-content" className="inspector-content">
       <header className="inspector-header">
         <h2>{node?.title || 'Node details'}</h2>
@@ -160,7 +92,7 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
         </p></>}
         <h3>Completion</h3>
         <dl className="inspector-facts">
-          {row('Reported outcome', node.outcome ? <span title="Reported task outcome">{node.outcome.outcome === 'failed' ? 'Needs changes' : 'succeeded'}</span> : 'Not reported')}
+          {row('Reported outcome', node.outcome ? <span title="Reported task outcome">{outcomeLabel(node.outcome)}</span> : 'Not reported')}
           {row('Completion gate', node.gate ?? node.outcome?.gate ?? 'Not reported')}
         </dl>
         {node.outcome?.summary && <p className="inspector-text">{node.outcome.summary}</p>}

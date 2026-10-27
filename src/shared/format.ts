@@ -29,6 +29,11 @@ export const fmtTokens = (n: number) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` 
 /** Rate-limit use: amber above 80%, red above 95%. */
 const usageLevel = (pct: number): CtxLevel => (pct > 95 ? 'bad' : pct > 80 ? 'warn' : 'ok');
 
+/** A rate-limit reading older than this is stale. */
+const STALE_MS = 300_000;
+export const limitResetPassed = (l: RateLimit, now: number): boolean => !!l.resetsAt && Date.parse(l.resetsAt) <= now;
+export const limitStale = (l: RateLimit, now: number): boolean => l.observedAt !== undefined && now - l.observedAt > STALE_MS;
+
 const WINDOWS: Record<string, string> = { five_hour: '5h', seven_day: '7d', seven_day_opus: '7d Opus pool', seven_day_sonnet: '7d Sonnet pool' };
 
 /** Local "14:30" within a day of `now`, else "Wed 14:30"; '' for a bad timestamp. */
@@ -43,9 +48,9 @@ function fmtReset(iso: string, now: number): string {
 /** One part per window, such as "5h 42% · resets 14:30"; compact leaves out the reset. Join the parts with " · ". */
 export function usageParts(limits: readonly RateLimit[], compact = false, now = Date.now()): { text: string; level: CtxLevel }[] {
   return limits.map((l) => {
-    if (l.resetsAt && Date.parse(l.resetsAt) <= now) return { text: `${WINDOWS[l.kind] ?? l.kind} · reset passed · awaiting report`, level: 'warn' };
+    if (limitResetPassed(l, now)) return { text: `${WINDOWS[l.kind] ?? l.kind} · reset passed · awaiting report`, level: 'warn' };
     const reset = compact || !l.resetsAt ? '' : fmtReset(l.resetsAt, now);
-    return { text: `${WINDOWS[l.kind] ?? l.kind} ${Math.round(l.percentUsed)}%${reset && ` · resets ${reset}`}${l.observedAt !== undefined && now - l.observedAt > 300_000 ? ` · stale (${fmtAge(now - l.observedAt)} ago)` : ''}`, level: usageLevel(l.percentUsed) };
+    return { text: `${WINDOWS[l.kind] ?? l.kind} ${Math.round(l.percentUsed)}%${reset && ` · resets ${reset}`}${limitStale(l, now) ? ` · stale (${fmtAge(now - l.observedAt!)} ago)` : ''}`, level: usageLevel(l.percentUsed) };
   });
 }
 

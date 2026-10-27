@@ -1,4 +1,5 @@
 import { readdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import xterm from '@xterm/headless';
 import { PtySession, buildChildEnv, classify, composerTextOf, loginShellPath } from './pty.js';
@@ -137,7 +138,8 @@ describe('PtySession', () => {
     }
     // node-pty 1.1.0 leaked the master, a kqueue and the slave per PTY (+30 here).
     await until(() => fds() <= before + 2).catch(() => {});
-    expect(fds()).toBeLessThanOrEqual(before + 2);
+    const { version } = createRequire(import.meta.url)('node-pty/package.json');
+    expect(fds(), `node-pty ${version} is installed; if package.json pins another, node_modules is stale: run npm ci`).toBeLessThanOrEqual(before + 2);
   });
 });
 

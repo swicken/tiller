@@ -205,7 +205,7 @@ export function launchArgs(i: LaunchInput): string[] {
  * the main session take its tool restrictions. Its prompt is empty so Claude keeps its own system prompt and ours is
  * still appended. An allow list always keeps the tiller MCP tools, or the node could not report.
  */
-export function presetAgentArgs(p: Preset): string[] {
+function presetAgentArgs(p: Preset): string[] {
   if (!p.tools && !p.disallowedTools && !p.maxTurns) return [];
   const tools = p.tools && (p.tools.includes('mcp__tiller') ? p.tools : [...p.tools, 'mcp__tiller']);
   const agent = { description: p.description ?? `tiller preset ${p.name}`, prompt: '', tools, disallowedTools: p.disallowedTools, maxTurns: p.maxTurns };
