@@ -650,6 +650,8 @@ export function startNotices(m: Mgr): void {
   /** The changedAt of the errored turn the child was told to continue from. */
   const retried = new Map<string, number>();
   const stallNoticed = new Set<string>();
+  /** Nodes whose parent heard their branch conflicts with its base; cleared once it merges cleanly again. */
+  const conflictNoticed = new Set<string>();
   const notice = (v: NodeView, reason: string) => {
     if (!v.parentId || notified.has(v.id)) return;
     notified.add(v.id);
@@ -677,6 +679,13 @@ export function startNotices(m: Mgr): void {
       stallNoticed.add(v.id);
       const body = `No hook event for ${fmtAge(Date.now() - v.status.changedAt)} while working${v.status.activity ? `; last activity: ${v.status.activity}` : ''}.`;
       childNotice(m, v, 'no activity', body);
+    }
+    const g = v.status.git;
+    if (!g?.conflicts) conflictNoticed.delete(v.id);
+    else if (!conflictNoticed.has(v.id)) {
+      conflictNoticed.add(v.id);
+      childNotice(m, v, 'conflicts with its base', `Merging ${g.base} into ${g.branch} would conflict in ${g.conflicts.join(', ')}. `
+        + `Send the worker a rebase instruction: rebase ${g.branch} onto ${g.base} (or merge ${g.base} into it), resolve, commit.`);
     }
     if (exited) notice(v, 'exited');
     else if (state === 'done' && errored) {

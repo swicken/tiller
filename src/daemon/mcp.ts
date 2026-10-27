@@ -15,7 +15,7 @@ import { loadConfig, type Config } from './config.js';
 import { ADMIN_TOKEN_FILE } from './home.js';
 import { findArchived, history } from './archive.js';
 import type { NodeManager } from './manager.js';
-import { closeRefusal, type WorktreeReport } from './worktree-lifecycle.js';
+import { closeRefusal, queueMerge, type MergeResult, type WorktreeReport } from './worktree-lifecycle.js';
 import { MAX_PATCH_BYTES, MergeConflict } from './worktree.js';
 import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS, spawnKind } from './spawnfields.js';
@@ -59,12 +59,12 @@ function summarize(v: NodeView, now: number, all: NodeView[]) {
 
 function worktreeSummary(v: NodeView) {
   const w = v.worktree!, g = v.status.git;
-  return { path: w.path, branch: w.branch, base: w.base, ahead: g?.ahead, behind: g?.behind, dirty: g?.dirty, missing: !!w.missing, merged: !!g?.mergedAt };
+  return { path: w.path, branch: w.branch, base: w.base, ahead: g?.ahead, behind: g?.behind, dirty: g?.dirty, missing: !!w.missing, merged: !!g?.mergedAt, conflicts: g?.conflicts };
 }
 
-/** `⎇ tl/n-3f2a ↑3 ↓1 dirty merged` for the tree line. */
+/** `⎇ tl/n-3f2a ↑3 ↓1 conflicts:2 dirty merged` for the tree line. */
 function branchText(w: ReturnType<typeof worktreeSummary>): string {
-  return [`⎇ ${w.branch} from ${w.base}`, w.ahead && `↑${w.ahead}`, w.behind && `↓${w.behind}`, w.dirty && 'dirty', w.merged && 'merged', w.missing && '(worktree missing)'].filter(Boolean).join(' ');
+  return [`⎇ ${w.branch} from ${w.base}`, w.ahead && `↑${w.ahead}`, w.behind && `↓${w.behind}`, w.conflicts && `conflicts:${w.conflicts.length}`, w.dirty && 'dirty', w.merged && 'merged', w.missing && '(worktree missing)'].filter(Boolean).join(' ');
 }
 
 function modelInfo(n: ReturnType<typeof summarize>): string {
@@ -231,7 +231,7 @@ const spawned = new Map<string, { args: string; result: unknown; at: number }>()
 const tools = {
   list_nodes: tool(
     'List nodes',
-    `List the nodes you can see (yourself, ancestors, siblings, descendants) as an indented tree, after one line of your Claude account's usage (5-hour and 7-day rate-limit windows), which every node in the account draws on. States: working, waiting, blocked, done, unknown, none; armed (waiting on spawn dependencies) and queued (waiting on daemon.maxWorking), with the reason as activity. Flags: errored, interrupted, exited, stale, stalled (working with no hook event for limits.stallMinutes). "reported <verdict>" follows report_outcome; read what "outcome" for the report. [agent X] names the harness. Spend is the node's own, then "tree" with descendants; a trailing +, as in $0.12+, marks a lower bound because some usage had no price. A node with its own worktree shows ⎇ branch from base, ↑ commits not in base, ↓ base commits not on the branch, dirty (uncommitted files) and merged. Use it to find node ids for send, read or close.`,
+    `List the nodes you can see (yourself, ancestors, siblings, descendants) as an indented tree, after a line of your Claude account's usage (5-hour and 7-day windows, shared by every node in the account). States: working, waiting, blocked, done, unknown, none; armed (waiting on spawn dependencies) and queued (waiting on daemon.maxWorking), with the reason as activity. Flags: errored, interrupted, exited, stale, stalled (working with no hook event for limits.stallMinutes). "reported <verdict>" follows report_outcome; the full report is in read what "outcome". [agent X] names the harness. Spend is the node's own, then "tree" with descendants; a trailing +, as in $0.12+, marks a lower bound because some usage had no price. A node with its own worktree shows ⎇ branch from base, ↑ commits not in base, ↓ base commits not on the branch, dirty (uncommitted files), merged, and conflicts:N (files that would conflict with base). Use it to find node ids for send, read or close.`,
     {},
     async (c) => {
       const all = c.manager.list();
@@ -243,12 +243,12 @@ const tools = {
 
   spawn: tool(
     'Start node',
-    `Open a child node and return its id. kind (default: your own harness) "claude": Claude Code; "agent": \`harness\` (claude, pi or codex; default yours); "terminal": a login shell. \`cwd\` must exist; default your own. \`role\`: "worker" (default), "orchestrator" or "none". \`profile\` (orchestrator, implementation, explorer, mechanical, reviewer) is independent of role and defaults from it (orchestrator, else implementation); explorer and reviewer instruct read-only work but enforce no tool restrictions. Explicit \`model\`/\`effort\` win over presets, which win over per-harness profile config, then legacy Claude role config. Claude children inherit a same-harness parent's permissionMode. Pi and Codex reject permissionMode and presets with maxTurns; Pi enforces preset tools/disallowedTools with its own flags and rejects names it cannot translate; Codex rejects presets with tools/disallowedTools.
-isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its own workspace trust) gives the child a git worktree at <main checkout>/.claude/worktrees/<id> on a new branch; the reply carries worktree { path, branch, base }. \`base\` is the branch it forks from and merges into, created at the HEAD of \`cwd\`'s checkout if missing; give every worker of a task the same base so merges accumulate. Without base it is the branch checked out at \`cwd\`, unless that is protected (worktrees.protected, default main, master and origin's default branch) or detached: then a new worktrees.taskBranch branch (default "tl/{slug}") is made. Omitted isolation follows project config (default "none"), so a child whose cwd is in an existing worktree shares it.
+    `Open a child node and return its id. kind (default: your own harness) "claude": Claude Code; "agent": \`harness\` (claude, pi or codex; default yours); "terminal": a login shell. \`cwd\` must exist; default your own. \`role\`: "worker" (default), "orchestrator" or "none". \`profile\` (orchestrator, implementation, explorer, mechanical, reviewer) is independent of role and defaults from it (orchestrator, else implementation); explorer and reviewer instruct read-only work but enforce no tool restrictions. Explicit \`model\`/\`effort\` win over presets, which win over config. Claude children inherit a same-harness parent's permissionMode. Pi and Codex refuse permissionMode and preset options they cannot enforce; the error names them.
+isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its own workspace trust) gives the child a git worktree at <main checkout>/.claude/worktrees/<id> on a new branch; the reply carries worktree { path, branch, base }. \`base\` is the branch it forks from and merges into, created at the HEAD of \`cwd\`'s checkout if missing; give every worker of a task the same base so merges accumulate. Without base it is the branch checked out at \`cwd\`, unless that is protected (worktrees.protected, default main, master and origin's default) or detached: then a new worktrees.taskBranch branch (default "tl/{slug}") is made. Omitted isolation follows project config (default "none"), so a child whose cwd is in an existing worktree shares it.
 \`preset\`: .tiller/agents/<name>.md in \`cwd\`'s main checkout, else ~/.tiller/agents/<name>.md (built-in "reviewer", "researcher"); it sets role text, model, effort, permissionMode, isolation and tool restrictions, and your arguments override it.
 \`requestId\`: a retry with the same one returns the original node (replayed: true); reusing it with different arguments is an error.
 \`after\`/\`afterSuccess\` (ids in your scope): the node starts armed, with no process, and launches once each \`after\` node finishes a turn begun after this spawn (or exits) and each \`afterSuccess\` node reports succeeded (gate passed, if configured). A failed report blocks it and you get a message; close it to drop it. With daemon.maxWorking agents working it is queued and launched in creation order. The reply then has state "armed" or "queued" and what it waits on.
-\`fork\` (Claude nodes only) starts from a copy of another node's conversation, then \`prompt\`: a node in your scope or a closed node of your tree (see history); \`cwd\` defaults to its. A child runs in your Claude account; \`account\` is for the human only.`,
+\`fork\` (Claude nodes only) starts from a copy of another node's conversation, then \`prompt\`: a node in your scope or a closed node of your tree (see history); \`cwd\` defaults to its.`,
     { ...SPAWN_FIELDS, kind: SPAWN_FIELDS.kind.optional(), cwd: SPAWN_FIELDS.cwd.optional(), permissionMode: z.enum(PERMISSION_MODES).optional(), requestId: z.string().optional() },
     async (c, { requestId, cwd, kind, ...rest }) => {
       if (rest.now && c.caller !== HUMAN) throw new Error('refused: only the human may bypass daemon.maxWorking with now');
@@ -281,7 +281,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   send: tool(
     'Send message',
-    `Send a message to an agent node in your scope (parent, siblings, descendants; not yourself). It arrives as a prompt in a framed envelope naming the sender and where to reply. Normally it is queued: the reply has outcome "queued" and a messageId, and the target's plugin submits it when the target is idle (up to ${QUEUE_CAP} queued, for ${QUEUE_TTL_MS / 60_000} minutes); message_status shows when it is delivered. A target with no plugin gets it pasted into its prompt when idle; the reply may be delivered, stalled or queued. Outcomes: queued, delivered, stalled (pasted, unconfirmed: do not resend blindly), expired and queueFull (not delivered; resend later), withdrawn, gone, refused (detail says why). One send per target per ${RATE_MS / 1000} seconds. Terminal nodes cannot receive messages; use write. mode "now" interrupts a working target's turn and delivers at once, with an envelope line saying so (reply and message_status carry steer: true); to an idle target it equals "queue". Use it only to stop a worker heading the wrong way. withdraw takes back a queued message.`,
+    `Send a message to an agent node in your scope (parent, siblings, descendants; not yourself); it arrives as a framed prompt. Normally it is queued: the reply has outcome "queued" and a messageId, and the target's plugin submits it when the target is idle (up to ${QUEUE_CAP} queued, for ${QUEUE_TTL_MS / 60_000} minutes); message_status shows when it is delivered. A target with no plugin gets it pasted into its prompt when idle; the reply may be delivered, stalled or queued. Outcomes: queued, delivered, stalled (pasted, unconfirmed: do not resend blindly), expired and queueFull (not delivered; resend later), withdrawn, gone, refused (detail says why). One send per target per ${RATE_MS / 1000} seconds. Terminal nodes cannot receive messages; use write. mode "now" interrupts a working target's turn and delivers at once, with an envelope line saying so (reply and message_status carry steer: true); to an idle target it equals "queue". Use it only to stop a worker heading the wrong way. withdraw takes back a queued message.`,
     { ...nodeIdArg, text: z.string().min(1).optional(), message: z.string().min(1).optional().describe('alias of text'), mode: z.enum(['queue', 'now']).optional() },
     async (c, a) => ({ data: await deliver(c.manager, c.caller, nodeId(a), either(a, 'text', 'message'), { mode: a.mode }) })),
 
@@ -375,7 +375,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   close: tool(
     'Close nodes',
-    `Close and delete nodes. Every id must be your descendant (agents cannot close orchestrators), or the whole batch is refused and nothing closes. The human approves the batch once in the UI: the reply is then {ok:false, pending:true, requestId} at once, and the decision (closed, with any per-node errors; denied; or expired) arrives later as a message from tiller. Config approvals.close can skip that (a project's .tiller/config.json may only be stricter than the home file): "always" skips; "done" skips when every node is done, exited or has called report_outcome; "never" (default) asks. A node with its own worktree closes only when its tree is clean, its branch merged and no other live node works in it; otherwise the batch is refused, nothing closes, and the error says why. \`worktree\` overrides that for the batch: "keep" commits uncommitted changes as a WIP commit and keeps the branch; "discard" deletes the worktree and branch with any unmerged work and always needs the human's approval.`,
+    `Close and delete nodes. Every id must be your descendant (agents cannot close orchestrators), or the whole batch is refused and nothing closes. The human approves the batch once in the UI: the reply is then {ok:false, pending:true, requestId} at once, and the decision (closed, with any per-node errors; denied; or expired) arrives later as a message from tiller. Config approvals.close can skip that: "always" skips; "done" skips when every node is done, exited or has called report_outcome; "never" (default) asks. A node with its own worktree closes only when its tree is clean, its branch merged and no other live node works in it; otherwise the batch is refused, nothing closes, and the error says why. \`worktree\` overrides that for the batch: "keep" commits uncommitted changes as a WIP commit and keeps the branch; "discard" deletes the worktree and branch with any unmerged work and always needs the human's approval.`,
     { nodeIds: z.array(z.string().min(1)).min(1).optional(), ids: z.array(z.string().min(1)).min(1).optional().describe('alias of nodeIds'), force: z.boolean().optional(), worktree: z.enum(['keep', 'discard']).optional() },
     async (c, a) => {
       const ids = either<string[]>(a, 'nodeIds', 'ids');
@@ -436,23 +436,33 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   merge: tool(
     'Merge node changes',
-    `Merge the branch of a descendant that has its own worktree into its base, in the project's worktrees.mergeStyle ("merge", default: a merge commit; "squash": one commit; "ff-only": fast-forward only). Refused, with nothing changed, when the base is protected (worktrees.protected, default main, master and origin's default branch: spawn with a \`base\` branch instead and have the human open a pull request from it), while the node is working, when its worktree has uncommitted files, or when the base is checked out somewhere with uncommitted changes. Conflicts are checked first without touching files; the reply names the conflicting paths: send the worker a rebase instruction rather than resolving them yourself, then merge again. The commit is signed when git config sets commit.gpgsign; a signing failure refuses the merge with git's error. The human approves each merge in the UI unless config approvals.merge is set (a project's .tiller/config.json may only be stricter than the home file); declined gives {ok:false, reason:"denied"}. Close the node afterwards to remove its worktree and branch.`,
-    { nodeId: z.string().min(1) },
+    `Merge the branch of a descendant that has its own worktree into its base, in the project's worktrees.mergeStyle ("merge", default: a merge commit; "squash": one commit; "ff-only": fast-forward only). Refused, with nothing changed, when the base is protected (worktrees.protected, default main, master and origin's default branch: spawn with a \`base\` branch instead and have the human open a pull request from it), while the node is working, when its worktree has uncommitted files, or when the base is checked out somewhere with uncommitted changes. Conflicts are checked first without touching files; the reply names the conflicting paths: send the worker a rebase instruction rather than resolving them yourself, then merge again. The commit is signed when git config sets commit.gpgsign; a signing failure refuses the merge with git's error. The human approves each merge in the UI unless config approvals.merge is set (a project's .tiller/config.json may only be stricter than the home file); declined gives {ok:false, reason:"denied"}. whenIdle: if the node is working, reply {ok:true, queued:true} at once and merge when its turn ends (or it exits); you then get a framed message with the result, or why it was dropped (node closed, daemon stopped). One queued merge per node. Close the node afterwards to remove its worktree and branch.`,
+    { nodeId: z.string().min(1), whenIdle: z.boolean().optional() },
     async (c, a) => {
       const v = requireOwned(c, a.nodeId, false);
       if (!v.worktree) throw new Error(`${v.id} has no worktree of its own to merge`);
       const skip = c.caller === HUMAN || loadConfig(v.worktree.repo, c.manager.home).approvals.merge;
-      if (!skip && !(await c.confirm(`${who(c)} wants to merge ${v.title} (${v.id}): branch ${v.worktree.branch} into ${v.worktree.base}`))) {
+      const later = a.whenIdle && v.status.state === 'working' && !v.status.exited;
+      if (!skip && !(await c.confirm(`${who(c)} wants to merge ${v.title} (${v.id}): branch ${v.worktree.branch} into ${v.worktree.base}${later ? ' when its turn ends' : ''}`))) {
         return { data: { ok: false, reason: 'denied' } };
       }
-      let r: Awaited<ReturnType<NodeManager['merge']>>;
-      try {
-        r = await c.manager.merge(a.nodeId);
-      } catch (err) {
-        if (!(err instanceof MergeConflict)) throw err;
-        return { text: `${err.message}. Send the worker a rebase instruction: rebase ${v.worktree.branch} onto ${v.worktree.base}, resolve, commit, then merge again.`, data: { ok: false, conflicts: err.conflicts } };
+      const w = v.worktree;
+      const reply = (merge: Promise<MergeResult>) => merge.then(
+        (r) => ({ text: `merged ${w.branch} into ${r.base} (${r.style}), now at ${r.sha.slice(0, 7)}`, data: { ok: true, ...r } }),
+        (err) => {
+          if (!(err instanceof MergeConflict)) throw err;
+          return { text: `${err.message}. Send the worker a rebase instruction: rebase ${w.branch} onto ${w.base}, resolve, commit, then merge again.`, data: { ok: false, conflicts: err.conflicts } };
+        });
+      if (a.whenIdle) {
+        if (c.caller === HUMAN) throw new Error('whenIdle is only for agent nodes: the human has no inbox (tl merge --when-idle waits instead)');
+        const caller = c.caller;
+        const tell = (merge: Promise<MergeResult>) => void reply(merge).then((r) => r.text, (err: Error) => `merge of ${v.id} failed: ${err.message}`)
+          .then((text) => deliver(c.manager, DAEMON, caller, text, { fromLabel: `tiller (queued merge of ${v.id})`, replyTo: null, about: [v.id] })).catch(logError);
+        if (await queueMerge(c.manager, v.id, caller, tell)) {
+          return { text: `queued: ${v.id} is working; you get a message with the merge result when its turn ends`, data: { ok: true, queued: true } };
+        }
       }
-      return { text: `merged ${v.worktree.branch} into ${r.base} (${r.style}), now at ${r.sha.slice(0, 7)}`, data: { ok: true, ...r } };
+      return reply(c.manager.merge(a.nodeId));
     }),
 
   resume: tool(
@@ -606,7 +616,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   report_outcome: tool(
     'Report task outcome',
-    `Report how your own task ended, once, when your work is finished: "succeeded" or "failed", an optional note, and summary (what you did), changedFiles (paths), verified (what you ran to check it, and the result) and openQuestions (what is left for your parent to decide), which your parent reads with read what "outcome". If the project configures a completion gate (config \`gate\`), "succeeded" is accepted only once the gate command passes in your directory; on failure the reply gives its output and the attempts left: fix it and report again. A gate still running after 30 seconds is replied to as pending, and a failure then arrives as a message. Any report while your gate runs is refused. With no attempts left the outcome is recorded as failed. Your parent is told of every recorded outcome.`,
+    `Report how your own task ended, once, when your work is finished: "succeeded" or "failed" with the report fields; your parent reads them with read what "outcome". If the project configures a completion gate (config \`gate\`), "succeeded" is accepted only once the gate command passes in your directory; on failure the reply gives its output and the attempts left: fix it and report again. A gate still running after 30 seconds is replied to as pending, and a failure then arrives as a message. Any report while your gate runs is refused. With no attempts left the outcome is recorded as failed. Your parent is told of every recorded outcome.`,
     {
       outcome: z.enum(['succeeded', 'failed']), note: z.string().optional(), summary: z.string().optional(), changedFiles: z.array(z.string()).optional(),
       verified: z.string().optional(), openQuestions: z.array(z.string()).optional(),

@@ -698,6 +698,24 @@ describe('event log', () => {
 });
 
 describe('station notices', () => {
+  it('tells the parent once when a branch starts conflicting with its base, and again only after it merged cleanly', async () => {
+    startNotices(m.mgr);
+    const pasted = () => m.sessions.get('p')!.pasted;
+    const git = (conflicts?: string[]) => ({ branch: 'tl/a', base: 'dev', ahead: 1, behind: 1, dirty: 0, additions: 1, deletions: 0, ...(conflicts ? { conflicts } : {}) });
+    m.set('a', { git: git(['README', 'b.txt']) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pasted()).toHaveLength(1);
+    expect(pasted()[0]).toMatch(/\nfrom: tiller \(child a "T-a" conflicts with its base\)\nreply-to: none\nMerging dev into tl\/a would conflict in README, b\.txt\. /);
+    m.set('a', { git: git(['README']) });
+    m.set('p', { state: 'done', doneSource: 'stop' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pasted()).toHaveLength(1);
+    m.set('a', { git: git() });
+    m.set('a', { git: git(['README']) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pasted()).toHaveLength(2);
+  });
+
   it('first tells an errored child once to continue, then notifies the parent on the next error; a clean Stop re-arms', async () => {
     startNotices(m.mgr);
     const pasted = () => m.sessions.get('p')!.pasted, child = () => m.sessions.get('a')!.pasted;
