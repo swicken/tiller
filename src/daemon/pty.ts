@@ -176,7 +176,7 @@ export class PtySession {
 export function buildChildEnv(extra: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !/^(CLAUDE|TERM|TERMINFO|COLORTERM)/.test(k)) env[k] = v;
+    if (v !== undefined && !/^(CLAUDE|TERM|TERMINFO|COLORTERM|COLORFGBG)/.test(k)) env[k] = v;
   }
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
