@@ -1,27 +1,27 @@
 // The Memory panel's requests (docs/memory.md): which account file, repository and checkout a MemoryTarget means, the
 // reads, and the human's actions. Every request comes over the WebSocket, which only the admin token opens, so every
 // action is the human's. The store keeps the SQL and server.ts the transport.
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join } from 'node:path';
+import { basename, join } from 'node:path';
 import type {
   ClaudeMemoryView, MemoryAction, MemoryInjectionView, MemoryItemDetail, MemoryItemKind, MemoryItemView, MemoryPage, MemoryTarget,
 } from '../shared/protocol.js';
-import { findArchived } from './archive.js';
 import { accountForProject, claudeConfigDir } from './claude-accounts.js';
 import { readClaudeMemory } from './claude-memory.js';
 import { usableCwd, type NodeManager } from './manager.js';
 import { memoryOn } from './memory-config.js';
 import { DEFAULT_ACCOUNT_KEY, LIMITS, type Actor, type MemoryScope } from './memory-schema.js';
 import { noCounts, readFailure, type ListCursor } from './memory-store.js';
+import { requireDir } from './util.js';
 
 /** What the panel needs of the manager. */
-export type PanelHost = Pick<NodeManager, 'home' | 'memory' | 'registry' | 'projectDir' | 'repoKeyOf'>;
+export type PanelHost = Pick<NodeManager, 'home' | 'memory' | 'registry' | 'projectDir' | 'repoKeyOf' | 'transcriptNode'>;
 
 type Checkout = NonNullable<MemoryPage['checkout']>;
 
 /** A MemoryTarget resolved: the account and its file, the repository, and the checkout the opt-in is judged for. */
-export interface ResolvedTarget {
+interface ResolvedTarget {
   account: string | undefined;
   /** The account file's key. */
   file: string;
@@ -42,16 +42,13 @@ const NO_CHECKOUT = 'no checkout of this repository is known; choose its directo
  * wins over the node's. The opt-in is judged for the first checkout whose repo key is the repository's: the chosen one,
  * the node's, a live node's, then the first path the file recorded. With none, on is null.
  */
-export async function resolveTarget(m: PanelHost, t: MemoryTarget): Promise<ResolvedTarget> {
+async function resolveTarget(m: PanelHost, t: MemoryTarget): Promise<ResolvedTarget> {
   const live = t.nodeId === undefined ? undefined : m.registry.get(t.nodeId);
-  const node = live ?? (t.nodeId === undefined ? undefined : await findArchived(m.home, t.nodeId));
-  if (t.nodeId !== undefined && !node) throw new Error(`no such node: ${t.nodeId}`);
+  const node = live ?? (t.nodeId === undefined ? undefined : await m.transcriptNode(t.nodeId));
   // A closed node's worktree may be gone: its cwd then maps back to the main checkout.
   const nodeDir = live ? m.projectDir(live) : node && m.projectDir({ cwd: usableCwd(node.cwd) ?? node.cwd });
   const nodeCheckout = nodeDir && existsSync(nodeDir) ? nodeDir : undefined;
-  if (t.dir !== undefined && (!isAbsolute(t.dir) || !statSync(t.dir, { throwIfNoEntry: false })?.isDirectory())) {
-    throw new Error(`dir must be the absolute path of a directory: ${t.dir}`);
-  }
+  if (t.dir !== undefined) requireDir(t.dir, 'dir');
   const dirCheckout = t.dir === undefined ? undefined : m.projectDir({ cwd: t.dir });
   const project = dirCheckout ?? nodeCheckout;
   const account = t.account !== undefined ? t.account ?? undefined
@@ -120,20 +117,12 @@ export async function memoryPage(m: PanelHost, q: PageQuery): Promise<MemoryPage
   try {
     const counts = m.memory.counts(scope);
     const query = q.query?.trim();
-    if (query) return { ...page, counts, items: await searchItems(m, scope, { query, ...filter, retracted: q.retracted }) };
+    if (query) return { ...page, counts, items: m.memory.search(scope, { query, ...filter, includeRetracted: q.retracted, eligible: true, limit: LIMITS.panel.page }) };
     const { items, next } = m.memory.list(scope, { ...filter, retracted: q.retracted, before: q.before });
     return { ...page, counts, items, ...(next ? { next } : {}) };
   } catch (err) {
     return { ...page, state: readFailure(err) };
   }
-}
-
-/**
- * The panel's one search seam, best match first, at most a page. v2 runs the store's FTS; v4 replaces the body with
- * its hybrid search, which takes the same filters and returns eligible.
- */
-export async function searchItems(m: PanelHost, scope: MemoryScope, q: { query: string; kind?: MemoryItemKind; pinned?: boolean; retracted?: boolean }): Promise<MemoryItemView[]> {
-  return m.memory.search(scope, { query: q.query, kind: q.kind, pinned: q.pinned, includeRetracted: q.retracted, eligible: true, limit: LIMITS.panel.page });
 }
 
 /** One item in full, not counted as an agent's read. */
@@ -145,8 +134,7 @@ export async function memoryItem(m: PanelHost, target: MemoryTarget, itemId: num
 
 /** A live or closed node's digest decisions from its account's file, newest first; none without a file. */
 export async function memoryGiven(m: PanelHost, nodeId: string): Promise<MemoryInjectionView[]> {
-  const node = m.registry.get(nodeId) ?? await findArchived(m.home, nodeId);
-  if (!node) throw new Error(`no such node: ${nodeId}`);
+  const node = await m.transcriptNode(nodeId);
   return m.memory.injections(node.account, nodeId, LIMITS.panel.given);
 }
 

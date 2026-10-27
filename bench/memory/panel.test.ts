@@ -24,7 +24,7 @@ const text = (n: number, len: number) => Array.from({ length: Math.ceil(len / 4)
 const tag = (n: number): string => (n < 26 ? '' : tag(Math.floor(n / 26) - 1)) + String.fromCharCode(97 + (n % 26));
 
 let dir: string, home: string, repoA: string, repoB: string, m: NodeManager;
-const host = (memory: MemoryStore): PanelHost => ({ home, memory, registry: m.registry, projectDir: (n) => m.projectDir(n), repoKeyOf: (d) => m.repoKeyOf(d) });
+const host = (memory: MemoryStore): PanelHost => ({ home, memory, registry: m.registry, projectDir: (n) => m.projectDir(n), repoKeyOf: (d) => m.repoKeyOf(d), transcriptNode: (id) => m.transcriptNode(id) });
 
 /** One store.apply per repository: count items of every kind from a succeeded node, then 10% retracted and `pins` pinned. */
 function seed(store: MemoryStore, repo: string, count: number, len: (i: number) => number, pins: number): void {

@@ -1,6 +1,6 @@
 import { fmtAge, shortEffort, shortModel, usageLine } from '../shared/format.js';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import type http from 'node:http';
 import { isAbsolute, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -29,7 +29,7 @@ import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS } from './spawnfields.js';
 import { readMessages, renderMessage, sessionMessages } from './transcript.js';
 import { DAEMON, deliver, HUMAN, inScope, isDescendant, messageStatus, notifyWhen, QUEUE_CAP, QUEUE_TTL_MS, RATE_MS, startNotices, withdraw } from './messaging.js';
-import { logError, PREVIEW_CHARS, readBody, safeEqual } from './util.js';
+import { logError, PREVIEW_CHARS, readBody, requireDir, safeEqual } from './util.js';
 
 const MAX_WRITE_CHARS = 2000;
 const IDEMPOTENCY_MS = 24 * 3600_000;
@@ -208,9 +208,7 @@ function memoryScopeOf(c: Ctx, a: { repo?: string; account?: string }): MemorySc
   let repoPath: string, account: string | undefined;
   if (c.caller === HUMAN) {
     if (!a.repo) throw new Error('repo is required for the human: a directory of the repository (tl memory passes its own)');
-    if (!isAbsolute(a.repo) || !statSync(a.repo, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`repo must be the absolute path of a directory: ${a.repo}`);
-    repoPath = m.projectDir({ cwd: a.repo });
-    account = a.account ?? accountForProject(m.home, repoPath);
+    ({ repoPath, account } = humanRepo(c, a.repo, a.account));
   } else {
     if (a.repo !== undefined || a.account !== undefined) throw new Error("refused: repo and account are the human's to choose; your memory is your own repository's");
     const rec = m.registry.get(c.caller);
@@ -338,10 +336,14 @@ const refs = (ids: number[]) => ids.map(itemRef).join(', ');
 
 /** The human's repository and account for memory_garden, without memory's on gate: status and undo work while it is off. */
 function gardenTarget(c: Ctx, a: { repo?: string; account?: string }): { repoPath?: string; account?: string } {
-  if (a.repo === undefined) return { account: a.account };
-  if (!isAbsolute(a.repo) || !statSync(a.repo, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`repo must be the absolute path of a directory: ${a.repo}`);
-  const repoPath = c.manager.projectDir({ cwd: a.repo });
-  return { repoPath, account: a.account ?? accountForProject(c.manager.home, repoPath) };
+  return a.repo === undefined ? { account: a.account } : humanRepo(c, a.repo, a.account);
+}
+
+/** The main checkout of the human's directory `repo`, and the account: `account`, else the project's. */
+function humanRepo(c: Ctx, repo: string, account: string | undefined): { repoPath: string; account?: string } {
+  requireDir(repo, 'repo');
+  const repoPath = c.manager.projectDir({ cwd: repo });
+  return { repoPath, account: account ?? accountForProject(c.manager.home, repoPath) };
 }
 
 /** One account file's gardener: its 30-day spend, its newest runs and its paused repositories (pausedBy). */
@@ -826,10 +828,9 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     async (c, a) => {
       const m = c.manager;
       // A closed node's account and directory come from its archive line; a node wins over repo.
-      const rec = a.nodeId ? m.registry.get(a.nodeId) ?? await findArchived(m.home, a.nodeId) : undefined;
-      if (a.nodeId && !rec) throw new Error(`no such node: ${a.nodeId}`);
+      const rec = a.nodeId ? await m.transcriptNode(a.nodeId) : undefined;
       const live = !!a.nodeId && !!m.registry.get(a.nodeId);
-      if (a.repo !== undefined && !rec && (!isAbsolute(a.repo) || !statSync(a.repo, { throwIfNoEntry: false })?.isDirectory())) throw new Error(`repo must be the absolute path of a directory: ${a.repo}`);
+      if (a.repo !== undefined && !rec) requireDir(a.repo, 'repo');
       // Without the opt-in gate: the project is the main checkout, as memoryScopeOf resolves it.
       const project = rec ? m.projectDir(rec) : a.repo !== undefined ? m.projectDir({ cwd: realpathSync(a.repo) }) : null;
       const days = a.days ?? LIMITS.tools.statusDays.default;
