@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { type Profile, harnessFor, isAgentKind, NEEDS_YOU_STATES, type Harness, type ArchivedNode, type Diff, type DigestItem, type Drain, type Transcript, type GitState, type ModEvent, type NodeKind, type NodeRecord, type NodeStatus, type NodeView, type Outcome, type Effort, type Isolation, type Role, type Usage, type Worktree } from '../shared/protocol.js';
-import { loadConfig, type Config, type MergeStyle } from './config.js';
+import { loadConfig, type Config } from './config.js';
 import { UsageRegistry } from './usage.js';
 import { accountForProject, claudeConfigDir, claudeHomeOf, claudeHomes } from './claude-accounts.js';
 import { homeDir } from './home.js';
@@ -28,7 +28,7 @@ import { NodeRegistry } from './nodes.js';
 import { buildChildEnv, PtySession } from './pty.js';
 import { count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
-import { addWorktree, closeWorktreeNode, gitSettled, mergeWorktree, readClaudeJson, refreshGit, refreshGitSoon, setMissing, setupThenLaunch, trustedForWorktree, trustPolicy, worktreeCheck, worktreeCommands, worktreeEnv, worktrees, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
+import { addWorktree, closeWorktreeNode, dropQueuedMerges, gitSettled, mergeWorktree, readClaudeJson, refreshGit, refreshGitSoon, setMissing, setupThenLaunch, trustedForWorktree, trustPolicy, worktreeCheck, worktreeCommands, worktreeEnv, worktrees, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
 import { appendEvent, buildDigest, ensureSession, flushEvents, handoffPrompt, listSessions, markClosed, readEvents, sessionDir, sweepSessions } from './sessions.js';
 import { archivedOf, archiveNode, findArchived, type BranchFate } from './archive.js';
 import { adoptSessionHistory, nodeTranscript, recordedSessions, transcriptFor } from './transcript.js';
@@ -511,7 +511,7 @@ export class NodeManager extends EventEmitter {
    * while the node is working, closing or setting up, when its tree has uncommitted files, or when the branch conflicts
    * with base (the error names the paths).
    */
-  merge(id: string): Promise<{ base: string; sha: string; style: MergeStyle }> {
+  merge(id: string): Promise<MergeResult> {
     return mergeWorktree(this, id);
   }
 
@@ -998,7 +998,10 @@ export class NodeManager extends EventEmitter {
    * already queued have landed. No git refresh starts once it is called, and no registry save after it resolves.
    */
   async shutdown(opts: { clearLive?: boolean } = {}): Promise<void> {
-    if (!this.shutDown) this.registry.setStopped(this.drainState?.reason ?? 'the daemon was stopped');
+    if (!this.shutDown) {
+      dropQueuedMerges(this); // before the PTYs' exits end the turns they wait for
+      this.registry.setStopped(this.drainState?.reason ?? 'the daemon was stopped');
+    }
     this.shutDown = true;
     clearTimeout(this.drainState?.lease);
     if (opts.clearLive) this.registry.setLive([]);
