@@ -1,16 +1,49 @@
 // Isolated benchmark daemons (bench plan §1, pattern from spike/restart-check.ts): a temp TL_HOME and an ephemeral port,
 // started as `node --import tsx src/daemon/index.ts` from a checkout. Never the live ~/.tiller or port 7788.
 import { spawn } from 'node:child_process';
-import { openSync, readFileSync, realpathSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { setProjectTrust } from '../../../src/daemon/trust.js';
+import { mainCheckoutSync } from '../../../src/daemon/worktree.js';
 
 /** This checkout, whose daemon the bench runs. */
 export const CHECKOUT = fileURLToPath(new URL('../../..', import.meta.url)).replace(/\/$/, '');
 const LIVE_HOME = join(homedir(), '.tiller');
 const LIVE_PORT = 7788;
+/** Claude's unattended preset: bypassPermissions and an empty body, so the default worker role stays (bench plan §3.1). */
+const CLAUDE_PRESET = '---\npermissionMode: bypassPermissions\n---\n';
+
+/** A path with its existing part resolved through symlinks, so a path not yet created compares like a created one. */
+export function realPath(path: string): string {
+  const abs = resolve(path);
+  try { return realpathSync(abs); } catch { return dirname(abs) === abs ? abs : join(realPath(dirname(abs)), basename(abs)); }
+}
+
+/** <root> as a real path, created; refused inside the live tiller home, this checkout or any of `also`. */
+export function benchRoot(path: string, also: string[] = []): string {
+  const root = realPath(path);
+  const forbidden = [LIVE_HOME, CHECKOUT, mainCheckoutSync(CHECKOUT), ...also].flatMap((p) => (p ? [realPath(p)] : []));
+  for (const f of forbidden) {
+    const rel = relative(f, root);
+    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw new Error(`refusing --root ${root}: it is inside ${f}`);
+  }
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  return root;
+}
+
+/**
+ * Make `home` a bench daemon's home: config.json holding `config`, the unattended `bench` preset, and Tiller trust for
+ * `root`, so gate commands run in every scratch repo below it.
+ */
+export function prepareHome(home: string, root: string, config: object): void {
+  mkdirSync(join(home, 'agents'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(home, 'config.json'), JSON.stringify(config, null, 2) + '\n');
+  writeFileSync(join(home, 'agents', 'bench.md'), CLAUDE_PRESET);
+  setProjectTrust(home, root, true);
+}
 
 export interface Daemon {
   home: string;
@@ -32,11 +65,9 @@ export function freePort(): Promise<number> {
   });
 }
 
-const real = (p: string) => { try { return realpathSync(p); } catch { return resolve(p); } };
-
 /** Start a daemon on `home` and wait for it to listen. Its output goes to <home>/daemon.log. */
 export async function startDaemon(home: string, timeoutMs = 30_000): Promise<Daemon> {
-  if (real(home) === real(LIVE_HOME)) throw new Error(`refusing to run a bench daemon on the live home ${LIVE_HOME}`);
+  if (realPath(home) === realPath(LIVE_HOME)) throw new Error(`refusing to run a bench daemon on the live home ${LIVE_HOME}`);
   let port = await freePort();
   if (port === LIVE_PORT) port = await freePort();
   const log = join(home, 'daemon.log');
@@ -46,6 +77,8 @@ export async function startDaemon(home: string, timeoutMs = 30_000): Promise<Dae
   const p = spawn(process.execPath, ['--import', 'tsx', 'src/daemon/index.ts'], {
     cwd: CHECKOUT, env: { ...env, TL_HOME: home, TL_PORT: String(port) }, stdio: ['ignore', out, out],
   });
+  closeSync(out); // the child holds its own copy
+
   let exited: number | null | undefined;
   const gone = new Promise<void>((r) => p.once('exit', (code) => { exited = code; r(); }));
   const stop = async () => {

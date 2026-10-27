@@ -6,22 +6,21 @@
 // --collect is R2b (§2.2): each sampled archived node's real prompt goes, after a fixed elicitation, to fresh agent nodes
 // in a scratch daemon whose store is the as-of replay, and their memory_search queries are saved under <root>/results.
 // See bench/memory/README.md.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { HARNESSES, type ArchivedNode, type Effort, type Harness } from '../../src/shared/protocol.js';
 import { MemoryStore } from '../../src/daemon/memory-store.js';
 import { recordedSessions } from '../../src/daemon/transcript.js';
-import { setProjectTrust } from '../../src/daemon/trust.js';
-import { mainCheckoutSync } from '../../src/daemon/worktree.js';
 import { readClaudeJson, trustPolicy } from '../../src/daemon/worktree-lifecycle.js';
 import { clusters, gateTrees, hotFiles, labels, replayAsOf, type Tree } from './lib/archive.js';
 import { Client } from './lib/client.js';
-import { CHECKOUT, startDaemon } from './lib/daemon.js';
+import { benchRoot, prepareHome, startDaemon } from './lib/daemon.js';
 import { makeRepo } from './lib/repo.js';
 import { R2B_VERSION, r2bQueries, transcriptQueries, type R2bFile, type R2bRun } from './lib/queries.js';
+import { rng } from './lib/stats.js';
 import { gate, GATE_SETS, type GateOptions, type GateSet } from './replay.js';
 import { golden } from './retrieval/eval.js';
 import { EXPLORATORY } from './retrieval/models.js';
@@ -35,8 +34,6 @@ const PROJECTED_USD = 0.18;
 const MODELS: Partial<Record<Harness, string>> = { claude: 'claude-haiku-5-5', codex: 'gpt-6-luna' };
 const ELICIT = 'You are about to work on the task below in another checkout. Do not read or edit files. Call memory_search for '
   + 'what you would look up first (you may search more than once), then report_outcome with what you found.';
-/** Claude's unattended preset: bypassPermissions and an empty body, so the default worker role stays (bench plan §3.1). */
-const CLAUDE_PRESET = '---\npermissionMode: bypassPermissions\n---\n';
 
 const usage = () => {
   console.error('usage: bench:memory -- retrieval (--collect | --eval | --golden) [options]; see bench/memory/README.md');
@@ -56,24 +53,6 @@ const { values: o, positionals } = parseArgs({
   },
 });
 if (positionals[0] !== 'retrieval' || [o.collect, o.eval, o.golden].filter(Boolean).length !== 1) usage();
-
-/** A path with its existing part resolved through symlinks, so a path not yet created compares like a created one. */
-function real(path: string): string {
-  const abs = resolve(path);
-  try { return realpathSync(abs); } catch { return dirname(abs) === abs ? abs : join(real(dirname(abs)), basename(abs)); }
-}
-
-/** <root> as a real path, created; refused inside the live tiller home or this checkout (bench data is real-derived text). */
-function benchRoot(path: string): string {
-  const root = real(path);
-  const forbidden = [join(homedir(), '.tiller'), o.home!, CHECKOUT, mainCheckoutSync(CHECKOUT)].flatMap((p) => (p ? [real(p)] : []));
-  for (const f of forbidden) {
-    const rel = relative(f, root);
-    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw new Error(`refusing --root ${root}: it is inside ${f}`);
-  }
-  mkdirSync(root, { recursive: true, mode: 0o700 });
-  return root;
-}
 
 // --- --eval and --golden: G1's evaluator ---
 
@@ -101,16 +80,6 @@ async function evaluate(): Promise<void> {
 // --- --collect: R2b ---
 
 interface Job { tree: Tree; node: ArchivedNode; cluster: string; harness: Harness }
-
-/** mulberry32: a small seeded PRNG, so the sample is the same on every run. */
-function rng(seed: number): () => number {
-  return () => {
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /** Up to n of xs, a seeded Fisher-Yates prefix. */
 function sample<T>(xs: T[], n: number, seed: number): T[] {
@@ -230,10 +199,7 @@ async function runOne(job: Job, work: string, model: string | undefined, timeout
       const db = new DatabaseSync(dbFile);
       try { db.prepare('UPDATE repos SET key = ?, path = ? WHERE key = ?').run(key, repo, replay.scope.repoKey); } finally { db.close(); }
     }
-    writeFileSync(join(home, 'config.json'), JSON.stringify({ memory: { enabled: true, digest: 'off' } }, null, 2) + '\n');
-    mkdirSync(join(home, 'agents'));
-    writeFileSync(join(home, 'agents', 'bench.md'), CLAUDE_PRESET);
-    setProjectTrust(home, root, true);
+    prepareHome(home, root, { memory: { enabled: true, digest: 'off' } });
 
     daemon = await startDaemon(home);
     client = await Client.connect(daemon);
@@ -269,32 +235,18 @@ async function runOne(job: Job, work: string, model: string | undefined, timeout
   return run;
 }
 
-/**
- * Wait for the node's report and the end of its turn. Returns why it ended early, if it did: blocked (a permission or
- * trust prompt for 30 s: the harness cannot run unattended), exited, or timeout.
- */
+/** Why the node ended early, if it did, as an R2b status: blocked (it cannot run unattended), exited, or timeout. */
 async function finish(client: Client, id: string, timeoutMs: number): Promise<{ status: R2bRun['status']; detail: string } | undefined> {
-  let blockedSince = 0;
-  const end = await client.waitFor((): { status: R2bRun['status']; detail: string } | 'reported' | undefined => {
-    const n = client.nodes.get(id);
-    if (!n) return { status: 'error', detail: 'node vanished' };
-    if (n.outcome) return 'reported';
-    if (n.status.exited) return { status: 'error', detail: `exited: ${n.status.lastAssistantMessage?.slice(0, 200) ?? 'no message'}` };
-    if (n.status.state !== 'blocked') blockedSince = 0;
-    else if (!blockedSince) blockedSince = Date.now();
-    else if (Date.now() - blockedSince > 30_000) return { status: 'blocked', detail: n.status.activity ?? 'blocked' };
-    return undefined;
-  }, timeoutMs);
-  if (!end) return { status: 'timeout', detail: `no report in ${timeoutMs / 60_000} min` };
-  if (end !== 'reported') return end;
-  // The searches came before the report; let the turn end so the transcripts are flushed.
-  await client.waitFor(() => client.nodes.get(id)?.status.state === 'done', 60_000);
-  return undefined;
+  const { end, detail = '' } = await client.awaitOutcome(id, timeoutMs);
+  if (end === 'reported') return undefined;
+  if (end === 'vanished') return { status: 'error', detail: 'node vanished' };
+  if (end === 'exited') return { status: 'error', detail: `exited: ${detail}` };
+  return { status: end === 'blocked' ? 'blocked' : 'timeout', detail };
 }
 
 let root = '', results = '';
 try {
-  root = benchRoot(o.root!);
+  root = benchRoot(o.root!, [o.home!]);
   results = join(root, 'results');
   mkdirSync(results, { recursive: true, mode: 0o700 });
   if (o.collect) await collect();
