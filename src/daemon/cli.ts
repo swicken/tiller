@@ -18,7 +18,7 @@ import { buildChildEnv, loginShellPath } from './pty.js';
 import { formatEvent, listSessions, parseSince, readEvents, readNewEvents, sessionDir, type EventCursor, type SessionEvent } from './sessions.js';
 import { fmtAge } from '../shared/format.js';
 import { fmtUsd } from '../shared/spend.js';
-import type { Harness, NodeKind } from '../shared/protocol.js';
+import { HARNESSES, type Harness, type NodeKind } from '../shared/protocol.js';
 import { mainCheckout, runCommands, WORKTREES_DIR } from './worktree.js';
 import { cancelDrain, drainDaemon, restartDaemon, findDaemon, humanEnv, pickOrchestrator, spawnReload, startDaemon, upDir, type OrchestratorCandidate } from './up.js';
 
@@ -146,8 +146,9 @@ const { values: f, positionals: pos } = parseArgs({
 /** `--after a,b --after c` as [a, b, c]; undefined when absent. */
 const ids = (v: string[] | undefined) => v?.flatMap((x) => x.split(',')).map((x) => x.trim()).filter(Boolean);
 
-if (f.harness && !['claude', 'pi', 'codex'].includes(f.harness)) fail(`unknown harness: ${f.harness} (expected claude, pi or codex)`);
+if (f.harness && !(HARNESSES as readonly string[]).includes(f.harness)) fail(`unknown harness: ${f.harness} (expected claude, pi or codex)`);
 const isolation = () => (f.worktree ? 'worktree' : undefined);
+const cwdArg = () => realpathSync(resolve(f.cwd ?? process.cwd()));
 
 /**
  * The session directory for `id` (a root, or any node of a tree; a non-root id also filters `tl log` to that node);
@@ -177,7 +178,7 @@ switch (cmd) {
   case 'new': {
     if (!pos[0]) fail(usage());
     const harness: Harness | undefined = f.harness === 'claude' ? undefined : f.harness as Harness | undefined;
-    const { data } = await call('spawn', { kind: harness ? 'agent' : 'claude', ...(harness ? { harness } : {}), title: pos.join(' '), cwd: resolve(f.cwd ?? process.cwd()), prompt: f.prompt, model: f.model, effort: f.effort, role: f.role, profile: f.profile, isolation: isolation(), base: f.base, preset: f.preset, account: f.account }, false);
+    const { data } = await call('spawn', { kind: spawnKind(undefined, harness) ?? 'claude', ...(harness ? { harness } : {}), title: pos.join(' '), cwd: resolve(f.cwd ?? process.cwd()), prompt: f.prompt, model: f.model, effort: f.effort, role: f.role, profile: f.profile, isolation: isolation(), base: f.base, preset: f.preset, account: f.account }, false);
     console.log(`started ${pos.join(' ')} (${data.nodeId})`);
     await call('select', { nodeId: data.nodeId }, false);
     if (existsSync(APP)) openApp(daemonPort(), data.nodeId);
@@ -190,7 +191,7 @@ switch (cmd) {
     }
     break;
   case 'presets':
-    for (const p of listPresets(realpathSync(resolve(f.cwd ?? process.cwd())), home)) {
+    for (const p of listPresets(cwdArg(), home)) {
       const fields = 'error' in p ? `error: ${p.error}` : Object.entries({ model: p.model, effort: p.effort, permissionMode: p.permissionMode, isolation: p.isolation, role: p.role, profile: p.profile, tools: p.tools?.join(','), disallowedTools: p.disallowedTools?.join(','), maxTurns: p.maxTurns })
         .flatMap(([k, v]) => (v === undefined ? [] : [`${k}=${v}`])).join(' ');
       console.log([p.name, p.source, fields].join('\t'));
@@ -199,20 +200,20 @@ switch (cmd) {
   case 'trust':
   case 'untrust': {
     if (process.env.TL_NODE_ID) fail('trust is a human-only operation; run it outside a Tiller node');
-    const dir = realpathSync(resolve(f.cwd ?? process.cwd()));
+    const dir = cwdArg();
     setProjectTrust(home, dir, cmd === 'trust');
     console.log(`${cmd === 'trust' ? 'trusted' : 'untrusted'} ${dir} for Tiller repo commands`);
     if (cmd === 'untrust') console.log('Legacy Claude trust, if present, still applies.');
     break;
   }
   case 'config':
-    for (const [k, { value, source }] of Object.entries(effectiveProfileEntries(configEntries(realpathSync(resolve(f.cwd ?? process.cwd())), home)))) {
+    for (const [k, { value, source }] of Object.entries(effectiveProfileEntries(configEntries(cwdArg(), home)))) {
       const unset = k.startsWith('roles.') ? '(claude default)' : k === 'worktrees.include' ? '(.worktreeinclude)' : '(none)';
       console.log(`${k}: ${value === undefined ? unset : Array.isArray(value) ? JSON.stringify(value) : value}  [${source}]`);
     }
     break;
   case 'gate': {
-    const dir = realpathSync(resolve(f.cwd ?? process.cwd()));
+    const dir = cwdArg();
     // The config the daemon reads for a node here: the main checkout's for one of its worktrees, else this directory's.
     const main = await mainCheckout(dir).catch(() => dir);
     const gate = gateFor(dir.startsWith(join(main, WORKTREES_DIR)) ? main : dir, home) ?? fail(`no gate.command configured for ${dir}, or Claude does not trust it`);
@@ -301,7 +302,7 @@ switch (cmd) {
   }
   case 'worktrees':
     if (pos[0] && pos[0] !== 'clean') fail(usage());
-    await call('worktrees', { cwd: realpathSync(resolve(f.cwd ?? process.cwd())), clean: pos[0] ? (f.force ? 'force' : 'safe') : undefined });
+    await call('worktrees', { cwd: cwdArg(), clean: pos[0] ? (f.force ? 'force' : 'safe') : undefined });
     break;
   case undefined:
   case 'up':
@@ -331,7 +332,7 @@ switch (cmd) {
     }
     if (!id) {
       const title = f.title ?? basename(cwd);
-      id = (await call('spawn', { kind: harness !== 'claude' ? 'agent' : 'claude', ...(harness !== 'claude' ? { harness } : {}), title, cwd, prompt: f.prompt }, false)).data.nodeId as string;
+      id = (await call('spawn', { kind: spawnKind(undefined, harness) ?? 'claude', ...(harness !== 'claude' ? { harness } : {}), title, cwd, prompt: f.prompt }, false)).data.nodeId as string;
       console.log(`started ${title} (${id})`);
     }
     const target = id;
