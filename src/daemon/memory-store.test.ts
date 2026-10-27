@@ -344,12 +344,13 @@ PRAGMA user_version = 1;
     v1.exec(SHIPPED_V1);
     v1.prepare(`INSERT INTO repos (key, path, created_at) VALUES ('git:example.com/a/b', '/repo', 0)`).run();
     v1.prepare(`INSERT INTO items (repo_id, kind, text, author, dedupe, created_at, updated_at) VALUES (2, 'note', 'kept from v1', 'agent', 'kept from v1', 0, 0)`).run();
+    const row = v1.prepare('SELECT * FROM items').get();
     v1.close();
     const s = open();
     expect(s.search(scope(), { query: 'kept' }).map((v) => v.text)).toEqual(['kept from v1']);
     expect(s.status()[0]).toMatchObject({ state: 'ok', schema: 2 });
     const db = raw();
-    expect(db.prepare('SELECT merged_into FROM items').get()).toEqual({ merged_into: null });
+    expect(db.prepare('SELECT * FROM items').get()).toEqual({ ...row, merged_into: null });
     expect(db.prepare('SELECT count(*) AS n FROM garden_runs').get()).toEqual({ n: 0 });
     db.close();
   });
@@ -506,14 +507,18 @@ describe('failure modes', () => {
     const db = raw();
     db.exec('PRAGMA user_version = 99');
     db.close();
+    const before = readFileSync(file());
     const s = open();
     s.apply(scope(), derived([item('note', 'dropped')]));
+    expect(() => s.pin(scope(), human, { text: 'a pin' })).toThrow('written by a newer tiller (schema 99)');
+    expect(() => s.startRun(scope(), { trigger: 'manual', model: 'm' })).toThrow('written by a newer tiller (schema 99)');
     expect(s.candidates(scope(), { role: 'orchestrator', terms: [], now: clock }).notes).toEqual([]);
     expect(() => s.search(scope(), { query: 'kept' })).toThrow('memory is unavailable: written by a newer tiller (schema 99)');
     expect(s.status()[0].state).toBe('off: written by a newer tiller (schema 99)');
     const check = raw();
     expect(check.prepare('SELECT count(*) AS n FROM items').get()).toEqual({ n: 1 });
     check.close();
+    expect(readFileSync(file()).equals(before)).toBe(true);
   });
 
   it('turns off without node:sqlite and creates no file', () => {
