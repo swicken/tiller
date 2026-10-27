@@ -10,6 +10,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-badge-count",
     "allow-set-tray",
+    "allow-set-app-theme",
     "allow-open-external-url",
     "dialog:allow-open",
     "notification:allow-is-permission-granted",
