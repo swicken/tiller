@@ -18,9 +18,9 @@ import type { NodeManager } from './manager.js';
 import { closeRefusal, type WorktreeReport } from './worktree-lifecycle.js';
 import { MAX_PATCH_BYTES, MergeConflict } from './worktree.js';
 import { PERMISSION_MODES } from './presets.js';
-import { SPAWN_FIELDS } from './spawnfields.js';
+import { SPAWN_FIELDS, spawnKind } from './spawnfields.js';
 import { readMessages, renderMessage, sessionMessages } from './transcript.js';
-import { DAEMON, deliver, HUMAN, inScope, isDescendant, messageStatus, notifyWhen, QUEUE_CAP, QUEUE_TTL_MS, RATE_MS, startNotices, withdraw } from './messaging.js';
+import { DAEMON, deliver, dropNotices, HUMAN, inScope, isDescendant, messageStatus, notifyWhen, QUEUE_CAP, QUEUE_TTL_MS, RATE_MS, startNotices, unwatch, withdraw } from './messaging.js';
 import { logError, PREVIEW_CHARS, readBody, safeEqual } from './util.js';
 
 const MAX_WRITE_CHARS = 2000;
@@ -31,7 +31,7 @@ const HISTORY_LINES = 50;
 const MCP_DIFF_CHARS = 100_000;
 
 /** dnd sets do not disturb when `on` is given, and returns it. */
-interface Ctx { updates?: Updater; manager: NodeManager; confirm: (text: string) => Promise<boolean>; focus: (from: string, id: string) => void; dnd: (on?: boolean, minutes?: number) => Dnd; caller: string; mcp?: boolean }
+interface Ctx { updates?: Updater; manager: NodeManager; confirm: (text: string) => Promise<boolean | undefined>; focus: (from: string, id: string) => void; dnd: (on?: boolean, minutes?: number) => Dnd; caller: string; mcp?: boolean }
 interface Out { text?: string; data?: unknown }
 
 /** How long report_outcome waits for a completion gate before replying that it is still running. */
@@ -187,6 +187,38 @@ async function runGate(m: NodeManager, id: string, gate: NonNullable<Config['gat
   return { text, data: { ok: false, gate: 'failed', attemptsLeft: left } };
 }
 
+/**
+ * Reply to a close that waits for the human: pending now, then the decision as a notice to the caller, shaped like a
+ * notify_when notice. `run` closes the batch once approved.
+ */
+function closeLater(c: Ctx, decision: Promise<boolean | undefined>, list: string, run: () => Promise<{ closed: string[]; notes: string[]; errors: string[] }>): Out {
+  const requestId = `close-${randomBytes(4).toString('hex')}`;
+  void decision.then(async (ok) => {
+    let body: string;
+    if (ok) {
+      const r = await run();
+      body = [`The human approved closing ${list}.`, r.closed.length && `Closed: ${r.closed.join(', ')}.`, ...r.notes, ...r.errors.map((e) => `Not closed: ${e}`)].filter(Boolean).join('\n');
+    } else if (ok === false) body = `The human declined closing ${list}; nothing was closed.`;
+    else body = `No decision on closing ${list} arrived in time; nothing was closed. Call close again to ask again.`;
+    await deliver(c.manager, DAEMON, c.caller, body, { fromLabel: `tiller (close ${requestId} ${ok ? 'approved' : ok === false ? 'denied' : 'expired'})`, replyTo: null });
+  }).catch(logError);
+  return {
+    text: `Waiting for the human to approve closing ${list}. Carry on: the decision arrives as a message from tiller (close ${requestId}).`,
+    data: { ok: false, pending: true, requestId },
+  };
+}
+
+/** The value given as `name` or as its alias `alias`. Both with different values is an error, and so is neither. */
+function either<T>(a: Record<string, unknown>, name: string, alias: string): T {
+  const x = a[name], y = a[alias];
+  if (x !== undefined && y !== undefined && JSON.stringify(x) !== JSON.stringify(y)) throw new Error(`${name} and ${alias} are the same argument with different values: give one`);
+  if (x === undefined && y === undefined) throw new Error(`${name} is required`);
+  return (x ?? y) as T;
+}
+
+const nodeIdArg = { nodeId: z.string().min(1).optional(), id: z.string().min(1).optional().describe('alias of nodeId') };
+const nodeId = (a: Record<string, unknown>) => either<string>(a, 'nodeId', 'id');
+
 // ---- tools ----
 
 /** humanOnly: refused to agents over /api and not listed to them over MCP. */
@@ -211,16 +243,20 @@ const tools = {
 
   spawn: tool(
     'Start node',
-    `Open a child node and return its id. kind "claude": Claude Code; "agent": \`harness\` (claude, pi or codex; default yours); "terminal": a login shell. \`cwd\` must exist. \`role\`: "worker" (default), "orchestrator" or "none". \`profile\` (orchestrator, implementation, explorer, mechanical, reviewer) is independent of role and defaults from it (orchestrator, else implementation); explorer and reviewer instruct read-only work but enforce no tool restrictions. Explicit \`model\`/\`effort\` win over presets, which win over per-harness profile config, then legacy Claude role config. Claude children inherit a same-harness parent's permissionMode. Pi and Codex reject permissionMode and presets with maxTurns; Pi enforces preset tools/disallowedTools with its own flags and rejects names it cannot translate; Codex rejects presets with tools/disallowedTools.
+    `Open a child node and return its id. kind (default: your own harness) "claude": Claude Code; "agent": \`harness\` (claude, pi or codex; default yours); "terminal": a login shell. \`cwd\` must exist; default your own. \`role\`: "worker" (default), "orchestrator" or "none". \`profile\` (orchestrator, implementation, explorer, mechanical, reviewer) is independent of role and defaults from it (orchestrator, else implementation); explorer and reviewer instruct read-only work but enforce no tool restrictions. Explicit \`model\`/\`effort\` win over presets, which win over per-harness profile config, then legacy Claude role config. Claude children inherit a same-harness parent's permissionMode. Pi and Codex reject permissionMode and presets with maxTurns; Pi enforces preset tools/disallowedTools with its own flags and rejects names it cannot translate; Codex rejects presets with tools/disallowedTools.
 isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its own workspace trust) gives the child a git worktree at <main checkout>/.claude/worktrees/<id> on a new branch; the reply carries worktree { path, branch, base }. \`base\` is the branch it forks from and merges into, created at the HEAD of \`cwd\`'s checkout if missing; give every worker of a task the same base so merges accumulate. Without base it is the branch checked out at \`cwd\`, unless that is protected (worktrees.protected, default main, master and origin's default branch) or detached: then a new worktrees.taskBranch branch (default "tl/{slug}") is made. Omitted isolation follows project config (default "none"), so a child whose cwd is in an existing worktree shares it.
 \`preset\`: .tiller/agents/<name>.md in \`cwd\`'s main checkout, else ~/.tiller/agents/<name>.md (built-in "reviewer", "researcher"); it sets role text, model, effort, permissionMode, isolation and tool restrictions, and your arguments override it.
 \`requestId\`: a retry with the same one returns the original node (replayed: true); reusing it with different arguments is an error.
 \`after\`/\`afterSuccess\` (ids in your scope): the node starts armed, with no process, and launches once each \`after\` node finishes a turn begun after this spawn (or exits) and each \`afterSuccess\` node reports succeeded (gate passed, if configured). A failed report blocks it and you get a message; close it to drop it. With daemon.maxWorking agents working it is queued and launched in creation order. The reply then has state "armed" or "queued" and what it waits on.
 \`fork\` (Claude nodes only) starts from a copy of another node's conversation, then \`prompt\`: a node in your scope or a closed node of your tree (see history); \`cwd\` defaults to its. A child runs in your Claude account; \`account\` is for the human only.`,
-    { ...SPAWN_FIELDS, cwd: SPAWN_FIELDS.cwd.optional(), permissionMode: z.enum(PERMISSION_MODES).optional(), requestId: z.string().optional() },
-    async (c, { requestId, cwd, ...req }) => {
-      if (req.now && c.caller !== HUMAN) throw new Error('refused: only the human may bypass daemon.maxWorking with now');
-      if (req.account !== undefined && c.caller !== HUMAN) throw new Error('refused: only the human may choose a Claude account; a node you spawn runs in yours');
+    { ...SPAWN_FIELDS, kind: SPAWN_FIELDS.kind.optional(), cwd: SPAWN_FIELDS.cwd.optional(), permissionMode: z.enum(PERMISSION_MODES).optional(), requestId: z.string().optional() },
+    async (c, { requestId, cwd, kind, ...rest }) => {
+      if (rest.now && c.caller !== HUMAN) throw new Error('refused: only the human may bypass daemon.maxWorking with now');
+      if (rest.account !== undefined && c.caller !== HUMAN) throw new Error('refused: only the human may choose a Claude account; a node you spawn runs in yours');
+      // Defaults: the caller's own harness and directory, so a worker in a worktree gets children (and their worktrees' base) from its branch.
+      const me = c.caller === HUMAN ? undefined : c.manager.view(c.caller);
+      const req = { ...rest, kind: kind ?? spawnKind(undefined, rest.harness) ?? (me?.kind === 'agent' && me.harness && me.harness !== 'claude' ? 'agent' : 'claude') };
+      if (!rest.fork) cwd ??= me?.cwd;
       if (!cwd && !req.fork) throw new Error('cwd is required unless you fork');
       if (req.fork && c.caller !== HUMAN) {
         if (c.manager.registry.get(req.fork)) requireScope(c, req.fork);
@@ -246,8 +282,8 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   send: tool(
     'Send message',
     `Send a message to an agent node in your scope (parent, siblings, descendants; not yourself). It arrives as a prompt in a framed envelope naming the sender and where to reply. Normally it is queued: the reply has outcome "queued" and a messageId, and the target's plugin submits it when the target is idle (up to ${QUEUE_CAP} queued, for ${QUEUE_TTL_MS / 60_000} minutes); message_status shows when it is delivered. A target with no plugin gets it pasted into its prompt when idle; the reply may be delivered, stalled or queued. Outcomes: queued, delivered, stalled (pasted, unconfirmed: do not resend blindly), expired and queueFull (not delivered; resend later), withdrawn, gone, refused (detail says why). One send per target per ${RATE_MS / 1000} seconds. Terminal nodes cannot receive messages; use write. mode "now" interrupts a working target's turn and delivers at once, with an envelope line saying so (reply and message_status carry steer: true); to an idle target it equals "queue". Use it only to stop a worker heading the wrong way. withdraw takes back a queued message.`,
-    { nodeId: z.string().min(1), text: z.string().min(1), mode: z.enum(['queue', 'now']).optional() },
-    async (c, a) => ({ data: await deliver(c.manager, c.caller, a.nodeId, a.text, { mode: a.mode }) })),
+    { ...nodeIdArg, text: z.string().min(1).optional(), message: z.string().min(1).optional().describe('alias of text'), mode: z.enum(['queue', 'now']).optional() },
+    async (c, a) => ({ data: await deliver(c.manager, c.caller, nodeId(a), either(a, 'text', 'message'), { mode: a.mode }) })),
 
   withdraw: tool(
     'Withdraw message',
@@ -267,22 +303,24 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   notify_when: tool(
     'Watch node completion',
-    'Get one message when a set of nodes finishes, instead of polling list_nodes or having each worker report separately. Returns at once; later you receive a single framed message "N of M finished:" with one line per node giving its outcome (or its state). when "all" waits for every node, "any" for the first. of "turn" counts a node once it finishes the turn in progress now, or for an idle node its next turn (exiting or closing counts too); of "success" counts a node once it calls report_outcome (either verdict) from now on, or within the turn in progress now. Ids must be in your scope. One pending notify_when per id set: calling again with the same ids replaces it. It expires after 12 hours.',
-    { ids: z.array(z.string().min(1)).min(1), when: z.enum(['all', 'any']), of: z.enum(['turn', 'success']) },
+    'Get one message when a set of nodes finishes, instead of polling list_nodes or having each worker report separately. Returns at once; later you receive a single framed message "N of M finished:" with one line per node giving its outcome (or its state). when "all" (default) waits for every node, "any" for the first. of "turn" counts a node once it finishes the turn in progress now, or for an idle node its next turn (exiting or closing counts too); of "success" counts a node once it calls report_outcome (either verdict) from now on, or within the turn in progress now. Ids must be in your scope. One pending notify_when per id set: calling again with the same ids replaces it. It expires after 12 hours.',
+    { ids: z.array(z.string().min(1)).min(1).optional(), nodeIds: z.array(z.string().min(1)).min(1).optional().describe('alias of ids'), when: z.enum(['all', 'any']).default('all'), of: z.enum(['turn', 'success']) },
     async (c, a) => {
       if (c.caller === HUMAN) throw new Error('notify_when is only for agent nodes: the human has no inbox');
-      for (const id of a.ids) requireScope(c, id);
-      return { data: { ok: true, ...notifyWhen(c.manager, c.caller, a) } };
+      const ids = either<string[]>(a, 'ids', 'nodeIds');
+      for (const id of ids) requireScope(c, id);
+      return { data: { ok: true, ...notifyWhen(c.manager, c.caller, { ids, when: a.when, of: a.of }) } };
     }),
 
   read: tool(
     'Read node output',
     'Read another node (yourself, your ancestors, siblings or descendants). what "outcome" returns its report_outcome report; read it first for a finished worker. "summary" returns the last `lines` (default 30) user and assistant messages of an agent node\'s conversation, with tool calls reduced to a "[tool: name]" marker; "transcript" returns the whole conversation (capped at the most recent 200 KB); "terminal" returns the last `lines` (default 60) rows of the node\'s screen, which are the visible rows plus up to 1000 lines of scrollback, and works for terminal nodes too. Outcome, summary and transcript also take a closed node of your tree (see history).',
-    { nodeId: z.string().min(1), what: z.enum(['outcome', 'summary', 'transcript', 'terminal']), lines: z.number().int().min(1).max(5000).optional() },
+    { ...nodeIdArg, what: z.enum(['outcome', 'summary', 'transcript', 'terminal']), lines: z.number().int().min(1).max(5000).optional() },
     async (c, a) => {
-      const v = c.manager.registry.get(a.nodeId) || a.what === 'terminal' ? requireScope(c, a.nodeId) : await requireArchived(c, a.nodeId);
+      const id = nodeId(a);
+      const v = c.manager.registry.get(id) || a.what === 'terminal' ? requireScope(c, id) : await requireArchived(c, id);
       if (a.what === 'terminal') {
-        const s = c.manager.session(a.nodeId);
+        const s = c.manager.session(id);
         if (!s) throw new Error('node has no running process');
         await s.flush();
         return { text: s.screenTail(a.lines ?? 60).join('\n') };
@@ -324,23 +362,24 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   write: tool(
     'Type in terminal',
     'Type raw keystrokes into another node\'s terminal (yourself, ancestors, siblings or descendants), for example to answer a prompt in a terminal node or press Enter. The human must approve each call in the UI; if they decline or nobody is watching you get {ok:false, reason:"denied"}. Text is limited to 2000 characters. For talking to an agent node use send, which is safer.',
-    { nodeId: z.string().min(1), text: z.string().min(1).max(MAX_WRITE_CHARS) },
+    { ...nodeIdArg, text: z.string().min(1).max(MAX_WRITE_CHARS) },
     async (c, a) => {
-      const v = requireScope(c, a.nodeId);
-      if (!c.manager.session(a.nodeId)) throw new Error('node has no running process');
+      const v = requireScope(c, nodeId(a));
+      if (!c.manager.session(v.id)) throw new Error('node has no running process');
       if (c.caller !== HUMAN && !(await c.confirm(`${who(c)} wants to type into ${v.title} (${v.id}): ${JSON.stringify(a.text)}`))) {
         return { data: { ok: false, reason: 'denied' } };
       }
-      c.manager.input(a.nodeId, a.text);
+      c.manager.input(v.id, a.text);
       return { data: { ok: true } };
     }),
 
   close: tool(
     'Close nodes',
-    `Close and delete nodes. Every id must be your descendant (agents cannot close orchestrators), or the whole batch is refused and nothing closes. The human approves the batch once in the UI; declined gives {ok:false, reason:"denied"}. Config approvals.close can skip that (a project's .tiller/config.json may only be stricter than the home file): "always" skips; "done" skips when every node is done, exited or has called report_outcome; "never" (default) asks. A node with its own worktree closes only when its tree is clean, its branch merged and no other live node works in it; otherwise the batch is refused, nothing closes, and the error says why. \`worktree\` overrides that for the batch: "keep" commits uncommitted changes as a WIP commit and keeps the branch; "discard" deletes the worktree and branch with any unmerged work and always needs the human's approval.`,
-    { nodeIds: z.array(z.string().min(1)).min(1), force: z.boolean().optional(), worktree: z.enum(['keep', 'discard']).optional() },
+    `Close and delete nodes. Every id must be your descendant (agents cannot close orchestrators), or the whole batch is refused and nothing closes. The human approves the batch once in the UI: the reply is then {ok:false, pending:true, requestId} at once, and the decision (closed, with any per-node errors; denied; or expired) arrives later as a message from tiller. Config approvals.close can skip that (a project's .tiller/config.json may only be stricter than the home file): "always" skips; "done" skips when every node is done, exited or has called report_outcome; "never" (default) asks. A node with its own worktree closes only when its tree is clean, its branch merged and no other live node works in it; otherwise the batch is refused, nothing closes, and the error says why. \`worktree\` overrides that for the batch: "keep" commits uncommitted changes as a WIP commit and keeps the branch; "discard" deletes the worktree and branch with any unmerged work and always needs the human's approval.`,
+    { nodeIds: z.array(z.string().min(1)).min(1).optional(), ids: z.array(z.string().min(1)).min(1).optional().describe('alias of nodeIds'), force: z.boolean().optional(), worktree: z.enum(['keep', 'discard']).optional() },
     async (c, a) => {
-      const views = a.nodeIds.map((id) => requireOwned(c, id, false));
+      const ids = either<string[]>(a, 'nodeIds', 'ids');
+      const views = ids.map((id) => requireOwned(c, id, false));
       for (const v of views) {
         if (v.parentId !== null) continue; // only the human gets here with a root: requireOwned refuses agents
         if (!a.force) throw new Error(`refusing to close an orchestrator; use tl kill --force ${v.id}`);
@@ -359,15 +398,40 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       // "done" also counts a node that has reported but is still working, so a worker can be closed as soon as its report arrives.
       const preapproved = a.worktree !== 'discard' && (mode === 'always' || (mode === 'done' && views.every((v) => finished(v.status) || v.outcome)));
       const text = `${who(c)} wants to close ${views.length} node(s): ${list}${destroys.length ? `. This deletes their worktrees: ${destroys.join('; ')}` : ''}`;
-      if (c.caller !== HUMAN && !preapproved && !(await c.confirm(text))) {
-        return { data: { ok: false, reason: 'denied' } };
-      }
       const notes: string[] = [];
-      for (const id of a.nodeIds) {
-        const note = await c.manager.close(id, true, a.worktree); // roots were vetted above
-        if (note) notes.push(`${id}: ${note}`);
+      /**
+       * Close the batch in order; `keepGoing` records each node's error and moves on, otherwise the first error throws.
+       * An agent hears nothing more of the nodes it closed: no notify_when line, no notice still queued.
+       */
+      const closeAll = async (keepGoing: boolean) => {
+        const closed: string[] = [], errors: string[] = [];
+        try {
+          for (const id of ids) {
+            try {
+              if (c.caller !== HUMAN) unwatch(c.manager, c.caller, id); // first: the close itself completes a watch
+              const note = await c.manager.close(id, true, a.worktree); // roots were vetted above
+              if (note) notes.push(`${id}: ${note}`);
+              closed.push(id);
+            } catch (err) {
+              if (!keepGoing) throw err;
+              errors.push(`${id}: ${(err as Error).message}`);
+            }
+          }
+        } finally {
+          if (c.caller !== HUMAN) dropNotices(c.manager, c.caller, closed);
+        }
+        return { closed, notes, errors };
+      };
+      if (c.caller !== HUMAN && !preapproved) {
+        // An answer already settled (no UI connected) replies at once; otherwise the caller's turn goes on and the
+        // decision arrives as a notice, so a human away from the UI does not hold the turn.
+        const decision = c.confirm(text);
+        const now = await Promise.race([decision, new Promise<'pending'>((r) => setImmediate(r, 'pending'))]);
+        if (now === 'pending') return closeLater(c, decision, list, () => closeAll(true));
+        if (!now) return { data: { ok: false, reason: 'denied' } };
       }
-      return { data: { ok: true, closed: a.nodeIds, ...(notes.length ? { notes } : {}) } };
+      await closeAll(false);
+      return { data: { ok: true, closed: ids, ...(notes.length ? { notes } : {}) } };
     }),
 
   merge: tool(
@@ -434,10 +498,11 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   diff: tool(
     'Review changes',
     `Show what a node with its own git worktree (yourself or one of your descendants) changed since it branched from its base: its commits plus its uncommitted and untracked files, as one unified diff of the working tree against where the branch started. Patch text stops after ${MAX_PATCH_BYTES >> 20} MB; the remaining files are listed with their line counts only, as are binary files. The reply is cut at ${MCP_DIFF_CHARS / 1000}k characters; stat true lists only the files and counts.`,
-    { nodeId: z.string().min(1), stat: z.boolean().optional() },
+    { ...nodeIdArg, stat: z.boolean().optional() },
     async (c, a) => {
-      requireOwned(c, a.nodeId, true);
-      const d = await c.manager.diff(a.nodeId);
+      const id = nodeId(a);
+      requireOwned(c, id, true);
+      const d = await c.manager.diff(id);
       const text = diffText(d, !!a.stat);
       if (!c.mcp || text.length <= MCP_DIFF_CHARS) return { text };
       // At the last line break within the cap, so no line (or surrogate pair) is split; the short summary line always fits.
@@ -531,10 +596,11 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   rename: tool(
     'Rename node',
     'Change the title of yourself or one of your descendants.',
-    { nodeId: z.string().min(1), title: z.string().min(1) },
+    { ...nodeIdArg, title: z.string().min(1) },
     async (c, a) => {
-      requireOwned(c, a.nodeId, true);
-      c.manager.rename(a.nodeId, a.title);
+      const id = nodeId(a);
+      requireOwned(c, id, true);
+      c.manager.rename(id, a.title);
       return { data: { ok: true } };
     }),
 

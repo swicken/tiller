@@ -81,8 +81,8 @@ const clientMessage = z.discriminatedUnion('t', [
 
 export interface DaemonServer {
   port: number;
-  /** Ask the human to approve something. Resolves false if no UI is connected, on timeout, or on refusal. */
-  confirm(text: string): Promise<boolean>;
+  /** Ask the human to approve something. Resolves false if no UI is connected or on refusal, undefined on timeout. */
+  confirm(text: string): Promise<boolean | undefined>;
   /** How many connected clients are looking at node `id`: it is selected there and their window is in front. */
   watchers(id: string): number;
   /** Whether the native app is connected. */
@@ -111,7 +111,7 @@ export function forUi({ prompt: _prompt, sessionHistory: _history, ...node }: No
 export async function startServer(manager: NodeManager, opts: { port?: number } = {}): Promise<DaemonServer> {
   const clients = new Set<Client>();
   const pendingNotifications = new Map<string, { client: Client; finish(ok: boolean, error?: string): void }>();
-  const pendingConfirms = new Map<string, (ok: boolean) => void>();
+  const pendingConfirms = new Map<string, (ok: boolean | undefined) => void>();
   const focus = (from: string, id: string) => broadcast({ t: 'focus', from, id });
   const updates = createUpdater({ repo: REPO, home: manager.home, onChange: (update) => broadcast({ t: 'update', update }), spawnHelper: (expected, onExit, now) => spawnUpdate(manager.home, daemon.port, expected, onExit, now) });
   const { handler: mcp, publishAdminToken, authenticate, isAdmin } = mountMcp(manager, (text) => daemon.confirm(text), focus, (on, minutes) => setDnd(on, minutes), updates);
@@ -399,9 +399,9 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
     confirm(text) {
       if (![...clients].some((c) => c.authed)) return Promise.resolve(false);
       const confirmId = randomUUID();
-      return new Promise<boolean>((resolveConfirm) => {
-        const timer = setTimeout(() => finish(false), CONFIRM_TIMEOUT_MS);
-        const finish = (ok: boolean) => {
+      return new Promise<boolean | undefined>((resolveConfirm) => {
+        const timer = setTimeout(() => finish(undefined), CONFIRM_TIMEOUT_MS);
+        const finish = (ok: boolean | undefined) => {
           clearTimeout(timer);
           pendingConfirms.delete(confirmId);
           broadcast({ t: 'confirmDone', confirmId });

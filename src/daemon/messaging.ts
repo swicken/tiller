@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fmtAge, outcomeLine } from '../shared/format.js';
+import { fmtAge, noticeCut, outcomeLine } from '../shared/format.js';
 import type { InboxMessage, NodeView, SendMode, SendResult } from '../shared/protocol.js';
 import { loadConfig } from './config.js';
 import { adapterFor } from './harness.js';
@@ -100,8 +100,8 @@ interface State {
   /** Log a `settle` event when a queued message reaches its final outcome. */
   logSettle: (messageId: string, st: Status, r: SendResult) => void;
 }
-/** `dir`: the target's tree directory at send time, where a settle is logged once the target is closed. */
-interface Status { from: string; to: string; result: SendResult; at: number; onSettle?: (r: SendResult) => void; dir?: string }
+/** `dir`: the target's tree directory at send time, where a settle is logged once the target is closed. `about`: see DeliverOpts. */
+interface Status { from: string; to: string; result: SendResult; at: number; onSettle?: (r: SendResult) => void; dir?: string; about?: string[] }
 type Attempt = { result: SendResult } | { wait: string };
 
 const states = new WeakMap<object, State>();
@@ -542,6 +542,16 @@ export function withdraw(m: Mgr, caller: string, messageId: string): Promise<{ t
   });
 }
 
+/**
+ * `caller` closed `ids` itself and needs no word of them: withdraw the daemon's notices to it, still queued, that
+ * concern only those nodes. A notice already claimed by its mod goes through.
+ */
+export function dropNotices(m: Mgr, caller: string, ids: string[]): void {
+  for (const [messageId, st] of states.get(m)?.status ?? []) {
+    if (st.from === DAEMON && st.to === caller && st.result.outcome === 'queued' && st.about?.every((id) => ids.includes(id))) withdraw(m, DAEMON, messageId).catch(() => {});
+  }
+}
+
 /** Outcome of a message the caller sent: final, or `queued` while it still waits. */
 export function messageStatus(m: Mgr, caller: string, messageId: string): SendResult | undefined {
   const r = stateOf(m).status.get(messageId);
@@ -556,7 +566,7 @@ export async function deliver(m: Mgr, fromId: string, toId: string, text: string
   for (const [k, v] of s.status) if (now - v.at > STATUS_TTL_MS) s.status.delete(k);
   const out = (r: SendResult): SendResult => {
     const result = { ...r, messageId: id };
-    s.status.set(id, { from: fromId, to: toId, result, at: now, onSettle: opts.onSettle, ...(m.view(toId) ? { dir: m.sessionDirOf?.(toId) } : {}) });
+    s.status.set(id, { from: fromId, to: toId, result, at: now, onSettle: opts.onSettle, ...(m.view(toId) ? { dir: m.sessionDirOf?.(toId) } : {}), ...(opts.about?.length ? { about: opts.about } : {}) });
     setResult(s, id, result);
     if (m.view(toId)) {
       m.logEvent(toId, 'send', { from: fromId, outcome: result.outcome, messageId: id, ...(result.steer ? { steer: true } : {}),
@@ -643,7 +653,8 @@ export function startNotices(m: Mgr): void {
   const notice = (v: NodeView, reason: string) => {
     if (!v.parentId || notified.has(v.id)) return;
     notified.add(v.id);
-    const body = v.status.lastAssistantMessage?.slice(0, 300) ?? 'No further details.';
+    const last = v.status.lastAssistantMessage;
+    const body = last ? noticeCut(last, 'read summary for the rest') : 'No further details.';
     childNotice(m, v, `stopped: ${reason}`, body);
   };
   const onNode = (v: NodeView) => {
@@ -680,7 +691,7 @@ export function startNotices(m: Mgr): void {
   const onOutcome = (id: string) => {
     const v = m.view(id);
     if (!v?.parentId || !v.outcome || watching(m, v.parentId, id)) return;
-    childNotice(m, v, `reported ${v.outcome.outcome}`, `${id} reported ${outcomeLine(v.outcome)}`);
+    childNotice(m, v, `reported ${v.outcome.outcome}`, `${id} reported ${outcomeLine(v.outcome, true)}`);
   };
   m.on('node', onNode);
   m.on('outcome', onOutcome);
@@ -690,6 +701,11 @@ export function startNotices(m: Mgr): void {
 
 /** Managers whose node events already re-check their callers' watches. */
 const listening = new WeakSet<NodeManager>();
+
+/** `caller` is closing `id` itself: its notify_when watches leave `id` out (see CompletionWatches.forget). */
+export function unwatch(m: Pick<NodeManager, 'runtimes'>, caller: string, id: string): void {
+  m.runtimes.get(caller)?.watches?.forget(id);
+}
 
 /** Whether `caller` has a pending notify_when that covers `id`. */
 export function watching(m: Partial<Pick<NodeManager, 'runtimes'>>, caller: string, id: string): boolean {

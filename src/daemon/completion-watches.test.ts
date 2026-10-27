@@ -51,6 +51,23 @@ describe('completion watches', () => {
     expect(notices).toEqual(['1 of 2 finished:\na: done\nb: working']);
   });
 
+  it('forgets a node the watcher closes: the rest still report, and a watch left empty never fires', () => {
+    add('a', 'working', 10);
+    add('b', 'working', 20);
+    add('c', 'working', 30);
+    watches.register({ ids: ['a', 'b'], when: 'all', of: 'turn' });
+    watches.register({ ids: ['c'], when: 'all', of: 'turn' });
+    nodes.get('b')!.status.state = 'done';
+    starts.set('b', 120);
+    watches.forget('a'); // b, the only node left, has finished: it reports at once, without a
+    expect(notices).toEqual(['1 of 1 finished:\nb: done']);
+    watches.forget('c');
+    nodes.delete('c');
+    watches.sweep(130);
+    expect(notices).toHaveLength(1);
+    expect(watches.covers('c')).toBe(false);
+  });
+
   it('passes the label and the watched ids to notify', () => {
     add('a', 'done', 10);
     add('b', 'done', 20);

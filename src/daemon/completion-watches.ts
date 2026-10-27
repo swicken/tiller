@@ -42,6 +42,18 @@ export class CompletionWatches {
     return { replaced };
   }
 
+  /** The watcher is closing `id` itself, so needs no word of it: drop it from each watch, and a watch left with none. */
+  forget(id: string): void {
+    for (const [key, w] of [...this.all]) {
+      if (!w.ids.includes(id)) continue;
+      this.all.delete(key);
+      const ids = w.ids.filter((x) => x !== id), next = ids.join(',');
+      if (!ids.length || this.all.has(next)) continue; // a watch on just the rest already exists: it reports them
+      this.all.set(next, { ...w, ids });
+      this.check(next);
+    }
+  }
+
   sweep(now: number): void {
     for (const [key, w] of this.all) {
       if (now - w.at > NOTIFY_TTL_MS) this.all.delete(key);
@@ -58,7 +70,7 @@ export class CompletionWatches {
   private line(id: string): string {
     const v = this.query.view(id);
     if (!v) return `${id}: closed`;
-    if (v.outcome) return `${id}: ${outcomeLine(v.outcome)}`;
+    if (v.outcome) return `${id}: ${outcomeLine(v.outcome, true)}`;
     return `${id}: ${v.status.exited ? 'exited' : v.status.state}`;
   }
 
