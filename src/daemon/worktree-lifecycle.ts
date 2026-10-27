@@ -352,23 +352,58 @@ async function readGit(m: NodeManager, id: string): Promise<void> {
   const w = m.registry.get(id)?.worktree;
   if (!w || m.stopped) return;
   const missing = !existsSync(w.path);
-  const [counts, stat, merged] = await Promise.all([
+  const [counts, stat, merged, tips] = await Promise.all([
     // Fails when the branch is gone: then zero counts. Any other failure keeps the last state.
     wt.aheadBehind(w.repo, w.branch, w.base, w.baseSha).catch(async (err: Error) => { if (await wt.branchSha(w.repo, w.branch)) throw err; return undefined; }),
     wt.diffStat(w).catch((err: Error) => err),
     mergedAt(w),
+    wt.branchTips(w.repo).catch(() => new Map<string, string>()),
   ]);
   // A missing worktree with no branch has nothing to diff.
   if (stat instanceof Error && (counts || !missing)) throw stat;
   const { additions, deletions, dirty } = stat instanceof Error ? { additions: 0, deletions: 0, dirty: 0 } : stat;
   const rt = m.runtimes.get(id);
   if (!rt || m.stopped) return; // closed or shut down meanwhile
+  // Merging base can conflict only when both sides have commits; the answer holds until a tip moves.
+  const key = tipKey(w, tips), last = tipsSeen.get(rt);
+  const conflicts = last?.key === key ? last.conflicts : counts?.ahead && counts.behind ? await baseConflicts(w, key) : [];
+  if (m.runtimes.get(id) !== rt || m.stopped) return;
+  tipsSeen.set(rt, { key, conflicts });
   if (missing) setMissing(m, id, true); // only resume and the worktree sweep clear it: they also check `git worktree list`
   const lines = counts ? { ...counts, additions, deletions } : { ahead: 0, behind: 0, additions: 0, deletions: 0 };
-  const next: GitState = { branch: w.branch, base: w.base, ...lines, dirty, ...(merged ? { mergedAt: merged } : {}) };
+  const next: GitState = { branch: w.branch, base: w.base, ...lines, dirty, ...(merged ? { mergedAt: merged } : {}), ...(conflicts.length ? { conflicts } : {}) };
   if (JSON.stringify(next) === JSON.stringify(rt.git)) return;
   rt.git = next;
   m.emitNode(id);
+}
+
+/** Per node runtime: the base and branch tips its last refresh saw, and the files merging that base would conflict in. */
+const tipsSeen = new WeakMap<object, { key: string; conflicts: string[] }>();
+const tipKey = (w: Worktree, tips: Map<string, string>) => `${tips.get(w.base) ?? w.baseSha} ${tips.get(w.branch) ?? ''}`;
+
+/** The files that would conflict if base were merged into the branch (git merge-tree; nothing is touched). A failure (git older than 2.38) is logged and counts as none. */
+async function baseConflicts(w: Worktree, key: string): Promise<string[]> {
+  const [base, tip] = key.split(' ') as [string, string];
+  return wt.mergeTree(w.repo, tip, base).then((r) => r.conflicts, (err: Error) => { logError(err); return []; });
+}
+
+/**
+ * Refresh every worktree node whose base or branch tip moved since its last refresh, with one git call per repo. Hook
+ * events refresh a node as it works; this catches a base that moves under an idle or exited node, or a branch moved
+ * from outside (tl carry, a manual merge). The daemon's periodic sweep runs it.
+ */
+export async function refreshMovedTips(m: NodeManager): Promise<void> {
+  const byRepo = new Map<string, { id: string; rt: object; w: Worktree }[]>();
+  for (const [id, rt] of m.runtimes) {
+    const w = m.registry.get(id)?.worktree;
+    if (w && !w.missing && tipsSeen.has(rt)) byRepo.set(w.repo, [...(byRepo.get(w.repo) ?? []), { id, rt, w }]);
+  }
+  for (const [repo, nodes] of byRepo) {
+    const tips = await wt.branchTips(repo).catch(() => undefined); // the repo is gone: nothing to compare
+    for (const { id, rt, w } of tips ? nodes : []) {
+      if (tipsSeen.get(rt)!.key !== tipKey(w, tips!)) refreshGit(m, id).catch(logError);
+    }
+  }
 }
 
 export function refreshGitSoon(m: NodeManager, id: string): void {

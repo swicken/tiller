@@ -10,7 +10,21 @@ The base is the branch the worker forks from and is merged back into. Name it wi
 
 ## Row markers
 
-Each worktree node's row shows its branch, how many commits it is ahead of its base (↑), how many files are uncommitted, a "changes" marker once it is done or exited with work not yet in its base, and "merged" after tiller merged it. The daemon recomputes this when the node's turn ends, about 15 seconds after it edits a file or runs a command (later edits push that back), when it exits, before a merge or close, and on start. `list_nodes` and `tl list` show the same counts on each worktree node's line (`⎇ branch from base ↑ahead ↓behind dirty merged`); the CLI's `/api/list_nodes` data carries them in each node's `worktree` field. `tl diff <id> [--stat]`, the MCP `diff` tool and the app's Diff tab show what the node changed since it branched, committed or not.
+Each worktree node's row shows its branch, how many commits it is ahead of its base (↑), how many files are uncommitted, a "changes" marker once it is done or exited with work not yet in its base, and "merged" after tiller merged it. The daemon recomputes this when the node's turn ends, about 15 seconds after it edits a file or runs a command (later edits push that back), when it exits, before a merge or close, and on start. `list_nodes` and `tl list` show the same counts on each worktree node's line (`⎇ branch from base ↑ahead ↓behind conflicts:N dirty merged`); the CLI's `/api/list_nodes` data carries them in each node's `worktree` field. `tl diff <id> [--stat]`, the MCP `diff` tool and the app's Diff tab show what the node changed since it branched, committed or not.
+
+## Base conflicts
+
+When both the branch and its base have commits the other lacks, the same refresh runs `git merge-tree --write-tree --name-only` (Git 2.38 or later) to learn whether merging the base into the branch would conflict, touching no file, index or ref. The answer is kept until the base or branch tip moves, so most refreshes cost one `git for-each-ref` (about 5 ms on this repo) and a check about 6 to 12 ms. Every minute the daemon also compares each worktree node's base and branch tips against the last refresh, one `for-each-ref` per repo, and refreshes the nodes whose tips moved; this catches a base that moves under an idle or exited node, or a branch moved by `tl carry` or by hand.
+
+A conflicting branch shows a "conflicts with base · N" badge on its row, with the files in the tooltip and the inspector; `list_nodes` adds `conflicts:N` to the branch line and the files in the `worktree.conflicts` field. The first time a branch starts conflicting, its parent gets one notice naming the files; the next comes only after the branch has merged cleanly again. The check covers the branch's direct base only. In a stack (v1 from main, v2 from v1), a node shows when its own base moved, not when main moved under v1; carry the stack to bring every layer up to date.
+
+## tl carry
+
+`tl carry <from> <branch...> [--cwd P]` brings a moved base up a stack of branches by merge: `<from>` into the first branch, that branch into the next, and so on. `<from>` may be any commit, such as `origin/main` after a fetch; the branches must be local. Each branch moves only to a new merge commit whose first parent is its old tip (or, like `git merge`, straight to the layer below when it has no commits of its own), via `update-ref` with the old tip as a guard, so every move is a fast-forward; it never rebases and never pushes. A branch that already contains the layer below is left alone.
+
+Before anything moves, the command refuses the whole chain if a branch is missing, protected (`worktrees.protected` and origin's default branch, as for merges) or checked out in any worktree, naming where. The merge happens with `git merge-tree` and `git commit-tree` (signed when `commit.gpgsign` is set), so no checkout is needed. It stops at the first conflict, printing the branch and files and exiting 1. That branch and those after it are unchanged, and the branches before it keep their merges. Resolve that layer by hand, then run the command again from that branch.
+
+Running `tl carry` inside a node uses the same git permissions the node already has, so there is no separate MCP tool. An orchestrator runs it from Bash.
 
 ## Merging
 
