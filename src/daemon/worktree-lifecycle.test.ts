@@ -3,7 +3,7 @@ import type { NodeManager } from './manager.js';
 import * as wt from './worktree.js';
 import { refreshGit } from './worktree-lifecycle.js';
 
-vi.mock('./worktree.js', () => ({ aheadBehind: vi.fn(async () => { throw new Error('no such branch'); }), branchSha: vi.fn(async () => undefined), branchTips: vi.fn(async () => new Map()), diffStat: vi.fn() }));
+vi.mock('./worktree.js', () => ({ aheadBehind: vi.fn(async () => { throw new Error('no such branch'); }), branchSha: vi.fn(async () => undefined), branchTips: vi.fn(async () => new Map()), diffStat: vi.fn(), mergeTree: vi.fn() }));
 
 /** Each diffStat call waits until the test resolves it with the dirty files it should see. */
 const pending: ((files: string[]) => void)[] = [];
@@ -106,5 +106,35 @@ describe('refreshGit limits', () => {
     pending.shift()!([]);
     await run;
     expect(timer).not.toHaveBeenCalled();
+  });
+});
+
+describe('base conflicts', () => {
+  it('keeps the last conflicts, caching nothing, when merge-tree or reading the tips fails', async () => {
+    const { m, nm } = fakeManager();
+    const rt = m.runtimes.get('x')! as { git?: { conflicts?: string[] } };
+    vi.mocked(wt.aheadBehind).mockResolvedValue({ ahead: 1, behind: 1 });
+    const fail = async (): Promise<never> => { throw new Error('timed out'); };
+    const refresh = async (tips: () => Promise<Map<string, string>>, conflicts: () => Promise<{ tree: string; conflicts: string[] }>) => {
+      vi.mocked(wt.branchTips).mockImplementationOnce(tips);
+      vi.mocked(wt.mergeTree).mockImplementation(conflicts);
+      const run = refreshGit(nm, 'x');
+      await settle();
+      pending.shift()!([]);
+      await run;
+    };
+    const tips = (base: string) => async () => new Map([['dev', base], ['tl/x', 'b1']]);
+    await refresh(tips('d1'), async () => ({ tree: 't', conflicts: ['README'] }));
+    expect(rt.git?.conflicts).toEqual(['README']);
+    await refresh(tips('d2'), fail);
+    expect(rt.git?.conflicts).toEqual(['README']);
+    await refresh(tips('d2'), async () => ({ tree: 't', conflicts: [] })); // d2 was not cached: asked again
+    expect(rt.git?.conflicts).toBeUndefined();
+    expect(wt.mergeTree).toHaveBeenCalledTimes(3);
+    await refresh(tips('d3'), async () => ({ tree: 't', conflicts: ['b.txt'] }));
+    await refresh(fail, async () => ({ tree: 't', conflicts: [] }));
+    expect(rt.git?.conflicts).toEqual(['b.txt']);
+    vi.mocked(wt.aheadBehind).mockReset();
+    vi.mocked(wt.mergeTree).mockReset();
   });
 });

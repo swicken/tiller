@@ -304,7 +304,6 @@ switch (cmd) {
     // --when-idle: an agent queues the merge, as with the tool (each retry would ask the human again); the human's
     // command retries while the node works, and every other refusal fails at once.
     const agent = !!(process.env.TL_NODE_ID && process.env.TL_TOKEN_FILE), queue = !!f['when-idle'] && agent;
-    if (queue && f.close) fail('--close cannot follow a queued merge: close the node once the merge message arrives');
     const working = (e?: string) => !!e?.endsWith(' is working; wait until its turn ends');
     let r = await call('merge', { nodeId: pos[0], ...(queue ? { whenIdle: true } : {}) }, true, f['when-idle'] && !agent);
     if (working(r.error)) console.log(`tl merge: waiting for ${pos[0]}'s turn to end`);
@@ -314,7 +313,8 @@ switch (cmd) {
     }
     if (r.error) fail(r.error);
     if (!r.data?.ok) process.exit(1); // conflicts: printed above
-    if (f.close) await call('close', { nodeIds: [pos[0]] });
+    if (f.close && r.data.queued) console.log('tl merge: --close skipped: close the node once the merge message arrives');
+    else if (f.close) await call('close', { nodeIds: [pos[0]] });
     break;
   }
   case 'carry': {

@@ -669,7 +669,8 @@ describe('queued merges (whenIdle)', () => {
   /** A Claude parent whose mod polls its inbox, a working worktree child, and the merge tool as the parent (or the human). */
   async function scene() {
     setup();
-    const { handler, publishAdminToken } = mountMcp(m, async () => true, () => {});
+    const confirms: string[] = [];
+    const { handler, publishAdminToken } = mountMcp(m, async (t) => { confirms.push(t); return true; }, () => {});
     publishAdminToken();
     server = http.createServer((req, res) => void handler(req, res));
     await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
@@ -689,7 +690,7 @@ describe('queued merges (whenIdle)', () => {
     /** The bodies of the daemon's queued-merge notices to the parent. */
     const notices = () => inbox(m, parent).filter((x) => x.from.startsWith('tiller (queued merge of '))
       .map((x) => x.text.split('\n').slice(3, -1).join('\n'));
-    return { parent, kid, merge, notices };
+    return { parent, kid, merge, notices, confirms };
   }
 
   it('queues while the node works, refuses a second, and merges when its turn ends, telling the caller', async () => {
@@ -703,6 +704,20 @@ describe('queued merges (whenIdle)', () => {
     await expect.poll(() => notices().length).toBe(1);
     expect(notices()).toEqual([`merged tl/${kid.id} into dev (merge), now at ${g(repo, 'rev-parse', '--short=7', 'dev')}`]);
     expect(g(repo, 'rev-parse', 'dev^1')).toBe(before);
+  });
+
+  it('asks the human for a deferred merge, and holds it past an errored turn until a clean one ends', async () => {
+    const { kid, merge, notices, confirms } = await scene();
+    expect((await merge({ whenIdle: true })).data).toMatchObject({ queued: true });
+    expect(confirms).toEqual([expect.stringMatching(/branch tl\/n-\w+ into dev when its turn ends$/)]);
+    const dev = g(repo, 'rev-parse', 'dev');
+    m.applyHook(kid.id, { hook_event_name: 'StopFailure' });
+    await new Promise((r) => setTimeout(r, 200));
+    expect([notices(), g(repo, 'rev-parse', 'dev')]).toEqual([[], dev]);
+    m.applyHook(kid.id, { hook_event_name: 'UserPromptSubmit' });
+    m.applyHook(kid.id, { hook_event_name: 'Stop' });
+    await expect.poll(() => notices().length).toBe(1);
+    expect(notices()[0]).toMatch(new RegExp(`^merged tl/${kid.id} into dev`));
   });
 
   it('merges an idle node at once with the usual reply', async () => {
