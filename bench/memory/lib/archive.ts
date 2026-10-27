@@ -1,7 +1,7 @@
-// Archived trees for the retrieval benchmark (memory-v4 plan §2.2): the pre-registered tree selection, a replay of a
-// tree's outcomes and closes through the real derive and store.apply into a temp MemoryStore as of a time, snapshots,
-// task clusters and file-overlap labels. Session files are only ever read: archive.jsonl holds real session text, so
-// nothing from it may be written into the repo, and tests use synthetic archives.
+// Archived trees for the retrieval benchmark (R1): the pre-registered tree selection, a replay of a tree's outcomes
+// and closes through the real derive and store.apply into a temp MemoryStore as of a time, and file-overlap labels.
+// Session files are only ever read: archive.jsonl holds real session text, so nothing from it may be written into the
+// repo, and tests use synthetic archives.
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { homedir, tmpdir } from 'node:os';
@@ -24,8 +24,8 @@ export const MIN_NODES_WITH_FILES = 20;
 /** A file touched by more than this share of a tree's nodes says nothing about relevance and labels nothing. */
 export const HOT_FILE_SHARE = 0.15;
 /**
- * The human's decision: only the tiller and storyGame trees, and no bloksec tree in any benchmark data (R1, R2b or as
- * an S distractor). gateTrees() checks that the rule over the machine's archives still selects exactly these.
+ * The human's decision: only the tiller and storyGame trees, and no bloksec tree in any benchmark data (R1 or
+ * otherwise). gateTrees() checks that the rule over the machine's archives still selects exactly these.
  */
 export const GATE_TREES = [
   { rootId: 'n-96530325', repo: 'tiller' },
@@ -143,11 +143,6 @@ export class ArchiveReplay {
     }
   }
 
-  /** Copy the store as it is now to a new file (VACUUM INTO), for a scratch daemon's home (bench H6). */
-  snapshot(path: string): void {
-    this.store.snapshot(undefined, path);
-  }
-
   close(): void {
     this.store.close();
     rmSync(this.home, { recursive: true, force: true });
@@ -157,41 +152,7 @@ export class ArchiveReplay {
 /** The store a query from node q is scored against. The caller closes it. */
 export const replayAsOf = (tree: Tree, q: ArchivedNode): ArchiveReplay => new ArchiveReplay(tree, asOfNodes(tree, q)).advanceTo();
 
-// --- Clusters and labels ---
-
-const NODE_ID = /\bn-[0-9a-f]{8}\b/g;
-
-/**
- * Node id → its task cluster, named by the cluster's first-created node. A node's task is its ancestor directly below
- * the root (itself when its parent is the root). Orchestrators spawn reviewers and follow-ups as the worker's siblings,
- * so a non-orchestrator node whose prompt names an earlier node of the tree joins that node's cluster too.
- */
-export function clusters(tree: Tree): Map<string, string> {
-  const byId = new Map(tree.nodes.map((a) => [a.id, a]));
-  const up = new Map(tree.nodes.map((a) => [a.id, a.id]));
-  const find = (id: string): string => {
-    while (up.get(id) !== id) id = up.get(id)!;
-    return id;
-  };
-  const union = (x: string, y: string) => {
-    const [a, b] = [find(x), find(y)];
-    if (a === b) return;
-    // The earlier-created node names the cluster.
-    if (byId.get(a)!.createdAt <= byId.get(b)!.createdAt) up.set(b, a);
-    else up.set(a, b);
-  };
-  for (const a of tree.nodes) {
-    let top = a;
-    while (top.parentId && top.parentId !== tree.rootId && byId.has(top.parentId)) top = byId.get(top.parentId)!;
-    union(a.id, top.id);
-    if (a.role === 'orchestrator') continue;
-    for (const [id] of (a.prompt ?? '').matchAll(NODE_ID)) {
-      const cited = byId.get(id);
-      if (cited && id !== a.id && cited.createdAt < a.createdAt) union(a.id, id);
-    }
-  }
-  return new Map(tree.nodes.map((a) => [a.id, find(a.id)]));
-}
+// --- Labels ---
 
 /** A changedFiles entry as a path relative to the repo: no worktree or checkout prefix, no "./", no " (note)". */
 export function normalizeFile(f: string, repoCwd: string): string {

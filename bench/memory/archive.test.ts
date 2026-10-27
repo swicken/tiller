@@ -1,12 +1,11 @@
-// lib/archive.ts on synthetic archives only (memory-v4 plan §5, Gate): no real session text in the repo.
+// lib/archive.ts on synthetic archives only: no real session text in the repo.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ArchivedNode } from '../../src/shared/protocol.js';
 import {
-  asOfNodes, clusters, GATE_CUTOFF, gateTrees, hotFiles, labels, normalizeFile, readTree, replayAsOf, selectTrees, type Tree,
+  asOfNodes, GATE_CUTOFF, gateTrees, hotFiles, labels, normalizeFile, readTree, replayAsOf, selectTrees, type Tree,
 } from './lib/archive.js';
 
 const ROOT = 'n-00000000';
@@ -45,23 +44,6 @@ describe('as-of replay', () => {
     // The outcome went through derive too: w1's open question is an item.
     expect(r.store.search(r.scope, { query: 'alpha retry' }).map((v) => v.kind)).toContain('open_question');
     expect(r.store.search(r.scope, { query: q.id })).toEqual([]);
-
-    const out = mkdtempSync(join(tmpdir(), 'tl-bench-snap-'));
-    cleanup.push(() => rmSync(out, { recursive: true, force: true }));
-    r.snapshot(join(out, 'snap.db'));
-    const db = new DatabaseSync(join(out, 'snap.db'), { readOnly: true });
-    const { n } = db.prepare("SELECT count(*) AS n FROM items WHERE kind = 'ledger'").get() as { n: number };
-    db.close();
-    expect(n).toBe(2);
-  });
-});
-
-describe('clusters', () => {
-  it('groups a worker with its reviewer and a node with its child, but not an orchestrator with what it names', () => {
-    const cl = clusters(tree);
-    expect(cl.get(r1.id)).toBe(w1.id);
-    expect(cl.get(c.id)).toBe(cl.get(q.id));
-    expect(new Set([cl.get(w1.id), cl.get(w2.id), cl.get(q.id), cl.get(late.id)]).size).toBe(4);
   });
 });
 

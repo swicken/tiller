@@ -16,7 +16,6 @@
     "tl": "tsx src/daemon/cli.ts",
     "test": "vitest run",
     "bench:gardener": "tsx bench/memory/gardener/live.ts",
-    "bench:memory": "tsx bench/memory/run.ts",
     "bench:memory:layer-b": "tsx bench/memory/layer-b.ts",
     "bench:memory:replay": "tsx bench/memory/replay.ts",
     "typecheck": "tsc --noEmit && tsc -p adapters/pi/tsconfig.json",

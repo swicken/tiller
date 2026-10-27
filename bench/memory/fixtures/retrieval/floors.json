@@ -1,5 +1,5 @@
 {
-  "note": "FTS-only R2a scores (memory-v4 plan §5): a ratchet, raise when FTS improves, never lower to pass.",
-  "recallAtK": { "F0": 0.547, "F1": 0.544, "F2": 0.551 },
-  "mrr": { "F0": 0.587, "F1": 0.586, "F2": 0.586 }
+  "note": "R2a scores of the product's memory search: a ratchet, raise when search improves, never lower to pass.",
+  "recallAtK": 0.912,
+  "mrr": 0.978
 }

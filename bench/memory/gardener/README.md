@@ -89,7 +89,7 @@ npm run bench:gardener -- --fixtures all --runs 5 --yes
 | # | If | Then |
 |---|---|---|
 | GD-1 | H-merge precision < 0.9 | Allow merges only within daemon-proposed clusters, or raise `minContained` |
-| GD-2 | G1 false refusals > 10 %, or recall < 0.6 with precision ≥ 0.95 | Lower `minContained`; v4 embeddings replace `contained()` |
+| GD-2 | G1 false refusals > 10 %, or recall < 0.6 with precision ≥ 0.95 | Lower `minContained` |
 | GD-3 | A forget arm shows H-adv applied = 0 and precision ≥ 0.9, and `forget-only` items are a material share of the stale ones | Ship `garden_forget` |
 | GD-4 | H-cost median > $0.10, or context > 100K | Lower the candidate count and page size; `effort: low` |
 | GD-5 | H-idem > 1 | Record clusters judged distinct, so they are not proposed again until their membership changes |

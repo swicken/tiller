@@ -782,7 +782,7 @@ export function ftsTerms(text: string, max: number = LIMITS.digest.ftsTerms): st
  * The share of `hidden`'s terms (ftsTerms, uncapped) that `target` also has: |T(h) ∩ T(t)| / |T(h)|, 0 when hidden has
  * none. Asymmetric on purpose: a short item never covers a long one (D8 rule 5).
  */
-// prune: lexical similarity; v4's embeddings replace it if bench G1 refuses more than 10 % of labeled-correct actions.
+// prune: lexical similarity; revisit if bench G1 refuses more than 10 % of labeled-correct actions.
 export function contained(hidden: string, target: string): number {
   const h = ftsTerms(hidden, Infinity);
   if (!h.length) return 0;
