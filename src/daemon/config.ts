@@ -229,6 +229,9 @@ const warn = (path: string, msg: string) => {
 };
 const get = (o: unknown, path: PropertyKey[]): any => path.reduce<any>((x, k) => x?.[k], o);
 
+/** The settings a project file may not set. */
+const HOME_ONLY = ['daemon', 'claude.accounts', 'claude.account', 'memory.projects', 'memory.maxMB', 'memory.gardener'];
+
 /** A file's settings. An unreadable file gives none; a bad key (unknown, renamed or invalid) is logged once and dropped. */
 function readLayer(path: string, isHome: boolean): ConfigFile | undefined {
   let raw: string;
@@ -236,12 +239,9 @@ function readLayer(path: string, isHome: boolean): ConfigFile | undefined {
   let data: any;
   try { data = JSON.parse(raw); } catch (err) { warn(path, (err as Error).message); return undefined; }
   const bad: string[] = [];
-  if (!isHome && data?.daemon !== undefined) { delete data.daemon; bad.push('daemon: read from the home file only'); }
-  for (const key of ['accounts', 'account'] as const) {
-    if (!isHome && data?.claude?.[key] !== undefined) { delete data.claude[key]; bad.push(`claude.${key}: read from the home file only`); }
-  }
-  for (const key of ['projects', 'maxMB', 'gardener'] as const) {
-    if (!isHome && data?.memory?.[key] !== undefined) { delete data.memory[key]; bad.push(`memory.${key}: read from the home file only`); }
+  for (const key of isHome ? [] : HOME_ONLY) {
+    const path = key.split('.'), last = path.pop()!, parent = get(data, path);
+    if (parent?.[last] !== undefined) { delete parent[last]; bad.push(`${key}: read from the home file only`); }
   }
   // Agents can edit a project file, so it may turn memory off but never on.
   if (!isHome && data?.memory?.enabled === true) { delete data.memory.enabled; bad.push('memory.enabled: a project file may only set false; opt in from the home file'); }

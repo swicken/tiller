@@ -124,13 +124,14 @@ function diffText(d: Diff, stat: boolean): string {
   return [head, ...body, ...tail].join('\n');
 }
 
+const ago = (ms: number) => { const a = fmtAge(ms); return a === 'now' ? 'just now' : `${a} ago`; };
+
 /** read "outcome": a node's report_outcome fields as plain text. */
 function outcomeText(id: string, o: Outcome | undefined, gate?: NodeView['gate']): string {
   if (!o) return `${id} has not reported an outcome${gate === 'running' ? ' (its completion gate is running)' : ''}`;
   const list = (label: string, xs?: string[]) => (xs?.length ? [`${label}:`, ...xs.map((x) => `  - ${x}`)] : []);
-  const age = fmtAge(Date.now() - o.at);
   return [
-    `${id} reported ${o.outcome}${o.gate ? ` (gate ${o.gate})` : ''} ${age === 'now' ? 'just now' : `${age} ago`}`,
+    `${id} reported ${o.outcome}${o.gate ? ` (gate ${o.gate})` : ''} ${ago(Date.now() - o.at)}`,
     o.note && `note: ${o.note}`, o.summary && `summary: ${o.summary}`, ...list('changed files', o.changedFiles),
     o.verified && `verified: ${o.verified}`, ...list('open questions', o.openQuestions),
   ].filter(Boolean).join('\n');
@@ -160,8 +161,7 @@ async function requireArchived(c: Ctx, id: string): Promise<ArchivedNode> {
 
 /** `n-x "title" closed 2h ago: succeeded: ... (merged into main) ⎇ tl/n-x $0.42` for the history tool. */
 function historyLine(a: ArchivedNode, now: number): string {
-  const age = fmtAge(now - a.closedAt);
-  return [`${a.id} "${a.title}" closed ${age === 'now' ? 'just now' : `${age} ago`}${a.brief ? `: ${a.brief}` : ''}`, a.branch && `⎇ ${a.branch}`, (a.spentUsd || a.spentIncomplete) && fmtUsd(a.spentUsd ?? 0, a.spentIncomplete)].filter(Boolean).join(' ');
+  return [`${a.id} "${a.title}" closed ${ago(now - a.closedAt)}${a.brief ? `: ${a.brief}` : ''}`, a.branch && `⎇ ${a.branch}`, (a.spentUsd || a.spentIncomplete) && fmtUsd(a.spentUsd ?? 0, a.spentIncomplete)].filter(Boolean).join(' ');
 }
 
 const requireOwned = (c: Ctx, id: string, allowSelf: boolean): NodeView => {
@@ -196,8 +196,6 @@ async function runGate(m: NodeManager, id: string, gate: NonNullable<Config['gat
 }
 
 // ---- memory ----
-
-const ago = (ms: number) => { const a = fmtAge(ms); return a === 'now' ? 'just now' : `${a} ago`; };
 
 /**
  * The scope a memory tool acts on, once memory is on there. An agent's is its own node's; the human names a directory
@@ -850,7 +848,8 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       const pct = (x: number | null) => (x === null ? '-' : `${Math.round(x * 100)}%`);
       const onOff = (on: boolean) => (on ? 'on' : 'off');
       const projects = config.memory.projects.map((p) => `${p.path} ${onOff(p.enabled)}`);
-      const accounts = config.claude.accounts.flatMap((x) => (x.memory === undefined ? [] : [`${x.name} ${onOff(x.memory)}${x.memory ? '' : ' (ceiling)'}`]));
+      const own = config.claude.accounts.flatMap((x) => (x.memory === undefined ? [] : [{ name: x.name, memory: x.memory }]));
+      const accounts = own.map((x) => `${x.name} ${onOff(x.memory)}${x.memory ? '' : ' (ceiling)'}`);
       const lines = [
         project === null
           ? `memory.enabled (global): ${onOff(config.memory.enabled)} (${configEntries(null, m.home)['memory.enabled'].source === join(m.home, 'config.json') ? `set in ${join(m.home, 'config.json')}` : 'default'})`
@@ -865,7 +864,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         arms ? `digest arms over ${days} days: ${Object.entries(arms).map(([arm, s]) => `${arm} ${s.nodes} nodes, first-pass gate ${pct(s.firstPassGate)}, failed outcomes ${pct(s.failedOutcomes)}`).join('; ')}` : `digest arms: ${armsError}`,
         ...(injections ? [`injections of ${a.nodeId}: ${injections.length}`, ...injections.map((j) => `  ${new Date(j.ts).toISOString()} ${j.arm} ${j.cause} ${j.itemIds.length} items, session ${j.sessionId}`)] : []),
       ];
-      return { text: lines.join('\n'), data: { memory, ...(project === null ? { projects: config.memory.projects, accounts: config.claude.accounts.flatMap((x) => (x.memory === undefined ? [] : [{ name: x.name, memory: x.memory }])) } : { project }), maxMB, days, dbs, garden, ...(arms ? { arms } : { armsError }), ...(injections ? { injections } : {}) } };
+      return { text: lines.join('\n'), data: { memory, ...(project === null ? { projects: config.memory.projects, accounts: own } : { project }), maxMB, days, dbs, garden, ...(arms ? { arms } : { armsError }), ...(injections ? { injections } : {}) } };
     }, true),
 
   memory_switch: tool(

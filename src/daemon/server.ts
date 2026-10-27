@@ -299,23 +299,23 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
       case 'rename': manager.rename(m.id, m.title); return;
       case 'confirm': pendingConfirms.get(m.confirmId)?.(m.ok); return;
       case 'transcript': {
-        const r = await manager.transcript(m.id, m.sessionId).catch((err: Error) => ({ error: err.message }));
+        const r = await manager.transcript(m.id, m.sessionId).catch(failed);
         sendTo(c, { t: 'transcript', id: m.id, ...(m.sessionId ? { sessionId: m.sessionId } : {}), ...r });
         return;
       }
       case 'conversations': {
-        const r = await conversations(manager, m.id).then((items) => ({ items }), (err: Error) => ({ error: err.message }));
+        const r = await conversations(manager, m.id).then((items) => ({ items }), failed);
         sendTo(c, { t: 'conversations', id: m.id, ...r });
         return;
       }
       case 'conversation': {
-        const r = await conversation(manager, m.id, m.with).catch((err: Error) => ({ error: err.message }));
+        const r = await conversation(manager, m.id, m.with).catch(failed);
         sendTo(c, { t: 'conversation', id: m.id, ...(m.with ? { with: m.with } : {}), ...r });
         return;
       }
       case 'history': sendTo(c, { t: 'history', items: await history(manager.home, { rootId: m.rootId, query: m.query }) }); return;
       case 'followup': await manager.followup(m.id, m.prompt, m.title); return;
-      case 'diff': sendTo(c, { t: 'diff', id: m.id, ...(await manager.diff(m.id).catch((err: Error) => ({ error: err.message }))) }); return;
+      case 'diff': sendTo(c, { t: 'diff', id: m.id, ...(await manager.diff(m.id).catch(failed)) }); return;
       case 'send': sendTo(c, { t: 'sent', id: m.id, result: await deliver(manager, HUMAN, m.id, m.text, { mode: m.mode }) }); return;
       case 'mute':
         if (!manager.mute(m.id, m.muted)) sendTo(c, { t: 'error', message: `no such node: ${m.id}`, id: m.id });
