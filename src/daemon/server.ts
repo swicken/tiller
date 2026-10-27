@@ -81,8 +81,11 @@ const clientMessage = z.discriminatedUnion('t', [
 
 export interface DaemonServer {
   port: number;
-  /** Ask the human to approve something. Resolves false if no UI is connected or on refusal, undefined on timeout. */
-  confirm(text: string): Promise<boolean | undefined>;
+  /**
+   * Ask the human to approve something. Resolves false if no UI is connected, on refusal or when `signal` aborts (the
+   * dialog then closes), and undefined on timeout.
+   */
+  confirm(text: string, signal?: AbortSignal): Promise<boolean | undefined>;
   /** How many connected clients are looking at node `id`: it is selected there and their window is in front. */
   watchers(id: string): number;
   /** Whether the native app is connected. */
@@ -114,7 +117,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
   const pendingConfirms = new Map<string, (ok: boolean | undefined) => void>();
   const focus = (from: string, id: string) => broadcast({ t: 'focus', from, id });
   const updates = createUpdater({ repo: REPO, home: manager.home, onChange: (update) => broadcast({ t: 'update', update }), spawnHelper: (expected, onExit, now) => spawnUpdate(manager.home, daemon.port, expected, onExit, now) });
-  const { handler: mcp, publishAdminToken, authenticate, isAdmin } = mountMcp(manager, (text) => daemon.confirm(text), focus, (on, minutes) => setDnd(on, minutes), updates);
+  const { handler: mcp, publishAdminToken, authenticate, isAdmin } = mountMcp(manager, (text, signal) => daemon.confirm(text, signal), focus, (on, minutes) => setDnd(on, minutes), updates);
   const settings = settingsApi(manager, isAdmin);
   const mod = modApi(manager, authenticate, focus, () => [...new Set([...clients].filter((c) => c.authed && c.kind).map((c) => c.kind!))]);
 
@@ -396,17 +399,20 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
 
   const daemon: DaemonServer = {
     port,
-    confirm(text) {
-      if (![...clients].some((c) => c.authed)) return Promise.resolve(false);
+    confirm(text, signal) {
+      if (signal?.aborted || ![...clients].some((c) => c.authed)) return Promise.resolve(false);
       const confirmId = randomUUID();
       return new Promise<boolean | undefined>((resolveConfirm) => {
         const timer = setTimeout(() => finish(undefined), CONFIRM_TIMEOUT_MS);
+        const abort = () => finish(false);
         const finish = (ok: boolean | undefined) => {
           clearTimeout(timer);
+          signal?.removeEventListener('abort', abort);
           pendingConfirms.delete(confirmId);
           broadcast({ t: 'confirmDone', confirmId });
           resolveConfirm(ok);
         };
+        signal?.addEventListener('abort', abort, { once: true });
         pendingConfirms.set(confirmId, finish);
         broadcast({ t: 'confirm', confirmId, text });
       });

@@ -15,12 +15,12 @@ import { loadConfig, type Config } from './config.js';
 import { ADMIN_TOKEN_FILE } from './home.js';
 import { findArchived, history } from './archive.js';
 import type { NodeManager } from './manager.js';
-import { closeRefusal, queueMerge, type MergeResult, type WorktreeReport } from './worktree-lifecycle.js';
+import { closeRefusal, queueMerge, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
 import { MAX_PATCH_BYTES, MergeConflict } from './worktree.js';
 import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS, spawnKind } from './spawnfields.js';
 import { readMessages, renderMessage, sessionMessages } from './transcript.js';
-import { DAEMON, deliver, dropNotices, HUMAN, inScope, isDescendant, messageStatus, notifyWhen, QUEUE_CAP, QUEUE_TTL_MS, RATE_MS, startNotices, unwatch, withdraw } from './messaging.js';
+import { DAEMON, deliver, closeWatched, dropNotices, HUMAN, inScope, isDescendant, messageStatus, notifyWhen, QUEUE_CAP, QUEUE_TTL_MS, RATE_MS, startNotices, withdraw } from './messaging.js';
 import { logError, PREVIEW_CHARS, readBody, safeEqual } from './util.js';
 
 const MAX_WRITE_CHARS = 2000;
@@ -31,7 +31,7 @@ const HISTORY_LINES = 50;
 const MCP_DIFF_CHARS = 100_000;
 
 /** dnd sets do not disturb when `on` is given, and returns it. */
-interface Ctx { updates?: Updater; manager: NodeManager; confirm: (text: string) => Promise<boolean | undefined>; focus: (from: string, id: string) => void; dnd: (on?: boolean, minutes?: number) => Dnd; caller: string; mcp?: boolean }
+interface Ctx { updates?: Updater; manager: NodeManager; confirm: (text: string, signal?: AbortSignal) => Promise<boolean | undefined>; focus: (from: string, id: string) => void; dnd: (on?: boolean, minutes?: number) => Dnd; caller: string; mcp?: boolean }
 interface Out { text?: string; data?: unknown }
 
 /** How long report_outcome waits for a completion gate before replying that it is still running. */
@@ -187,23 +187,32 @@ async function runGate(m: NodeManager, id: string, gate: NonNullable<Config['gat
   return { text, data: { ok: false, gate: 'failed', attemptsLeft: left } };
 }
 
+type CloseResult = { closed: string[]; gone: string[]; notes: string[]; errors: string[] };
+
 /**
  * Reply to a close that waits for the human: pending now, then the decision as a notice to the caller, shaped like a
- * notify_when notice. `run` closes the batch once approved.
+ * notify_when notice. `run` closes the batch once approved. A caller removed meanwhile aborts `cancel`, which dismisses
+ * the human's dialog and closes nothing.
  */
-function closeLater(c: Ctx, decision: Promise<boolean | undefined>, list: string, run: () => Promise<{ closed: string[]; notes: string[]; errors: string[] }>): Out {
-  const requestId = `close-${randomBytes(4).toString('hex')}`;
+function closeLater(c: Ctx, decision: Promise<boolean | undefined>, cancel: AbortController, list: string, run: () => Promise<CloseResult>): Out {
+  const requestId = randomBytes(4).toString('hex');
+  const caller = c.caller;
+  const removed = (id: string) => { if (id === caller) cancel.abort(); };
+  c.manager.on('removed', removed);
   void decision.then(async (ok) => {
+    c.manager.off('removed', removed);
+    if (cancel.signal.aborted) return;
     let body: string;
     if (ok) {
       const r = await run();
-      body = [`The human approved closing ${list}.`, r.closed.length && `Closed: ${r.closed.join(', ')}.`, ...r.notes, ...r.errors.map((e) => `Not closed: ${e}`)].filter(Boolean).join('\n');
+      body = [`The human approved closing ${list}.`, r.closed.length && `Closed: ${r.closed.join(', ')}.`, r.gone.length && `Already closed by someone else: ${r.gone.join(', ')}.`,
+        ...r.notes, ...r.errors.map((e) => `Not closed: ${e}`)].filter(Boolean).join('\n');
     } else if (ok === false) body = `The human declined closing ${list}; nothing was closed.`;
     else body = `No decision on closing ${list} arrived in time; nothing was closed. Call close again to ask again.`;
-    await deliver(c.manager, DAEMON, c.caller, body, { fromLabel: `tiller (close ${requestId} ${ok ? 'approved' : ok === false ? 'denied' : 'expired'})`, replyTo: null });
+    await deliver(c.manager, DAEMON, caller, body, { fromLabel: `tiller (close request ${requestId} ${ok ? 'approved' : ok === false ? 'denied' : 'expired'})`, replyTo: null });
   }).catch(logError);
   return {
-    text: `Waiting for the human to approve closing ${list}. Carry on: the decision arrives as a message from tiller (close ${requestId}).`,
+    text: `Waiting for the human to approve closing ${list}. Carry on: the decision arrives as a message from tiller (close request ${requestId}).`,
     data: { ok: false, pending: true, requestId },
   };
 }
@@ -346,9 +355,9 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   transcript: tool(
     'Read session transcript',
     'A live or closed Claude node\'s conversation in one of its sessions (default: the current one), as read "transcript" prints it, with its session ids. Only the human may call this.',
-    { nodeId: z.string().min(1), sessionId: z.string().min(1).optional() },
+    { ...nodeIdArg, sessionId: z.string().min(1).optional() },
     async (c, a) => {
-      const t = await sessionMessages(await c.manager.transcriptNode(a.nodeId), a.sessionId);
+      const t = await sessionMessages(await c.manager.transcriptNode(nodeId(a)), a.sessionId);
       const head = `sessions: ${t.sessions.map((s) => s.sessionId + (s.current ? ' (current)' : '')).join(', ')}${t.truncated ? `; older entries cut, showing the last ${t.messages.length}` : ''}`;
       return { text: [head, ...t.messages.map(renderMessage)].join('\n\n') };
     }, true),
@@ -356,8 +365,8 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   followup: tool(
     'Continue past agent',
     'Continue a closed agent node\'s session as a new live node using its harness that starts on `prompt`, with its title (unless `title`), model, effort, role and profile, under its parent when that is still live. Only the human may call this.',
-    { nodeId: z.string().min(1), prompt: z.string().min(1), title: z.string().min(1).optional() },
-    async (c, a) => ({ data: { nodeId: (await c.manager.followup(a.nodeId, a.prompt, a.title)).id } }), true),
+    { ...nodeIdArg, prompt: z.string().min(1), title: z.string().min(1).optional() },
+    async (c, a) => ({ data: { nodeId: (await c.manager.followup(nodeId(a), a.prompt, a.title)).id } }), true),
 
   write: tool(
     'Type in terminal',
@@ -386,12 +395,17 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       }
       // Refusals come before the confirm and before approvals.close: no setting turns a refused close into a close.
       const destroys: string[] = [];
+      /** What each discard showed the human, so an approval that comes later discards no more than that. */
+      const approved = new Map<string, WorktreeCheck>();
       for (const v of views) {
         const check = await c.manager.worktreeCheck(v.id);
         if (!check) continue;
         const refusal = closeRefusal(check, a.worktree);
         if (refusal) throw new Error(views.length > 1 ? `${v.id}: ${refusal}` : refusal);
-        if (a.worktree === 'discard') destroys.push(`${v.title}: discards ${check.unmerged.length} commit(s) and ${check.dirty.length} changed file(s) on ${v.worktree!.branch}`);
+        if (a.worktree === 'discard') {
+          approved.set(v.id, check);
+          destroys.push(`${v.title}: discards ${check.unmerged.length} commit(s) and ${check.dirty.length} changed file(s) on ${v.worktree!.branch}`);
+        }
       }
       const list = views.map((v) => `${v.title} (${v.id})`).join(', ');
       const mode = c.caller === HUMAN ? undefined : loadConfig(c.manager.projectDir(c.manager.view(c.caller)!), c.manager.home).approvals.close;
@@ -401,15 +415,21 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       const notes: string[] = [];
       /**
        * Close the batch in order; `keepGoing` records each node's error and moves on, otherwise the first error throws.
-       * An agent hears nothing more of the nodes it closed: no notify_when line, no notice still queued.
+       * An agent hears nothing more of the nodes it closed: no notify_when line, no notice still queued. A node closed by
+       * someone else meanwhile is skipped, and a discard with more to lose than the human was shown is refused.
        */
-      const closeAll = async (keepGoing: boolean) => {
-        const closed: string[] = [], errors: string[] = [];
+      const closeAll = async (keepGoing: boolean): Promise<CloseResult> => {
+        const closed: string[] = [], gone: string[] = [], errors: string[] = [];
         try {
           for (const id of ids) {
+            if (!c.manager.registry.get(id)) { gone.push(id); continue; }
             try {
-              if (c.caller !== HUMAN) unwatch(c.manager, c.caller, id); // first: the close itself completes a watch
-              const note = await c.manager.close(id, true, a.worktree); // roots were vetted above
+              const was = approved.get(id), now = was && await c.manager.worktreeCheck(id);
+              if (was && now && (now.unmerged.length > was.unmerged.length || now.dirty.length > was.dirty.length)) {
+                throw new Error(`refused: it now has ${now.unmerged.length} commit(s) and ${now.dirty.length} changed file(s) to discard, more than the human approved; ask again`);
+              }
+              const close = () => c.manager.close(id, true, a.worktree); // roots were vetted above
+              const note = await (c.caller === HUMAN ? close() : closeWatched(c.manager, c.caller, id, close));
               if (note) notes.push(`${id}: ${note}`);
               closed.push(id);
             } catch (err) {
@@ -420,14 +440,15 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         } finally {
           if (c.caller !== HUMAN) dropNotices(c.manager, c.caller, closed);
         }
-        return { closed, notes, errors };
+        return { closed, gone, notes, errors };
       };
       if (c.caller !== HUMAN && !preapproved) {
         // An answer already settled (no UI connected) replies at once; otherwise the caller's turn goes on and the
         // decision arrives as a notice, so a human away from the UI does not hold the turn.
-        const decision = c.confirm(text);
+        const cancel = new AbortController();
+        const decision = c.confirm(text, cancel.signal);
         const now = await Promise.race([decision, new Promise<'pending'>((r) => setImmediate(r, 'pending'))]);
-        if (now === 'pending') return closeLater(c, decision, list, () => closeAll(true));
+        if (now === 'pending') return closeLater(c, decision, cancel, list, () => closeAll(true));
         if (!now) return { data: { ok: false, reason: 'denied' } };
       }
       await closeAll(false);
@@ -437,9 +458,9 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   merge: tool(
     'Merge node changes',
     `Merge the branch of a descendant that has its own worktree into its base, in the project's worktrees.mergeStyle ("merge", default: a merge commit; "squash": one commit; "ff-only": fast-forward only). Refused, with nothing changed, when the base is protected (worktrees.protected, default main, master and origin's default branch: spawn with a \`base\` branch instead and have the human open a pull request from it), while the node is working, when its worktree has uncommitted files, or when the base is checked out somewhere with uncommitted changes. Conflicts are checked first without touching files; the reply names the conflicting paths: send the worker a rebase instruction rather than resolving them yourself, then merge again. The commit is signed when git config sets commit.gpgsign; a signing failure refuses the merge with git's error. The human approves each merge in the UI unless config approvals.merge is set (a project's .tiller/config.json may only be stricter than the home file); declined gives {ok:false, reason:"denied"}. whenIdle: if the node is working, reply {ok:true, queued:true} at once and merge when its turn ends (or it exits); you then get a framed message with the result, or why it was dropped (node closed, daemon stopped). One queued merge per node. Close the node afterwards to remove its worktree and branch.`,
-    { nodeId: z.string().min(1), whenIdle: z.boolean().optional() },
+    { ...nodeIdArg, whenIdle: z.boolean().optional() },
     async (c, a) => {
-      const v = requireOwned(c, a.nodeId, false);
+      const v = requireOwned(c, nodeId(a), false);
       if (!v.worktree) throw new Error(`${v.id} has no worktree of its own to merge`);
       const skip = c.caller === HUMAN || loadConfig(v.worktree.repo, c.manager.home).approvals.merge;
       const later = a.whenIdle && v.status.state === 'working' && !v.status.exited;
@@ -462,15 +483,15 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
           return { text: `queued: ${v.id} is working; you get a message with the merge result when its turn ends`, data: { ok: true, queued: true } };
         }
       }
-      return reply(c.manager.merge(a.nodeId));
+      return reply(c.manager.merge(nodeId(a)));
     }),
 
   resume: tool(
     'Resume node',
     'Relaunch an exited Claude node with its previous conversation. Only the human may call this.',
-    { nodeId: z.string().min(1) },
+    { ...nodeIdArg },
     async (c, a) => {
-      const r = await c.manager.resume(a.nodeId);
+      const r = await c.manager.resume(nodeId(a));
       if (!r.ok) throw new Error(r.error);
       return { data: { ok: true } };
     }, true),
@@ -478,9 +499,9 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   restart: tool(
     'Restart node',
     'Restart a node: kill its process and relaunch it with a fresh session, which clears its context. Its title, directory and children are kept, and so are a model and effort chosen at spawn (argument or preset); ones that came from config are re-resolved from the current config. `prompt` is its first prompt; without one, a node whose tree has a handoff.md in its session directory is told to read it first. Only the human may call this.',
-    { nodeId: z.string().min(1), prompt: z.string().optional() },
+    { ...nodeIdArg, prompt: z.string().optional() },
     async (c, a) => {
-      const r = c.manager.restart(a.nodeId, a.prompt);
+      const r = c.manager.restart(nodeId(a), a.prompt);
       if (!r.ok) throw new Error(r.error);
       return { data: { ok: true } };
     }, true),
@@ -488,9 +509,9 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   change_harness: tool(
     'Change agent harness',
     'Stop an existing agent and start Claude, Codex or Pi with a fresh native context. Keeps node identity, children, workspace and readable history. Clears preset, permission, model and effort overrides and uses the target profile defaults. Only the human may call this.',
-    { nodeId: z.string().min(1), harness: z.enum(['claude', 'codex', 'pi']), prompt: z.string().optional() },
+    { ...nodeIdArg, harness: z.enum(['claude', 'codex', 'pi']), prompt: z.string().optional() },
     async (c, a) => {
-      const r = await c.manager.changeHarness(a.nodeId, a.harness, a.prompt, true);
+      const r = await c.manager.changeHarness(nodeId(a), a.harness, a.prompt, true);
       if (!r.ok) throw new Error(r.error);
       return { data: { ok: true } };
     }, true),
@@ -555,10 +576,10 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
   mute: tool(
     'Mute notifications',
     'Stop (muted true) or restore one node\'s OS notifications; the mute is kept across restarts. Only the human may call this.',
-    { nodeId: z.string().min(1), muted: z.boolean() },
+    { ...nodeIdArg, muted: z.boolean() },
     async (c, a) => {
-      if (!c.manager.mute(a.nodeId, a.muted)) throw new Error(`no such node: ${a.nodeId}`);
-      return { text: `${a.muted ? 'muted' : 'unmuted'} ${a.nodeId}`, data: { ok: true } };
+      if (!c.manager.mute(nodeId(a), a.muted)) throw new Error(`no such node: ${nodeId(a)}`);
+      return { text: `${a.muted ? 'muted' : 'unmuted'} ${nodeId(a)}`, data: { ok: true } };
     }, true),
 
   dnd: tool(

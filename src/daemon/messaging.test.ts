@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { flushEvents } from './sessions.js';
-import { ack, claim, deliver, flushInbox, holdDeliveries, inbox, messageStatus, PI_CONFIRM_MS, QUEUE_TTL_MS, release, saveInboxForRestart, startNotices, unconfirmed, withdraw, type Mgr } from './messaging.js';
+import { ack, claim, deliver, dropNotices, flushInbox, holdDeliveries, inbox, messageStatus, PI_CONFIRM_MS, QUEUE_TTL_MS, release, saveInboxForRestart, startNotices, unconfirmed, withdraw, type Mgr } from './messaging.js';
 
 const PROMPT = ['some output', '────────────────── n-b', '❯ ', '──────────────────'];
 
@@ -416,6 +416,17 @@ describe('mod inbox', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(inbox(m.mgr, 'p')[0].text).toContain('stopped: exited');
     expect(m.sessions.get('p')!.pasted).toHaveLength(0);
+  });
+
+  it('dropNotices withdraws only notices marked dropOnClose, so a queued merge result survives the close', async () => {
+    inbox(m.mgr, 'p');
+    const child = await deliver(m.mgr, 'tiller', 'p', 'a stopped', { about: ['a'], dropOnClose: true });
+    const merge = await deliver(m.mgr, 'tiller', 'p', 'merged a', { about: ['a'] });
+    const both = await deliver(m.mgr, 'tiller', 'p', '2 of 2 finished', { about: ['a', 'b'], dropOnClose: true });
+    dropNotices(m.mgr, 'p', ['a']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(messageStatus(m.mgr, 'tiller', child.messageId!)?.outcome).toBe('withdrawn');
+    expect(inbox(m.mgr, 'p').map((x) => x.id)).toEqual([merge.messageId, both.messageId]); // b is still news
   });
 
   it('a stopped notice carries the child\'s last message whole, and cuts a very long one visibly', async () => {
