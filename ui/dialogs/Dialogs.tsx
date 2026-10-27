@@ -140,22 +140,27 @@ function KillDialog({ id }: { id: string }) {
   const node = useStore((s) => s.nodes[id]);
   if (!node) return null;
   const wt = node.worktree;
+  const root = node.parentId === null;
+  const kept = root && <p>Its children are kept.</p>;
   if (wt) return (
     <Modal title={`Close ${node.title}?`} onClose={close}>
       <p>It works in its own git worktree on branch <code>{wt.branch}</code>. Close stops it and removes the worktree only when the tree is clean and merged into {wt.base}; otherwise the close is refused and the node keeps running.</p>
       <p>Keep branch commits uncommitted work as a WIP commit, removes the directory and keeps the branch. Discard deletes the worktree and the branch, including uncommitted work.</p>
+      {kept}
       <div className="btns">
         <button className="btn" autoFocus onClick={close}>Cancel</button>
-        {worktreeCloses(id, node.parentId === null).map((c) => <button key={c.label} className={c.className} onClick={() => { send(c.msg); close(); }}>{c.label}</button>)}
+        {worktreeCloses(id, root).map((c) => <button key={c.label} className={c.className} onClick={() => { send(c.msg); close(); }}>{c.label}</button>)}
       </div>
     </Modal>
   );
+  const verb = root ? 'Close' : 'Kill';
   return (
-    <Modal title={`Kill ${node.title}?`} onClose={close}>
+    <Modal title={`${verb} ${node.title}?`} onClose={close}>
       <p>The process is stopped and the node is closed. Any work it has not finished is lost.</p>
+      {kept}
       <div className="btns">
         <button className="btn" autoFocus onClick={close}>Cancel</button>
-        <button className="btn danger solid" onClick={() => { send({ t: 'close', id }); close(); }}>Kill</button>
+        <button className="btn danger solid" onClick={() => { send({ t: 'close', id, ...(root ? { force: true } : {}) }); close(); }}>{verb}</button>
       </div>
     </Modal>
   );

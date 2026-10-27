@@ -206,6 +206,8 @@ export class NodeManager extends EventEmitter {
   private drainState?: { reason: string; exclude?: string; force?: boolean; lease: NodeJS.Timeout };
   /** projectDir's main checkout of each cwd outside a worktree node. */
   private projectDirs = new Map<string, string>();
+  /** repoAccountOf per node, computed on first view; refreshRepoAccounts recomputes it after a config change. */
+  private repoAccounts = new Map<string, string | null | undefined>();
 
   constructor(opts: ManagerOptions = {}) {
     super();
@@ -238,7 +240,7 @@ export class NodeManager extends EventEmitter {
     this.sweepTimer = setInterval(() => this.sweepStale(), SWEEP_MS);
     this.sweepTimer.unref();
     this.on('node', () => scheduleSoon(this));
-    this.on('removed', () => scheduleSoon(this));
+    this.on('removed', (id: string) => { this.repoAccounts.delete(id); scheduleSoon(this); });
   }
 
   // ---- tokens ----
@@ -260,8 +262,37 @@ export class NodeManager extends EventEmitter {
     const withModel = status.model || !rec.model ? status : { ...status, model: rec.model };
     const s = withModel.effort || !rec.effort ? withModel : { ...withModel, effort: rec.effort };
     const { git, outcome, gate } = rt;
+    // The kind checks stay outside the cache: a harness change can turn a Claude node into another.
+    const claudeRoot = !rec.parentId && isAgentKind(rec.kind) && harnessFor(rec) === 'claude';
+    if (claudeRoot && !this.repoAccounts.has(id)) this.repoAccounts.set(id, this.repoAccountOf(rec));
+    const repoAccount = claudeRoot ? this.repoAccounts.get(id) : undefined;
     const shown = rt.busy === 'changing harness' ? { ...s, activity: rt.stoppingAfterFailedChange ? 'waiting for old process exit; harness unchanged' : 'changing harness' } : gate?.state === 'running' ? { ...s, activity: `gate: ${gate.command}` } : s;
-    return { ...rec, status: git ? { ...shown, git } : shown, unread: !!rt.unread, ...(outcome ? { outcome } : {}), ...(gate ? { gate: gate.state } : {}), ...(rt.busy === 'changing harness' ? { changingHarness: true } : {}) };
+    return { ...rec, status: git ? { ...shown, git } : shown, unread: !!rt.unread, ...(outcome ? { outcome } : {}), ...(gate ? { gate: gate.state } : {}), ...(rt.busy === 'changing harness' ? { changingHarness: true } : {}), ...(repoAccount !== undefined ? { repoAccount } : {}) };
+  }
+
+  /**
+   * For a root Claude node (view checks that; children run in their root's account, so only roots warn), the account a
+   * new root session in its project would run in now (spawnAccount's mapping), when that is another Claude home than the
+   * node's own (null: no account, so Claude's default home); else undefined. Undefined too while the accounts config is
+   * invalid or the node's account is no longer configured: launches report those.
+   */
+  private repoAccountOf(rec: NodeRecord): string | null | undefined {
+    try {
+      const want = accountForProject(this.home, this.projectDir(rec));
+      const dirOf = (a?: string) => (a === undefined ? undefined : claudeConfigDir(this.home, a));
+      return dirOf(want) !== dirOf(rec.account) ? want ?? null : undefined;
+    } catch { return undefined; }
+  }
+
+  /** Recompute repoAccount after the accounts config changed, emitting each node whose warning changed. */
+  refreshRepoAccounts(): void {
+    for (const rec of this.registry.list()) {
+      if (!this.repoAccounts.has(rec.id)) continue; // never viewed: the next view computes it
+      const next = this.repoAccountOf(rec);
+      if (this.repoAccounts.get(rec.id) === next) continue;
+      this.repoAccounts.set(rec.id, next);
+      this.emitNode(rec.id);
+    }
   }
 
   list(): NodeView[] {

@@ -3,7 +3,7 @@ import { isAgentKind, PROFILE_LABELS, profileFor, type NodeView } from '../../sr
 import { fmtTokens, shortModel } from '../../src/shared/format';
 import { CtxBar, DiffCounts, outcomeLabel, StateDot } from '../controls/Bits';
 import { Icon } from '../controls/icons';
-import { KIND_LABEL, kindTag, statusKind } from './tree';
+import { accountMismatch, KIND_LABEL, kindTag, statusKind } from './tree';
 import { readPreference, useResizeHandle } from './useResizeHandle';
 import './sidebar-inspector.css';
 
@@ -63,7 +63,9 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
         <dl className="inspector-facts">
           {row('Live status', <span className={`inspector-state ${kind}`}><StateDot kind={kind} />{KIND_LABEL[kind]}</span>)}
           {row('Harness', kindTag(node))}
-          {agent && node.account && row('Account', node.account)}
+          {agent && (node.account || node.repoAccount !== undefined) && row('Account', node.repoAccount !== undefined
+            ? <span className="warn">{accountMismatch(node)}</span>
+            : node.account)}
           {agent && row('Role', node.role ?? (node.parentId ? 'worker' : 'orchestrator'))}
           {agent && row('Profile', PROFILE_LABELS[profileFor(node.profile, node.parentId, node.role)])}
           {agent && row('Model', shortModel(s.model ?? node.model) || 'Not reported')}
