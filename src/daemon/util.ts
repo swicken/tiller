@@ -22,7 +22,6 @@ export const inside = (path: string, dir: string) => path === dir || path.starts
 /** `~/x` under the user's home, then path.resolve: no trailing slash, no realpath. */
 export const expandHome = (path: string) => resolve(path.startsWith('~/') ? join(homedir(), path.slice(2)) : path);
 
-/** For `.catch(logError)` on fire-and-forget promises. */
 /**
  * `path` with symlinks resolved, as `git worktree list` reports it (git registers resolved paths); `path` made absolute when it
  * does not exist. Trust lists, account projects and worktree paths compare in this form.
@@ -34,6 +33,7 @@ export const pidAlive = (pid: number): boolean => {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code !== 'ESRCH'; }
 };
 
+/** For `.catch(logError)` on fire-and-forget promises. */
 export const logError = (err: unknown): void => console.error('tiller:', err);
 
 /** The request body, or undefined once it passes `max` characters: then this has answered 413 and destroyed the request. */
