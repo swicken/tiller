@@ -5,6 +5,7 @@ import type { UpdateStatus } from '../shared/protocol.js';
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
 import { configEntries, effectiveProfileEntries, loadConfig } from './config.js';
 import { gateFor } from './completion-gate.js';
@@ -54,12 +55,14 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl kill [--force] [--keep-branch|--discard] <id...> | close <id...>  close and delete nodes (an orchestrator needs --force);
                                                       a node's worktree must be clean and merged unless --keep-branch
                                                       (commit as WIP, keep the branch) or --discard (delete both)
-  tl merge <id> [--close]                             merge a worktree node's branch into its base (refused on conflict,
-                                                      naming the paths); --close then closes the node
+  tl merge <id> [--close] [--when-idle]               merge a worktree node's branch into its base (refused on conflict,
+                                                      naming the paths); --close then closes the node; --when-idle
+                                                      waits for a working node's turn to end instead of refusing
+                                                      (run by an agent, it queues the merge as the merge tool does)
   tl carry <from> <branch...> [--cwd P]               merge <from> into the first branch, that into the next, and so on, by merge
                                                       commits only (no rebase, no push); stops at the first conflict, naming the
                                                       branch and files; refuses protected branches and ones checked out anywhere
-  tl diff <id> [--stat]                             what a worktree node changed since it branched, committed or not
+  tl diff <id> [--stat]                               what a worktree node changed since it branched, committed or not
   tl send [--now] <id> "text"                         --now interrupts the target's turn if it is working (a steer)
   tl withdraw <messageId>                             take back a queued message that has not been delivered yet
   tl read <id> [outcome|summary|transcript|terminal] [--lines N]   (all but terminal also read a closed node)
@@ -141,7 +144,7 @@ const { values: f, positionals: pos } = parseArgs({
   options: {
     kind: { type: 'string' }, title: { type: 'string' }, cwd: { type: 'string' }, prompt: { type: 'string' }, model: { type: 'string' }, effort: { type: 'string' },
     'permission-mode': { type: 'string' }, role: { type: 'string' }, profile: { type: 'string' }, harness: { type: 'string' }, new: { type: 'boolean' }, 'request-id': { type: 'string' }, force: { type: 'boolean' }, lines: { type: 'string' },
-    worktree: { type: 'boolean' }, 'no-app': { type: 'boolean' }, since: { type: 'string' }, follow: { type: 'boolean' }, 'keep-branch': { type: 'boolean' }, discard: { type: 'boolean' }, detached: { type: 'boolean' }, check: { type: 'boolean' }, close: { type: 'boolean' }, stat: { type: 'boolean' }, preset: { type: 'string' },
+    worktree: { type: 'boolean' }, 'no-app': { type: 'boolean' }, since: { type: 'string' }, follow: { type: 'boolean' }, 'keep-branch': { type: 'boolean' }, discard: { type: 'boolean' }, detached: { type: 'boolean' }, check: { type: 'boolean' }, close: { type: 'boolean' }, 'when-idle': { type: 'boolean' }, stat: { type: 'boolean' }, preset: { type: 'string' },
     after: { type: 'string', multiple: true }, 'after-success': { type: 'string', multiple: true }, now: { type: 'boolean' },
     fork: { type: 'string' }, root: { type: 'string' }, session: { type: 'string' }, base: { type: 'string' }, account: { type: 'string' },
   },
@@ -298,8 +301,19 @@ switch (cmd) {
     break;
   case 'merge': {
     if (!pos[0]) fail(usage());
-    const { data } = await call('merge', { nodeId: pos[0] });
-    if (!data?.ok) process.exit(1); // conflicts: printed above
+    // --when-idle: an agent queues the merge, as with the tool (each retry would ask the human again); the human's
+    // command retries while the node works, and every other refusal fails at once.
+    const agent = !!(process.env.TL_NODE_ID && process.env.TL_TOKEN_FILE), queue = !!f['when-idle'] && agent;
+    if (queue && f.close) fail('--close cannot follow a queued merge: close the node once the merge message arrives');
+    const working = (e?: string) => !!e?.endsWith(' is working; wait until its turn ends');
+    let r = await call('merge', { nodeId: pos[0], ...(queue ? { whenIdle: true } : {}) }, true, f['when-idle'] && !agent);
+    if (working(r.error)) console.log(`tl merge: waiting for ${pos[0]}'s turn to end`);
+    while (working(r.error)) {
+      await sleep(2000);
+      r = await call('merge', { nodeId: pos[0] }, true, true);
+    }
+    if (r.error) fail(r.error);
+    if (!r.data?.ok) process.exit(1); // conflicts: printed above
     if (f.close) await call('close', { nodeIds: [pos[0]] });
     break;
   }

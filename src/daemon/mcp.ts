@@ -15,7 +15,7 @@ import { loadConfig, type Config } from './config.js';
 import { ADMIN_TOKEN_FILE } from './home.js';
 import { findArchived, history } from './archive.js';
 import type { NodeManager } from './manager.js';
-import { closeRefusal, type WorktreeReport } from './worktree-lifecycle.js';
+import { closeRefusal, queueMerge, type MergeResult, type WorktreeReport } from './worktree-lifecycle.js';
 import { MAX_PATCH_BYTES, MergeConflict } from './worktree.js';
 import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS } from './spawnfields.js';
@@ -372,8 +372,8 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   merge: tool(
     'Merge node changes',
-    `Merge the branch of a descendant that has its own worktree into its base, in the project's worktrees.mergeStyle ("merge", default: a merge commit; "squash": one commit; "ff-only": fast-forward only). Refused, with nothing changed, when the base is protected (worktrees.protected, default main, master and origin's default branch: spawn with a \`base\` branch instead and have the human open a pull request from it), while the node is working, when its worktree has uncommitted files, or when the base is checked out somewhere with uncommitted changes. Conflicts are checked first without touching files; the reply names the conflicting paths: send the worker a rebase instruction rather than resolving them yourself, then merge again. The commit is signed when git config sets commit.gpgsign; a signing failure refuses the merge with git's error. The human approves each merge in the UI unless config approvals.merge is set (a project's .tiller/config.json may only be stricter than the home file); declined gives {ok:false, reason:"denied"}. Close the node afterwards to remove its worktree and branch.`,
-    { nodeId: z.string().min(1) },
+    `Merge the branch of a descendant that has its own worktree into its base, in the project's worktrees.mergeStyle ("merge", default: a merge commit; "squash": one commit; "ff-only": fast-forward only). Refused, with nothing changed, when the base is protected (worktrees.protected, default main, master and origin's default branch: spawn with a \`base\` branch instead and have the human open a pull request from it), while the node is working, when its worktree has uncommitted files, or when the base is checked out somewhere with uncommitted changes. Conflicts are checked first without touching files; the reply names the conflicting paths: send the worker a rebase instruction rather than resolving them yourself, then merge again. The commit is signed when git config sets commit.gpgsign; a signing failure refuses the merge with git's error. The human approves each merge in the UI unless config approvals.merge is set (a project's .tiller/config.json may only be stricter than the home file); declined gives {ok:false, reason:"denied"}. whenIdle: if the node is working, reply {ok:true, queued:true} at once and merge when its turn ends (or it exits); you then get a framed message with the result, or why it was dropped (node closed, daemon stopped). One queued merge per node. Close the node afterwards to remove its worktree and branch.`,
+    { nodeId: z.string().min(1), whenIdle: z.boolean().optional() },
     async (c, a) => {
       const v = requireOwned(c, a.nodeId, false);
       if (!v.worktree) throw new Error(`${v.id} has no worktree of its own to merge`);
@@ -381,14 +381,23 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       if (!skip && !(await c.confirm(`${who(c)} wants to merge ${v.title} (${v.id}): branch ${v.worktree.branch} into ${v.worktree.base}`))) {
         return { data: { ok: false, reason: 'denied' } };
       }
-      let r: Awaited<ReturnType<NodeManager['merge']>>;
-      try {
-        r = await c.manager.merge(a.nodeId);
-      } catch (err) {
-        if (!(err instanceof MergeConflict)) throw err;
-        return { text: `${err.message}. Send the worker a rebase instruction: rebase ${v.worktree.branch} onto ${v.worktree.base}, resolve, commit, then merge again.`, data: { ok: false, conflicts: err.conflicts } };
+      const w = v.worktree;
+      const reply = (merge: Promise<MergeResult>) => merge.then(
+        (r) => ({ text: `merged ${w.branch} into ${r.base} (${r.style}), now at ${r.sha.slice(0, 7)}`, data: { ok: true, ...r } }),
+        (err) => {
+          if (!(err instanceof MergeConflict)) throw err;
+          return { text: `${err.message}. Send the worker a rebase instruction: rebase ${w.branch} onto ${w.base}, resolve, commit, then merge again.`, data: { ok: false, conflicts: err.conflicts } };
+        });
+      if (a.whenIdle) {
+        if (c.caller === HUMAN) throw new Error('whenIdle is only for agent nodes: the human has no inbox (tl merge --when-idle waits instead)');
+        const caller = c.caller;
+        const tell = (merge: Promise<MergeResult>) => void reply(merge).then((r) => r.text, (err: Error) => `merge of ${v.id} failed: ${err.message}`)
+          .then((text) => deliver(c.manager, DAEMON, caller, text, { fromLabel: `tiller (queued merge of ${v.id})`, replyTo: null, about: [v.id] })).catch(logError);
+        if (await queueMerge(c.manager, v.id, caller, tell)) {
+          return { text: `queued: ${v.id} is working; you get a message with the merge result when its turn ends`, data: { ok: true, queued: true } };
+        }
       }
-      return { text: `merged ${v.worktree.branch} into ${r.base} (${r.style}), now at ${r.sha.slice(0, 7)}`, data: { ok: true, ...r } };
+      return reply(c.manager.merge(a.nodeId));
     }),
 
   resume: tool(

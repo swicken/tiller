@@ -3,8 +3,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import type { GitState, NodeStatus, Worktree } from '../shared/protocol.js';
+import type { GitState, NodeStatus, NodeView, Worktree } from '../shared/protocol.js';
 import { claudeHomes } from './claude-accounts.js';
+import { turnDone } from './completion-watches.js';
 import { loadConfig, type MergeStyle } from './config.js';
 import type { NodeManager } from './manager.js';
 import { buildChildEnv } from './pty.js';
@@ -125,26 +126,34 @@ async function createWorktree(m: NodeManager, id: string, prompt: string | undef
   refreshGit(m, id).catch(logError);
 }
 
-/** See NodeManager.merge. */
-export async function mergeWorktree(m: NodeManager, id: string): Promise<{ base: string; sha: string; style: MergeStyle }> {
+export type MergeResult = { base: string; sha: string; style: MergeStyle };
+
+/** The refusals that hold whatever the node is doing: no worktree, a protected base, setup running. */
+async function mergeable(m: NodeManager, id: string): Promise<Worktree> {
   const rec = m.registry.get(id);
   if (!rec) throw new Error(`no such node: ${id}`);
   const w = rec.worktree;
   if (!w) throw new Error(`${id} has no worktree of its own to merge`);
-  const config = loadConfig(w.repo, m.home).worktrees;
-  if ((await wt.protectedBranches(w.repo, config.protected)).includes(w.base)) {
+  if ((await wt.protectedBranches(w.repo, loadConfig(w.repo, m.home).worktrees.protected)).includes(w.base)) {
     throw new Error(`refusing to merge into protected branch ${w.base}; spawn workers with base <branch> (tl spawn --base, or base on the spawn tool) and open a pull request from it`);
   }
+  if (m.runtimes.get(id)!.setup) throw new Error('worktree setup is running');
+  return w;
+}
+
+/** See NodeManager.merge. */
+export async function mergeWorktree(m: NodeManager, id: string): Promise<MergeResult> {
+  const w = await mergeable(m, id);
+  const rec = m.registry.get(id)!;
   const rt = m.runtimes.get(id)!, s = rt.status!;
   if (s.state === 'working' && !s.exited) throw new Error(`refusing to merge while ${id} is working; wait until its turn ends`);
-  if (rt.setup) throw new Error('worktree setup is running');
   if (rt.busy) throw new Error(`${id} is already ${rt.busy}`);
   rt.busy = 'merging';
   try {
     await gitSettled(rt);
     const dirty = existsSync(w.path) ? await wt.dirtyFiles(w.path) : [];
     if (dirty.length) throw new Error(`merge refused, nothing changed: ${count(dirty.length, 'uncommitted file')} in the worktree; commit them first`);
-    const style = config.mergeStyle;
+    const style = loadConfig(w.repo, m.home).worktrees.mergeStyle;
     const subject = style === 'squash' ? `${rec.title} (squashed from ${w.branch})` : `Merge branch '${w.branch}': ${rec.title}`;
     const sha = await wt.mergeInto(w.repo, w.branch, w.base, style, subject);
     const merged = { tip: (await wt.branchSha(w.repo, w.branch)) ?? '', at: Date.now() };
@@ -155,6 +164,51 @@ export async function mergeWorktree(m: NodeManager, id: string): Promise<{ base:
     rt.busy = undefined;
     await refreshGit(m, id).catch(logError);
   }
+}
+
+interface QueuedMerge { by: string; since: number; settle: (result: Promise<MergeResult>) => void }
+/** Merges waiting for their node's turn to end, by node id. In memory only: shutdown drops them, telling each caller. */
+const queuedMerges = new WeakMap<NodeManager, Map<string, QueuedMerge>>();
+
+/**
+ * Merge `id` once the turn it is working on ends (or it exits), for `by`. Returns false, queueing nothing, when the node is
+ * not working: the caller merges now. Refusals that a turn's end cannot lift throw now; the merge re-checks them all.
+ * `settle` gets the merge, or a rejection when the node is closed or the daemon stops first. One per node: a second throws.
+ */
+export async function queueMerge(m: NodeManager, id: string, by: string, settle: QueuedMerge['settle']): Promise<boolean> {
+  await mergeable(m, id);
+  const s = m.view(id)!.status;
+  if (s.state !== 'working' || s.exited) return false;
+  let q = queuedMerges.get(m);
+  if (!q) {
+    queuedMerges.set(m, q = new Map());
+    const all = q;
+    m.on('node', (v: NodeView) => fireQueuedMerge(m, all, v.id));
+    m.on('removed', (gone: string) => {
+      all.get(gone)?.settle(Promise.reject(new Error(`${gone} was closed before its turn ended; nothing was merged`)));
+      all.delete(gone);
+      for (const [k, e] of all) if (e.by === gone) all.delete(k); // nobody is left to tell
+    });
+  }
+  const queued = q.get(id);
+  if (queued) throw new Error(`a merge of ${id} is already queued by ${queued.by}`);
+  q.set(id, { by, since: m.turnStartedAt(id) ?? Date.now(), settle });
+  fireQueuedMerge(m, q, id); // the turn may have ended while the checks ran
+  return true;
+}
+
+function fireQueuedMerge(m: NodeManager, q: Map<string, QueuedMerge>, id: string): void {
+  const e = q.get(id);
+  if (!e || m.stopped || !turnDone({ view: (x) => m.view(x), turnStartedAt: (x) => m.turnStartedAt(x) }, id, e.since)) return;
+  q.delete(id);
+  e.settle(mergeWorktree(m, id));
+}
+
+/** At shutdown, before any node exits: drop the queued merges, telling their callers. */
+export function dropQueuedMerges(m: NodeManager): void {
+  const q = queuedMerges.get(m);
+  for (const [id, e] of q ?? []) e.settle(Promise.reject(new Error(`the daemon stopped before ${id}'s turn ended; nothing was merged, merge again`)));
+  q?.clear();
 }
 
 /** The worktree half of NodeManager.close: refuse an unsafe close, stop setup, kill the node, remove the tree, forget the node. */
