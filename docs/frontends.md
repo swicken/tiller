@@ -1,6 +1,6 @@
 # Front ends and notifications
 
-All front ends are clients of the same daemon, so closing one never stops the agents. A session, in the front ends, is one tree shown at a time, with a switcher between trees. The **Rename session** pencil beside **New session** changes the current tree's root title, even when a child is selected.
+All front ends are clients of the same daemon, so closing one never stops the agents. A session, in the front ends, is one tree shown at a time, with a switcher between trees. The **Rename session** pencil at the right edge of the switcher, or a right-click anywhere on it, edits the current tree's root title in place, even when a child is selected; clicking the rest of the switcher opens the session list. Any node's **More actions → Rename** edits its title in place where that menu was opened, in the title bar or in its sidebar row. In the editor, Enter saves, Escape cancels and clicking away saves; an empty name is ignored.
 
 ## The native app (macOS)
 
@@ -19,7 +19,9 @@ In the app, the New session dialog has a Choose… button beside Working directo
 
 `npm run ui:build` writes the UI to `ui/dist`; the daemon then serves it at the URL `tl url` prints, which carries the admin token (the daemon log shows only the address, so the token stays out of `daemon.log`). It is the same UI the app shows: a sidebar with the tree, each node's live terminal, a last-message panel with the node's reported outcome, a Diff tab for worktree nodes in which you can add line comments and send them to the node as one message, and a status bar with today's total spend, the number of queued spawns and the do-not-disturb control. The status bar's **Updates** control checks published stable releases and shows the running version, missed release notes and any reason updates are unavailable. **Update vX.Y.Z** opens the same dialog when a newer release exists; applying it asks for confirmation because live agents are interrupted and resumed. The control shows “Updating…” during the rebuild and restart, and the page reloads when it reconnects to a different running commit. If the native app was rebuilt, quit and reopen Tiller. See [`tl update` in the README](../README.md).
 
-Each node's row shows its spend summed across its sessions, with the subtree total (Σ) on nodes with children. A trailing `+` (as in `$0.12+`) marks a figure that is only a lower bound because some of a Pi node's usage had no price; it carries into the subtree and today totals. The browser keeps its own toasts, a tab-title badge and a chime. `ui/README.md` covers developing the UI against a mock daemon.
+Each node's row shows its spend summed across its sessions, with the subtree total (Σ) on nodes with children. A trailing `+` (as in `$0.12+`) marks a figure that is only a lower bound because some of a Pi node's usage had no price; it carries into the subtree and today totals. The browser keeps its own toasts, a tab-title badge and a chime. A client that falls more than 8 MB behind on a node's terminal output (a stalled or backgrounded tab, say) stops receiving it; once its buffer drains it gets that terminal's current screen and carries on, so it never replays the backlog. `ui/README.md` covers developing the UI against a mock daemon.
+
+In an agent node's terminal, Shift+Enter starts a new line in the prompt instead of submitting it: the terminal sends Ctrl+J (a line feed), which Claude Code, Pi and Codex all read as "insert newline". Enter still submits, Option+Enter is passed through unchanged (Pi uses it to queue a follow-up), and keys pressed during IME composition are left alone. Terminal nodes receive Shift+Enter as a plain Enter, as before.
 
 ## Inside a node: the band and slash commands
 

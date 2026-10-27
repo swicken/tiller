@@ -4,11 +4,11 @@ import { harnessFor, isAgentKind, type NodeView } from '../../src/shared/protoco
 import { canMerge } from '../worktree';
 import { send } from '../conn';
 import { Icon, type IconName } from './icons';
-import { openDialog, setRenaming } from '../store';
+import { openDialog, setRenaming, type Renaming } from '../store';
 
 interface Act { key: string; label: string; icon: IconName; run: () => void; danger?: boolean }
 
-export function actionsFor(node: NodeView): Act[] {
+export function actionsFor(node: NodeView, renameAt: Renaming['at'] = 'row'): Act[] {
   const exited = !!node.status.exited;
   const root = node.parentId === null;
   const remove: Act = { key: 'remove', label: root ? 'Close' : 'Remove', icon: 'trash', danger: true,
@@ -20,7 +20,7 @@ export function actionsFor(node: NodeView): Act[] {
       : { key: 'kill', label: 'Kill', icon: 'x', danger: true, run: () => openDialog({ kind: 'kill', id: node.id }) };
   return [
     ...(!exited ? [{ key: 'child', label: 'New child', icon: 'subnode' as const, run: () => openDialog({ kind: 'spawn', parentId: node.id, cwd: node.cwd }) }] : []),
-    { key: 'rename', label: 'Rename', icon: 'edit', run: () => setRenaming(node.id) },
+    { key: 'rename', label: 'Rename', icon: 'edit', run: () => setRenaming({ id: node.id, at: renameAt }) },
     node.muted
       ? { key: 'mute', label: 'Unmute notifications', icon: 'bell', run: () => send({ t: 'mute', id: node.id, muted: false }) }
       : { key: 'mute', label: 'Mute notifications', icon: 'bellOff', run: () => send({ t: 'mute', id: node.id, muted: true }) },
@@ -53,7 +53,7 @@ export function ActionButtons({ node, labels }: { node: NodeView; labels?: boole
   const menu = useRef<HTMLDivElement>(null);
   const menuId = useId();
   const focusLast = useRef(false);
-  const actions = actionsFor(node);
+  const actions = actionsFor(node, labels ? 'title' : 'row');
   const primary = actions.filter((a) => a.key === 'merge' || (labels && a.key === 'child'));
   const secondary = actions.filter((a) => !primary.includes(a));
 
