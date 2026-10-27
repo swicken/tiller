@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { MEMORY_INVALID_KINDS, MEMORY_ITEM_KINDS } from '../shared/protocol.js';
+import { MEMORY_INVALID_KINDS } from '../shared/protocol.js';
 import {
-  EPISODE_KINDS, INVALID_KINDS, ITEM_KINDS, LIMITS, MEMORY_TOOL_SHAPES, MIGRATIONS, REDACTED, SCHEMA_V1, SCHEMA_VERSION, accountKey, contained, firstErrorLine, ftsTerms,
+  LIMITS, MEMORY_TOOL_SHAPES, MIGRATIONS, REDACTED, SCHEMA_V1, SCHEMA_VERSION, accountKey, contained, firstErrorLine, ftsTerms,
   gateExit, itemRef, keepRank, normalizeDedupe, normalizeRemote, parseItemRef, parseRunRef, pinDedupe, redact, runRef, structuralCode, type CaptureEvent,
 } from './memory-schema.js';
 
@@ -326,19 +326,8 @@ describe('keepRank', () => {
   });
 });
 
-describe('the v2 contract', () => {
-  it('aliases the item and invalid kinds to the protocol lists, so v3 appends to one', () => {
-    expect(ITEM_KINDS).toBe(MEMORY_ITEM_KINDS);
-    expect(INVALID_KINDS).toBe(MEMORY_INVALID_KINDS);
-    expect(INVALID_KINDS).toEqual(['agent', 'human', 'superseded', 'evicted', 'gardener', 'merged']);
-  });
-
-  it('records restore episodes', () => {
-    expect(EPISODE_KINDS).toContain('restore');
-  });
-
-  it('caps the panel and the Claude memory read', () => {
-    expect(LIMITS.panel).toEqual({ page: 50, given: 20, givenTo: 20 });
-    expect(LIMITS.claudeMemory).toEqual({ files: 100, fileBytes: 64 * 1024, totalBytes: 1024 * 1024 });
+describe('the invalid kinds', () => {
+  it('keeps the stored order, so v3 appends to one list', () => {
+    expect(MEMORY_INVALID_KINDS).toEqual(['agent', 'human', 'superseded', 'evicted', 'gardener', 'merged']);
   });
 });

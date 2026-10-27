@@ -2,11 +2,11 @@
 // section, under per-role budgets. Pure apart from the source it reads; the line format below is a contract agents and
 // the benchmarks rely on.
 import { createHash } from 'node:crypto';
-import { profileFor, type Profile, type Role } from '../shared/protocol.js';
+import { profileFor, type MemoryItemView, type Profile, type Role } from '../shared/protocol.js';
 import { roleFor } from './launch.js';
 import {
   ftsTerms, itemRef, LIMITS, type Arm, type DigestCandidates, type DigestInput, type DigestResult, type DigestRole,
-  type DigestSource, type ItemView, type MemoryScope,
+  type DigestSource, type MemoryScope,
 } from './memory-schema.js';
 
 export const DIGEST_HEADER = '# Memory\n\n'
@@ -52,17 +52,17 @@ function age(ms: number): string {
 }
 
 /** `- [m<id>] <age> · <node> <harness>[ · daemon]: <text>`; a human item shows `human`. */
-function render(item: ItemView, now: number): string {
+function render(item: MemoryItemView, now: number): string {
   const who = item.author === 'human' ? 'human'
     : `${[item.nodeId, item.harness].filter(Boolean).join(' ') || item.author}${item.author === 'daemon' && item.nodeId ? ' · daemon' : ''}`;
   return oneLine(`- [${itemRef(item.id)}] ${age(now - item.updatedAt)} · ${who}: ${item.text}`);
 }
 
 /** The worker's matched items by RRF over their bm25 rank (the given order) and their recency rank. */
-function related(matched: ItemView[]): ItemView[] {
+function related(matched: MemoryItemView[]): MemoryItemView[] {
   const k = LIMITS.digest.rrfK;
   const recency = new Map([...matched].sort((a, b) => b.updatedAt - a.updatedAt).map((item, i) => [item.id, i + 1]));
-  const score = (item: ItemView, bm25: number) => 1 / (k + bm25) + 1 / (k + recency.get(item.id)!);
+  const score = (item: MemoryItemView, bm25: number) => 1 / (k + bm25) + 1 / (k + recency.get(item.id)!);
   return matched.map((item, i) => ({ item, s: score(item, i + 1) })).sort((a, b) => b.s - a.s).map((x) => x.item);
 }
 
@@ -73,7 +73,7 @@ export function buildDigest(c: DigestCandidates, { role, now }: { role: DigestRo
   let text = `${DIGEST_HEADER}\n`;
 
   // Adds up to count of items not yet shown under heading, within the budget and, for Pinned, the pinned cap.
-  const section = (heading: string, items: ItemView[], count: number, cap = Infinity) => {
+  const section = (heading: string, items: MemoryItemView[], count: number, cap = Infinity) => {
     let used = 0;
     for (const item of items) {
       if (count <= 0) break;

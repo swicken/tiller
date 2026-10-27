@@ -10,7 +10,7 @@ import { NodeManager } from './manager.js';
 import { switchMemory } from './memory-config.js';
 import { DIGEST_SECTIONS, digestFor } from './memory-digest.js';
 import { memoryAction, memoryGiven, memoryItem, memoryPage, type PageQuery } from './memory-panel.js';
-import { normalizeDedupe, type DerivedItem, type EpisodeInput, type MemoryScope } from './memory-schema.js';
+import { normalizeDedupe, type DerivedItem, type HistoryEntry, type MemoryScope } from './memory-schema.js';
 import { MemoryStore } from './memory-store.js';
 import { PtySession, type SpawnOpts } from './pty.js';
 
@@ -52,7 +52,7 @@ afterEach(async () => { await m.shutdown(); vi.restoreAllMocks(); rmSync(dir, { 
 
 const scope = (over: Partial<MemoryScope> = {}): MemoryScope => ({ repoKey: KEY, repoPath: a, nodeId: 'n-root', rootId: 'n-root', ...over });
 const item = (kind: DerivedItem['kind'], text: string, author: DerivedItem['author'] = 'agent'): DerivedItem => ({ kind, text, author, dedupe: normalizeDedupe(kind, text) });
-const spawnEp = (): EpisodeInput => ({ kind: 'spawn', ts: Date.now(), data: { parentId: null, kind: 'claude' } });
+const spawnEp = (): HistoryEntry => ({ kind: 'spawn', ts: Date.now(), data: { parentId: null, kind: 'claude' } });
 /** Items recorded from repo a by its root node (eligible), so the file's first recorded path is a. */
 const seed = (...items: DerivedItem[]) => m.memory.apply(scope(), { episode: spawnEp(), items, cites: [] });
 const page = (target: MemoryTarget, q: Omit<PageQuery, 'target'> = {}) => memoryPage(m, { target, ...q });

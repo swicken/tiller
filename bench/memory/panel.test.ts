@@ -5,12 +5,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ServerMessage } from '../../src/shared/protocol.js';
+import { MEMORY_ITEM_KINDS, type ServerMessage } from '../../src/shared/protocol.js';
 import { claudeProjectSlug, readClaudeMemory } from '../../src/daemon/claude-memory.js';
 import { NodeManager } from '../../src/daemon/manager.js';
 import { switchMemory } from '../../src/daemon/memory-config.js';
 import { memoryItem, memoryPage, type PageQuery, type PanelHost } from '../../src/daemon/memory-panel.js';
-import { ITEM_KINDS, normalizeDedupe, type DerivedItem, type MemoryScope } from '../../src/daemon/memory-schema.js';
+import { normalizeDedupe, type DerivedItem, type MemoryScope } from '../../src/daemon/memory-schema.js';
 import { MemoryStore } from '../../src/daemon/memory-store.js';
 
 const WORDS = ('socket timeout parser cache migration flaky retry lockfile release bundle worker gate schema index token '
@@ -30,7 +30,7 @@ const host = (memory: MemoryStore): PanelHost => ({ home, memory, registry: m.re
 function seed(store: MemoryStore, repo: string, count: number, len: (i: number) => number, pins: number): void {
   const scope: MemoryScope = { repoKey: m.repoKeyOf(repo), repoPath: repo, nodeId: `n-${count}`, rootId: 'n-root' };
   const items: DerivedItem[] = Array.from({ length: count }, (_, i) => {
-    const kind = ITEM_KINDS[i % ITEM_KINDS.length]!, t = `${tag(i)} ${text(i, len(i) - tag(i).length - 1)}`;
+    const kind = MEMORY_ITEM_KINDS[i % MEMORY_ITEM_KINDS.length]!, t = `${tag(i)} ${text(i, len(i) - tag(i).length - 1)}`;
     return { kind, text: t, author: 'agent', dedupe: normalizeDedupe(kind, t), ...(i === 0 ? { body: text(1, 2_000) } : {}) };
   });
   store.apply(scope, { episode: { kind: 'outcome', ts: Date.now(), data: { outcome: 'succeeded', gate: 'passed' } }, items, cites: [] });

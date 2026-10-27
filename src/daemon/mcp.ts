@@ -7,7 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { dndActive, EFFORTS, finished, isAgentKind, ISOLATIONS, NODE_KINDS, ROLES, type ArchivedNode, type Diff, type Dnd, type NodeView, type Outcome } from '../shared/protocol.js';
+import { dndActive, EFFORTS, finished, isAgentKind, ISOLATIONS, NODE_KINDS, ROLES, type ArchivedNode, type Diff, type Dnd, type MemoryItemView, type NodeView, type Outcome } from '../shared/protocol.js';
 import { updateLine, type Updater } from './update.js';
 import { fmtUsd, subtreeSpend } from '../shared/spend.js';
 import { treeOrder } from '../shared/tree.js';
@@ -22,7 +22,7 @@ import { memoryOn, switchMemory } from './memory-config.js';
 import { oneLine } from './memory-digest.js';
 import {
   accountKey, itemRef, LIMITS, MEMORY_TOOL_SHAPES, parseItemRef, parseRunRef, runRef, type Actor, type GardenRefused, type GardenRunView, type GardenTarget,
-  type ItemView, type MemoryScope,
+  type MemoryScope,
 } from './memory-schema.js';
 import { gardenAccount, GARDENER_TOOLS, pausedBy, runSummary, type GardenCall, type GardenerTool } from './gardener.js';
 import { PERMISSION_MODES } from './presets.js';
@@ -262,19 +262,19 @@ function runIdOf(ref: string): number {
 }
 
 /** `m12 · pitfall · 3d · n-ab12 codex[ · daemon] · <text>`, a human item as `human`. */
-function itemLine(v: ItemView, now: number): string {
+function itemLine(v: MemoryItemView, now: number): string {
   const who = v.author === 'human' ? 'human' : `${[v.nodeId, v.harness].filter(Boolean).join(' ') || v.author}${v.author === 'daemon' && v.nodeId ? ' · daemon' : ''}`;
   return oneLine(`${itemRef(v.id)} · ${v.kind} · ${fmtAge(now - v.updatedAt)} · ${who}${v.invalid ? ' · retracted' : ''} · ${v.text}`);
 }
 
 /** The run ("r12") that hid an item merged or superseded by the gardener (invalid.by "gardener:r12"); undefined otherwise. */
-function gardenRunOf(v: ItemView): string | undefined {
+function gardenRunOf(v: MemoryItemView): string | undefined {
   const by = v.invalid && (v.invalid.kind === 'merged' || v.invalid.kind === 'gardener') ? v.invalid.by : undefined;
   return by?.startsWith('gardener:') ? by.slice('gardener:'.length) : undefined;
 }
 
 /** memory_get's text: a provenance line, its state, then text and body. */
-function itemText(v: ItemView, now: number): string {
+function itemText(v: MemoryItemView, now: number): string {
   const by = v.author === 'human' ? 'the human' : `${[v.nodeId, v.harness, v.model].filter(Boolean).join(' ') || 'unknown'}${v.author === 'daemon' ? ' (daemon facts)' : ''}`;
   const head = `${itemRef(v.id)} · ${v.kind}${v.pinned ? ' · pinned by the human' : ''} · recorded by ${by} ${ago(now - v.createdAt)}, last seen ${ago(now - v.updatedAt)} (${v.seen}×)`;
   const run = gardenRunOf(v);

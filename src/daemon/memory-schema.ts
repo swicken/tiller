@@ -2,14 +2,14 @@
 // helpers every memory module shares. The store, derive, digest and opt-in modules implement against it.
 import { z } from 'zod';
 import {
-  MEMORY_INVALID_KINDS, MEMORY_ITEM_KINDS, type ArchivedNode, type Harness, type MemoryInjectionView, type MemoryItemView, type NodeKind,
+  MEMORY_ITEM_KINDS, type ArchivedNode, type Harness, type MemoryInjectionView, type MemoryInvalidKind, type MemoryItemKind, type MemoryItemView, type NodeKind,
   type Outcome, type Profile, type Role, type SendOutcome,
 } from '../shared/protocol.js';
 import type { ClaudeAccount } from './claude-accounts.js';
 import type { MergeStyle } from './config.js';
 
 /**
- * Schema version 1. Kinds, authors and lengths have no CHECK: they are enforced in TS and zod (ITEM_KINDS, LIMITS), so a
+ * Schema version 1. Kinds, authors and lengths have no CHECK: they are enforced in TS and zod (MEMORY_ITEM_KINDS, LIMITS), so a
  * new kind needs no table rebuild. Run it with exec() on a new file before anything else, outside a transaction:
  * auto_vacuum only holds when set before the first table, and journal_mode cannot change inside a transaction.
  */
@@ -128,32 +128,25 @@ export const SCHEMA_VERSION = MIGRATIONS.at(-1)!.version;
  * into an agent's note. Pinning by id (memory_pin { id }) sets pinned = 1 on that row, whoever wrote it: the human's
  * explicit choice. Pinned items of any kind render only as pins.
  */
-export const ITEM_KINDS = MEMORY_ITEM_KINDS;
-export type ItemKind = (typeof ITEM_KINDS)[number];
+export type ItemKind = MemoryItemKind;
 /** The kinds an agent or the human may record with memory_add. */
 export const ADD_KINDS = ['procedure', 'pitfall', 'note'] as const satisfies readonly ItemKind[];
 export const EPISODE_KINDS = ['spawn', 'outcome', 'gate', 'merge', 'close', 'human_send', 'add', 'forget', 'pin', 'restore'] as const;
 /** daemon: text made solely of daemon facts. agent: anything an agent wrote, gate output included. human: the human's. */
-export const AUTHORS = ['daemon', 'agent', 'human'] as const;
-export type Author = (typeof AUTHORS)[number];
-/** Why an item is hidden: an alias of MEMORY_INVALID_KINDS (protocol.ts), so v3 appends to one list. */
-export const INVALID_KINDS = MEMORY_INVALID_KINDS;
-export type InvalidKind = (typeof INVALID_KINDS)[number];
+export type Author = MemoryItemView['author'];
+/** Why an item is hidden: MEMORY_INVALID_KINDS (protocol.ts), so v3 appends to one list. */
+export type InvalidKind = MemoryInvalidKind;
 /** The item kinds the gardener may hide (D4): a ledger line is one per closed node, never a duplicate, but may be a supersede's by. */
 export const GARDEN_KINDS = ['open_question', 'procedure', 'pitfall', 'note'] as const satisfies readonly ItemKind[];
-export const GARDEN_ACTION_KINDS = ['merge', 'supersede'] as const;
-export type GardenActionKind = (typeof GARDEN_ACTION_KINDS)[number];
-export const GARDEN_TRIGGERS = ['schedule', 'manual'] as const;
-export type GardenTrigger = (typeof GARDEN_TRIGGERS)[number];
+export type GardenActionKind = 'merge' | 'supersede';
+export type GardenTrigger = 'schedule' | 'manual';
 /**
  * A garden run's state. running holds the lease; every other state is final, except that a finished run becomes reverted
  * when its post-run check fails and the daemon undoes it. skipped: it never started (untrusted or missing checkout).
  */
-export const RUN_STATES = ['running', 'done', 'capped', 'timeout', 'off', 'disabled', 'interrupted', 'failed', 'reverted', 'skipped'] as const;
-export type RunState = (typeof RUN_STATES)[number];
+export type RunState = 'running' | 'done' | 'capped' | 'timeout' | 'off' | 'disabled' | 'interrupted' | 'failed' | 'reverted' | 'skipped';
 /** Who undid an action: the human (tl memory garden undo, v2's restore) or the daemon's auto-undo, which never grants immunity. */
-export const GARDEN_UNDONE_BY = ['human', 'daemon'] as const;
-export type GardenUndoneBy = (typeof GARDEN_UNDONE_BY)[number];
+export type GardenUndoneBy = 'human' | 'daemon';
 /**
  * The rule a refused garden call broke, named in its message and counted in GardenRunStats.refused (D8).
  * not running: the run's lease ended. not a candidate: the id is not in the run's frozen candidate set (another
@@ -165,19 +158,14 @@ export type GardenUndoneBy = (typeof GARDEN_UNDONE_BY)[number];
  * chain: the merge would leave a redirect chain longer than LIMITS.garden.chainDepth. copy: a same-kind supersede whose
  * by contains at least copyContained of id's terms: a near-copy, which is merged so the daemon picks the keep.
  */
-export const GARDEN_RULES = [
-  'not running', 'not a candidate', 'ineligible', 'protected', 'not live', 'kind', 'containment', 'terms', 'newer', 'immune',
-  'hides', 'supersedes', 'duplicate', 'chain', 'copy',
-] as const;
-export type GardenRule = (typeof GARDEN_RULES)[number];
+export type GardenRule =
+  | 'not running' | 'not a candidate' | 'ineligible' | 'protected' | 'not live' | 'kind' | 'containment' | 'terms' | 'newer' | 'immune'
+  | 'hides' | 'supersedes' | 'duplicate' | 'chain' | 'copy';
 /** The digest arm a launch applied, and why: memory.digest on/off, the ab split, or a resume reusing its frozen text. */
-export const ARMS = ['on', 'off'] as const;
-export type Arm = (typeof ARMS)[number];
-export const CAUSES = ['config', 'ab', 'resume'] as const;
-export type Cause = (typeof CAUSES)[number];
-export const DIGEST_ROLES = ['orchestrator', 'worker', 'reviewer'] as const;
+export type Arm = MemoryInjectionView['arm'];
+export type Cause = MemoryInjectionView['cause'];
 /** Which digest a node gets: reviewer covers the reviewer and explorer profiles. */
-export type DigestRole = (typeof DIGEST_ROLES)[number];
+export type DigestRole = 'orchestrator' | 'worker' | 'reviewer';
 
 /** Every cap and budget. Characters unless named otherwise; a token is about 4 characters. */
 export const LIMITS = {
@@ -275,9 +263,8 @@ export const LIMITS = {
     /** A garden action's reason, and a candidate's text in a page. */
     reason: 200,
     text: 300,
-    /** turnBound's ceiling; Claude's agent maxTurns gets the same number. */
+    /** turnBound's ceiling; Claude's agent maxTurns is turnBound's result. */
     maxToolCalls: 20,
-    maxTurns: 20,
     maxOutputChars: 160_000,
     maxPageChars: 60_000,
     /**
@@ -330,10 +317,11 @@ export interface EpisodeSkeleton {
   close: Pick<EpisodeData['close'], 'spentUsd' | 'createdAt' | 'closedAt' | 'branchFate' | 'outcome' | 'gate'>;
 }
 
-/** One element of derive()'s history and of nodeHistory()'s result. */
+/**
+ * One element of derive()'s history and of nodeHistory()'s result, and an episode to append: its repo, root, node,
+ * harness, model, role and profile come from the MemoryScope.
+ */
 export type HistoryEntry = { [K in EpisodeKind]: { kind: K; ts: number; data: EpisodeData[K] } }[EpisodeKind];
-/** An episode to append; its repo, root, node, harness, model, role and profile come from the MemoryScope. */
-export type EpisodeInput = HistoryEntry;
 
 /**
  * What the daemon captures, at its call sites only (see captureMemory). derive() is pure over it: time comes from ts.
@@ -357,7 +345,7 @@ export interface DerivedItem {
   dedupe: string;
 }
 /** derive()'s result: the episode to append, its items, and the item ids its text cited as [m<id>]. */
-export interface Derived { episode: EpisodeInput; items: DerivedItem[]; cites: number[] }
+export interface Derived { episode: HistoryEntry; items: DerivedItem[]; cites: number[] }
 
 /** Where a memory operation applies. account: the node's (undefined: none). The node fields are absent for the human. */
 export interface MemoryScope {
@@ -405,9 +393,6 @@ export interface ItemRow {
   merged_into: number | null;
 }
 
-/** An item as tools, the digest and the panel see it (protocol.ts). body is present from get only. */
-export type ItemView = MemoryItemView;
-
 /** A row of injections as SELECT * returns it. item_ids is a JSON array of item ids. */
 export interface InjectionRow {
   id: number;
@@ -425,18 +410,15 @@ export interface InjectionRow {
   item_ids: string;
   text: string;
 }
-/** One injection in memory_status { nodeId }'s data.injections, oldest first. */
-export type InjectionView = MemoryInjectionView;
-
 /** The digest's candidates, eligible and valid only, each list in its ranked order (matched: bm25 order; workers only). */
 export interface DigestCandidates {
-  pins: ItemView[];
-  ledger: ItemView[];
-  openQuestions: ItemView[];
-  procedures: ItemView[];
-  pitfalls: ItemView[];
-  notes: ItemView[];
-  matched: ItemView[];
+  pins: MemoryItemView[];
+  ledger: MemoryItemView[];
+  openQuestions: MemoryItemView[];
+  procedures: MemoryItemView[];
+  pitfalls: MemoryItemView[];
+  notes: MemoryItemView[];
+  matched: MemoryItemView[];
 }
 /**
  * What digestFor reads; MemoryStore implements it. terms come from ftsTerms(brief). now is the caller's clock (digestFor
@@ -648,7 +630,7 @@ const humanScope = { repo: z.string().min(1).optional(), account: z.string().min
  */
 export const MEMORY_TOOL_SHAPES = {
   memory_search: {
-    query: z.string().min(1).max(LIMITS.tools.query), kind: z.enum(ITEM_KINDS).optional(),
+    query: z.string().min(1).max(LIMITS.tools.query), kind: z.enum(MEMORY_ITEM_KINDS).optional(),
     limit: z.number().int().min(1).max(LIMITS.tools.search.max).optional(), includeRetracted: z.boolean().optional(), ...humanScope,
   },
   memory_get: { id: ref, ...humanScope },

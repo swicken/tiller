@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MemoryInjectionView } from '../shared/protocol.js';
 import { NodeManager } from './manager.js';
 import { memoryOn, switchMemory } from './memory-config.js';
-import type { InjectionView } from './memory-schema.js';
 import { startServer, type DaemonServer } from './server.js';
 
 // The memory tools over POST /api/<tool>, as the CLI calls them, with a node's token and the admin token.
@@ -95,7 +95,7 @@ describe('memory tools', () => {
     expect((await api('memory_get', { id: `m${pin.id}` }, a)).text).toMatch(/pinned by the human · recorded by the human/);
   });
 
-  it('memory_status { nodeId } returns its injections as InjectionView data, oldest first', async () => {
+  it('memory_status { nodeId } returns its injections as MemoryInjectionView data, oldest first', async () => {
     on();
     const a = await agent(repoA);
     const scope = manager.memoryScope(a)!;
@@ -103,7 +103,7 @@ describe('memory tools', () => {
     manager.memory.recordInjection(scope, { sessionId: 's-1', arm: 'on', cause: 'resume', itemIds: [], text: '' });
     const r = await api('memory_status', { nodeId: a, days: 30 });
     expect(r.status).toBe(200);
-    const injections: InjectionView[] = r.data.injections;
+    const injections: MemoryInjectionView[] = r.data.injections;
     expect(injections).toEqual([
       { sessionId: 's-1', arm: 'on', cause: 'config', itemIds: [1, 2], text: '# Memory\n...', ts: expect.any(Number) },
       { sessionId: 's-1', arm: 'on', cause: 'resume', itemIds: [], text: '', ts: expect.any(Number) },
