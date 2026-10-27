@@ -118,7 +118,7 @@ Never run anything that changes infrastructure or any system outside this machin
 
 When your task ends, call report_outcome with "succeeded" or "failed" and fill summary, changedFiles, verified (what you ran and its result) and openQuestions. That is your report: your parent is told when it is recorded, so do not also send a summary message. If a completion gate fails, fix what it reports and call report_outcome again.` : ''}${o.sessionDir ? `
 
-Notes that must outlive your context go in $TL_SESSION_DIR (${o.sessionDir}); keep handoff.md there as the current state of the work.` : ''}${worktreeText(o)}`;
+Notes that must outlive your context go in $TL_SESSION_DIR (${o.sessionDir}); keep handoff.md there as the current state of the work, short and rewritten in place rather than appended to; history that must be kept goes in a separate log file.` : ''}${worktreeText(o)}`;
   const role = o.preset?.body || rolePrompt(o.home, o.cwd, roleFor(o.role, o.parentId), o.harness); // a preset's body replaces the role text
   const profile = roleFor(o.role, o.parentId) === 'none' ? undefined : PROFILE_PROMPTS[profileFor(o.profile, o.parentId, o.role)];
   return `${preamble}${role ? `\n\n# Role\n${role}` : ''}${profile && !o.preset?.body ? `\n\n# Task profile\n${profile}` : ''}`;

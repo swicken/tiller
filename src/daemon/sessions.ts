@@ -18,9 +18,16 @@ export interface SessionMeta { rootId: string; title: string; cwd: string; creat
 export const sessionDir = (home: string, rootId: string): string => join(home, SESSIONS_DIR, rootId);
 const eventsFile = (dir: string): string => join(dir, EVENTS);
 
+/** Past this, the restart pointer also asks for the handoff note to be condensed. */
+const HANDOFF_LONG_BYTES = 32 * 1024;
+
 /** The first prompt after a restart that names none: a pointer at the handoff note, when there is one. */
-export const handoffPrompt = (dir: string): string | undefined =>
-  existsSync(join(dir, HANDOFF)) ? `Read ${join(dir, HANDOFF)} first; it is your own handoff from before this restart.` : undefined;
+export function handoffPrompt(dir: string): string | undefined {
+  const file = join(dir, HANDOFF);
+  if (!existsSync(file)) return undefined;
+  const long = statSync(file).size > HANDOFF_LONG_BYTES;
+  return `Read ${file} first; it is your own handoff from before this restart.${long ? ' It is over 32 KB: rewrite it as the current state only, moving history to a separate log file.' : ''}`;
+}
 
 /** Create the directory (0700) and its meta.json if missing. Cheap enough to call on every launch. */
 export function ensureSession(home: string, meta: SessionMeta): string {
