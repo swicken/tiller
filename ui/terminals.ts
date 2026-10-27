@@ -4,6 +4,7 @@ import { openExternalUrl } from './controls/externalLink';
 import { getState, toast } from './store';
 import { isAgentKind } from '../src/shared/protocol';
 import { IN_APP } from './url';
+import { currentTheme, onThemeChange, type Theme } from './theme';
 
 export interface Term { term: Terminal; fit: FitAddon }
 const terms = new Map<string, Term>();
@@ -15,13 +16,13 @@ const DARK: ITheme = {
 };
 const LIGHT: ITheme = {
   background: '#ffffff', foreground: '#24292f', cursor: '#24292f', selectionBackground: '#b6d4fe',
-  black: '#24292f', red: '#cf222e', green: '#1a7f37', yellow: '#9a6700', blue: '#0550ae', magenta: '#8250df', cyan: '#0a7e8c', white: '#6e7781',
-  brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#116329', brightYellow: '#7d4e00', brightBlue: '#0969da', brightMagenta: '#6639ba', brightCyan: '#1b7c83', brightWhite: '#8c959f',
+  black: '#24292f', red: '#cf222e', green: '#1a7f37', yellow: '#9a6700', blue: '#0550ae', magenta: '#8250df', cyan: '#0a7e8c', white: '#4b535c',
+  brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#116329', brightYellow: '#7d4e00', brightBlue: '#0969da', brightMagenta: '#6639ba', brightCyan: '#1b7c83', brightWhite: '#32383f',
 };
 
-const scheme = matchMedia('(prefers-color-scheme: light)');
-const theme = () => (scheme.matches ? LIGHT : DARK);
-scheme.addEventListener('change', () => terms.forEach(({ term }) => (term.options.theme = theme())));
+// The terminal follows the app. xterm lifts low-contrast text in light only; dark renders as before.
+const themeOptions = (t: Theme) => (t === 'light' ? { theme: LIGHT, minimumContrastRatio: 4.5 } : { theme: DARK, minimumContrastRatio: 1 });
+onThemeChange((t) => terms.forEach(({ term }) => Object.assign(term.options, themeOptions(t))));
 
 export function getTerm(id: string): Term | undefined {
   return terms.get(id);
@@ -34,7 +35,7 @@ export function createTerm(id: string, el: HTMLElement): Term {
     fontSize: 13,
     cursorBlink: true,
     scrollback: 5000,
-    theme: theme(),
+    ...themeOptions(currentTheme()),
     linkHandler: {
       activate: (_event, url) => {
         if (!/^https?:\/\//i.test(url)) return;

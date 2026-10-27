@@ -169,10 +169,12 @@ describe('env helpers', () => {
     const saved = { ...process.env };
     process.env.CLAUDECODE = '1';
     process.env.TERM_PROGRAM = 'x';
+    process.env.COLORFGBG = '15;0'; // a stale dark hint from the launching shell
     const e = buildChildEnv({ TL_NODE_ID: 'n-1' });
     process.env = saved;
     expect(e.CLAUDECODE).toBeUndefined();
     expect(e.TERM_PROGRAM).toBeUndefined();
+    expect(e.COLORFGBG).toBeUndefined();
     expect(e.TERM).toBe('xterm-256color');
     expect(e.COLORTERM).toBe('truecolor');
     expect(e.LANG).toBeTruthy();
