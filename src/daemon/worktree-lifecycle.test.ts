@@ -3,7 +3,7 @@ import type { NodeManager } from './manager.js';
 import * as wt from './worktree.js';
 import { refreshGit } from './worktree-lifecycle.js';
 
-vi.mock('./worktree.js', () => ({ aheadBehind: vi.fn(async () => { throw new Error('no such branch'); }), branchSha: vi.fn(async () => undefined), diffStat: vi.fn() }));
+vi.mock('./worktree.js', () => ({ aheadBehind: vi.fn(async () => { throw new Error('no such branch'); }), branchSha: vi.fn(async () => undefined), branchTips: vi.fn(async () => new Map()), diffStat: vi.fn() }));
 
 /** Each diffStat call waits until the test resolves it with the dirty files it should see. */
 const pending: ((files: string[]) => void)[] = [];

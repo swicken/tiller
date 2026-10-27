@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseArgs } from 'node:util';
-import { configEntries, effectiveProfileEntries } from './config.js';
+import { configEntries, effectiveProfileEntries, loadConfig } from './config.js';
 import { gateFor } from './completion-gate.js';
 import { promptPath } from './launch.js';
 import { listPresets } from './presets.js';
@@ -20,7 +20,7 @@ import { formatEvent, listSessions, parseSince, readEvents, readNewEvents, sessi
 import { fmtAge } from '../shared/format.js';
 import { fmtUsd } from '../shared/spend.js';
 import { HARNESSES, type Harness, type NodeKind } from '../shared/protocol.js';
-import { mainCheckout, runCommands, WORKTREES_DIR } from './worktree.js';
+import { carry, mainCheckout, protectedBranches, runCommands, WORKTREES_DIR } from './worktree.js';
 import { cancelDrain, drainDaemon, restartDaemon, findDaemon, humanEnv, pickOrchestrator, spawnReload, startDaemon, upDir, type OrchestratorCandidate } from './up.js';
 
 const usage = () => `tl: control tiller. With no arguments, start the daemon if needed and open the app; tl . opens it on this directory.
@@ -59,6 +59,9 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
                                                       naming the paths); --close then closes the node; --when-idle
                                                       waits for a working node's turn to end instead of refusing
                                                       (run by an agent, it queues the merge as the merge tool does)
+  tl carry <from> <branch...> [--cwd P]               merge <from> into the first branch, that into the next, and so on, by merge
+                                                      commits only (no rebase, no push); stops at the first conflict, naming the
+                                                      branch and files; refuses protected branches and ones checked out anywhere
   tl diff <id> [--stat]                               what a worktree node changed since it branched, committed or not
   tl send [--now] <id> "text"                         --now interrupts the target's turn if it is working (a steer)
   tl withdraw <messageId>                             take back a queued message that has not been delivered yet
@@ -312,6 +315,18 @@ switch (cmd) {
     if (r.error) fail(r.error);
     if (!r.data?.ok) process.exit(1); // conflicts: printed above
     if (f.close) await call('close', { nodeIds: [pos[0]] });
+    break;
+  }
+  case 'carry': {
+    if (pos.length < 2) fail(usage());
+    const repo = await mainCheckout(cwdArg());
+    const steps = await carry(repo, pos[0]!, pos.slice(1), await protectedBranches(repo, loadConfig(repo, home).worktrees.protected))
+      .catch((e: Error) => fail(e.message));
+    for (const s of steps) {
+      console.log('sha' in s ? `${s.branch}: merged ${s.from} (${s.sha.slice(0, 10)})` : 'upToDate' in s ? `${s.branch}: already has ${s.from}`
+        : `${s.branch}: stopped, merging ${s.from} conflicts in ${s.conflicts.join(', ')}; ${s.branch} and the branches after it are unchanged`);
+    }
+    if (steps.some((s) => 'conflicts' in s)) process.exit(1);
     break;
   }
   case 'worktrees':

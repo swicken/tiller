@@ -13,7 +13,7 @@ import { mountMcp } from './mcp.js';
 import { inbox } from './messaging.js';
 import { transcriptFor } from './transcript.js';
 import * as wt from './worktree.js';
-import { refreshGit } from './worktree-lifecycle.js';
+import { refreshGit, refreshMovedTips } from './worktree-lifecycle.js';
 
 const g = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 const commit = (dir: string, file: string) => { writeFileSync(join(dir, file), `${file}\n`); g(dir, 'add', file); g(dir, 'commit', '-qm', `add ${file}`); };
@@ -421,6 +421,29 @@ describe('git state and merge', () => {
     await expect(m.diff(t.id)).rejects.toThrow(`${t.id} has no worktree of its own to diff`);
   });
 
+  it('notices a base that moves under an idle node: behind first, then the conflicting files, until the base is merged in', async () => {
+    setup();
+    const v = await spawnW();
+    writeFileSync(join(v.cwd, 'README'), 'theirs\n');
+    g(v.cwd, 'commit', '-qam', 'theirs');
+    stop(v.id);
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 1, behind: 0 });
+    commit(repo, 'c.txt'); // no hook: the tip watch sees dev move
+    await refreshMovedTips(m);
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 1, behind: 1 });
+    expect(m.view(v.id)!.status.git!.conflicts).toBeUndefined();
+    writeFileSync(join(repo, 'README'), 'ours\n');
+    g(repo, 'commit', '-qam', 'ours');
+    await refreshMovedTips(m);
+    await expect.poll(() => m.view(v.id)!.status.git?.conflicts).toEqual(['README']);
+    expect(g(repo, 'status', '--porcelain') + g(v.cwd, 'status', '--porcelain')).toBe(''); // merge-tree touched nothing
+
+    g(v.cwd, 'merge', '-q', 'dev', '-X', 'ours', '-m', 'take dev');
+    await refreshMovedTips(m);
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 2, behind: 0 });
+    expect(m.view(v.id)!.status.git!.conflicts).toBeUndefined();
+  });
+
   it('refuses a conflicting merge, naming the paths and touching no file', async () => {
     setup();
     const v = await spawnW();
@@ -713,6 +736,67 @@ describe('queued merges (whenIdle)', () => {
     await expect.poll(() => notices()[1]).toBe(`merge of ${again.id} failed: the daemon stopped before ${again.id}'s turn ended; nothing was merged, merge again`);
     expect(readFileSync(join(m.home, 'inbox.json'), 'utf8')).toContain(`the daemon stopped before ${again.id}'s turn ended`); // the next daemon delivers it
     expect(g(repo, 'rev-parse', 'dev')).toBe(dev);
+  });
+});
+
+describe('carry', () => {
+  /** v1 from dev, v2 from v1, v3 from v2, each with its own file; then dev moves. */
+  function stack(): void {
+    setup();
+    let prev = 'dev';
+    for (const b of ['v1', 'v2', 'v3']) {
+      g(repo, 'checkout', '-q', '-b', b, prev);
+      commit(repo, `${b}.txt`);
+      prev = b;
+    }
+    g(repo, 'checkout', '-q', 'dev');
+    commit(repo, 'dev.txt');
+  }
+  const tip = (b: string) => g(repo, 'rev-parse', b);
+  const has = (b: string, c: string) => { try { g(repo, 'merge-base', '--is-ancestor', c, b); return true; } catch { return false; } };
+
+  it('merges the base up the chain with merge commits, each move a fast-forward; a second run finds all up to date', async () => {
+    stack();
+    const before = { v1: tip('v1'), v2: tip('v2'), v3: tip('v3') };
+    const steps = await wt.carry(repo, 'dev', ['v1', 'v2', 'v3'], ['main']);
+    expect(steps.map((s) => [s.branch, s.from, 'sha' in s])).toEqual([['v1', 'dev', true], ['v2', 'v1', true], ['v3', 'v2', true]]);
+    for (const b of ['v1', 'v2', 'v3'] as const) {
+      expect(g(repo, 'log', '-1', '--format=%P', b).split(' ')[0]).toBe(before[b]); // first parent: the old tip
+      expect(has(b, 'dev')).toBe(true);
+    }
+    expect(has('v3', 'v2') && has('v2', 'v1')).toBe(true);
+    expect(g(repo, 'log', '-1', '--format=%s', 'v2')).toBe('Merge v1 into v2');
+    expect(g(repo, 'status', '--porcelain')).toBe('');
+    expect((await wt.carry(repo, 'dev', ['v1', 'v2', 'v3'], [])).every((s) => 'upToDate' in s)).toBe(true);
+    g(repo, 'branch', 'idle', 'dev~1'); // nothing of its own: fast-forwards like git merge
+    expect(await wt.carry(repo, 'dev', ['idle'], [])).toEqual([{ branch: 'idle', from: 'dev', sha: tip('dev') }]);
+  });
+
+  it('stops at the first conflict, naming the layer and files, and leaves that branch and the rest untouched', async () => {
+    stack();
+    g(repo, 'checkout', '-q', 'v2');
+    writeFileSync(join(repo, 'README'), 'v2\n');
+    g(repo, 'commit', '-qam', 'v2 README');
+    g(repo, 'checkout', '-q', 'dev');
+    writeFileSync(join(repo, 'README'), 'dev\n');
+    g(repo, 'commit', '-qam', 'dev README');
+    const v2 = tip('v2'), v3 = tip('v3');
+    const steps = await wt.carry(repo, 'dev', ['v1', 'v2', 'v3'], []);
+    expect(steps).toEqual([{ branch: 'v1', from: 'dev', sha: tip('v1') }, { branch: 'v2', from: 'v1', conflicts: ['README'] }]);
+    expect(has('v1', 'dev')).toBe(true);
+    expect([tip('v2'), tip('v3')]).toEqual([v2, v3]);
+  });
+
+  it('refuses before anything moves: a branch checked out in a worktree, a protected branch, a missing one', async () => {
+    stack();
+    const tips = () => ['v1', 'v2', 'v3'].map(tip);
+    const before = tips();
+    const at = join(home, 'v2-checkout');
+    g(repo, 'worktree', 'add', '-q', at, 'v2');
+    await expect(wt.carry(repo, 'dev', ['v1', 'v2', 'v3'], [])).rejects.toThrow(`carry refused, nothing changed: v2 is checked out at ${at}`);
+    await expect(wt.carry(repo, 'dev', ['v1', 'dev'], ['dev'])).rejects.toThrow('dev is protected');
+    await expect(wt.carry(repo, 'dev', ['v1', 'nope'], [])).rejects.toThrow('nope is not a local branch');
+    expect(tips()).toEqual(before);
   });
 });
 
