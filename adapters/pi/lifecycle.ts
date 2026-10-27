@@ -32,11 +32,6 @@ export interface SessionMeasureContext {
   percent: number;
 }
 
-export interface SessionMeasurePayload {
-  context?: SessionMeasureContext;
-  cost?: { usd: number };
-}
-
 /** Remove undefined values so the JSON body stays close to what Claude posts. */
 function compact<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));

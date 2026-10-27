@@ -33,7 +33,7 @@
 
 import { randomBytes } from "node:crypto";
 import { TillerBridge } from "./bridge.ts";
-import { readToken, TillerClient } from "../shared/client.ts";
+import { readToken, TillerClient, type TillerModEventName } from "../shared/client.ts";
 import {
   missingCapabilities,
   nativePiVersion,
@@ -192,10 +192,7 @@ export default function tillerPiExtension(
       }
     });
 
-  const forwardModEvent = (
-    event: "turn.start" | "turn.complete" | "session.measure",
-    payload: object,
-  ): Promise<void> =>
+  const forwardModEvent = (event: TillerModEventName, payload: object): Promise<void> =>
     lifecycle.enqueue(async () => {
       try {
         await client?.modEvent(event, payload as Record<string, unknown>);
