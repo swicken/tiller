@@ -70,6 +70,8 @@ An agent's `close` that needs the human's approval does not hold the agent's tur
 
 `notify_when(ids, when, of)` lets an agent wait for several nodes with one message instead of polling. It returns at once; later the caller receives a single message, "N of M finished:", with one line per node giving its outcome or its state. `when: "all"` waits for every node and `"any"` for the first. `of: "turn"` counts a node once it finishes the turn now in progress (or, for an idle node, its next turn), or exits or is closed; `of: "success"` counts a node once it calls `report_outcome` with either verdict. Calling it again with the same ids replaces the pending one, and it expires after 12 hours. The human has no inbox, so it is for agents only.
 
+An agent hears nothing more of nodes it closes itself with `close`: each pending `notify_when` of its own drops them (one left with no nodes is dropped, and the rest still report), and daemon notices to it, still queued, that concern only those nodes are withdrawn. Notices about a node the human closed, or one closed by another agent, still arrive.
+
 Each caller's runtime owns its registrations through `completion-watches.ts`, so closing the caller drops them. `messaging.ts` wires event checks and delivery, including suppression of individual outcome notices while a watch covers the child. Outcome events precede node events: suppression sees the pending watch before the node event completes it.
 
 ## Dependency launches and the spawn queue

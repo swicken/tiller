@@ -414,6 +414,30 @@ describe('mcp api', () => {
     expect(texts[1]).toContain(`1 of 1 finished:\n${w2}: failed: ${summary}\n`);
   });
 
+  it('an agent hears nothing more of nodes it closed itself; a close by the human is still reported', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ daemon: { maxLiveNodes: 100 } }));
+    const p = (await spawnT('sp')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    manager.registry.update(p, { kind: 'claude' });
+    inbox(manager, p);
+    const kid = async () => (await spawnT('sk', p, tok)).body.data.nodeId as string;
+    const [a, b, c, d] = [await kid(), await kid(), await kid(), await kid()];
+    await api('notify_when', { ids: [a, b], when: 'all', of: 'turn' }, p, tok);
+    await api('notify_when', { ids: [c], when: 'all', of: 'turn' }, p, tok);
+    manager.registry.update(d, { kind: 'claude' }); // a stopped notice about d, queued while p is busy
+    manager.applyHook(p, { hook_event_name: 'UserPromptSubmit' });
+    manager.applyHook(d, { hook_event_name: 'UserPromptSubmit' });
+    await api('report_outcome', { outcome: 'succeeded', summary: 'd done' }, d, manager.tokenFor(d));
+    await expect.poll(() => inbox(manager, p).length).toBe(1);
+    expect((await api('close', { nodeIds: [a, b, d] }, p, tok)).body.data).toMatchObject({ ok: true });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(inbox(manager, p)).toEqual([]); // no "2 of 2 finished: closed", and d's queued notice is withdrawn
+    expect((await api('close', { nodeIds: [c] })).body.data).toMatchObject({ ok: true }); // by the human: p did not know
+    await expect.poll(() => inbox(manager, p).map((x) => x.text)).toEqual([expect.stringContaining(`1 of 1 finished:\n${c}: closed`)]);
+    await manager.close(p, true);
+    rmSync(join(home, 'config.json'));
+  });
+
   describe('completion gate', () => {
     const proj = () => join(home, 'gated');
     /** A gate that runs until a file named go appears. */

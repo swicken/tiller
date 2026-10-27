@@ -20,7 +20,7 @@ import { MAX_PATCH_BYTES, MergeConflict } from './worktree.js';
 import { PERMISSION_MODES } from './presets.js';
 import { SPAWN_FIELDS } from './spawnfields.js';
 import { readMessages, renderMessage, sessionMessages } from './transcript.js';
-import { DAEMON, deliver, HUMAN, inScope, isDescendant, messageStatus, notifyWhen, QUEUE_CAP, QUEUE_TTL_MS, RATE_MS, startNotices, withdraw } from './messaging.js';
+import { DAEMON, deliver, dropNotices, HUMAN, inScope, isDescendant, messageStatus, notifyWhen, QUEUE_CAP, QUEUE_TTL_MS, RATE_MS, startNotices, unwatch, withdraw } from './messaging.js';
 import { logError, PREVIEW_CHARS, readBody, safeEqual } from './util.js';
 
 const MAX_WRITE_CHARS = 2000;
@@ -381,18 +381,26 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       const preapproved = a.worktree !== 'discard' && (mode === 'always' || (mode === 'done' && views.every((v) => finished(v.status) || v.outcome)));
       const text = `${who(c)} wants to close ${views.length} node(s): ${list}${destroys.length ? `. This deletes their worktrees: ${destroys.join('; ')}` : ''}`;
       const notes: string[] = [];
-      /** Close the batch in order; `keepGoing` records each node's error and moves on, otherwise the first error throws. */
+      /**
+       * Close the batch in order; `keepGoing` records each node's error and moves on, otherwise the first error throws.
+       * An agent hears nothing more of the nodes it closed: no notify_when line, no notice still queued.
+       */
       const closeAll = async (keepGoing: boolean) => {
         const closed: string[] = [], errors: string[] = [];
-        for (const id of a.nodeIds) {
-          try {
-            const note = await c.manager.close(id, true, a.worktree); // roots were vetted above
-            if (note) notes.push(`${id}: ${note}`);
-            closed.push(id);
-          } catch (err) {
-            if (!keepGoing) throw err;
-            errors.push(`${id}: ${(err as Error).message}`);
+        try {
+          for (const id of a.nodeIds) {
+            try {
+              if (c.caller !== HUMAN) unwatch(c.manager, c.caller, id); // first: the close itself completes a watch
+              const note = await c.manager.close(id, true, a.worktree); // roots were vetted above
+              if (note) notes.push(`${id}: ${note}`);
+              closed.push(id);
+            } catch (err) {
+              if (!keepGoing) throw err;
+              errors.push(`${id}: ${(err as Error).message}`);
+            }
           }
+        } finally {
+          if (c.caller !== HUMAN) dropNotices(c.manager, c.caller, closed);
         }
         return { closed, notes, errors };
       };
