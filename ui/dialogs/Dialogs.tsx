@@ -1,7 +1,8 @@
 import { Select } from '../controls/Select';
 import { useEffect, useRef, useState } from 'react';
-import { PROFILES, PROFILE_LABELS, harnessFor, profileFor, type InstalledReleaseNotes, type Profile, type Effort, isAgentKind, type ClaudeAccountView, type ClientMessage, type Harness, type NodeKind, type Role } from '../../src/shared/protocol';
+import { PROFILES, PROFILE_LABELS, harnessFor, profileFor, type InstalledReleaseNotes, type Profile, type Effort, isAgentKind, type ClientMessage, type Harness, type NodeKind, type Role } from '../../src/shared/protocol';
 import { HARNESSES, HARNESS_EFFORTS } from '../../src/shared/harness-policy';
+import { accountOptionLabel } from '../settings/settings-model';
 import { send } from '../conn';
 import type { TauriWindow } from '../hooks';
 import { Modal } from '../controls/Modal';
@@ -30,10 +31,6 @@ type SpawnChoice = Harness | 'terminal';
 const choiceKind = (choice: SpawnChoice): NodeKind => (choice === 'terminal' ? 'terminal' : choice !== 'claude' ? 'agent' : 'claude');
 /** The harness sent for a choice; omitted for claude and terminal so their records keep the legacy shape. */
 const choiceHarness = (choice: SpawnChoice): Harness | undefined => (choice !== 'claude' && choice !== 'terminal' ? choice : undefined);
-
-/** An account option: its name and login state. */
-export const accountLabel = (a: ClaudeAccountView) => `${a.name}${a.isDefault ? ' (default)' : ''} · ${
-  a.loggedIn ? [a.email, a.orgName].filter(Boolean).join(', ') || 'logged in' : a.loggedIn === false ? 'not logged in' : 'login unknown'}`;
 
 /** What the spawn dialog sends: kind/harness from the choice, with the agent fields only for agent nodes.
  *  A Claude account is chosen only for a root Claude node; children inherit their parent's. */
@@ -102,7 +99,7 @@ function SpawnDialog({ d }: { d: Spawn }) {
         {choice === 'claude' && !d.parentId && !!accounts?.length && <>
           <label>Account<Select value={chosen?.name ?? ''} onChange={(e) => setAccount(e.target.value)} aria-describedby={chosen?.loggedIn === false || chosen?.error ? 'account-login' : undefined}>
             <option value="">Automatic (by project)</option>
-            {accounts.map((a) => <option key={a.name} value={a.name}>{accountLabel(a)}</option>)}
+            {accounts.map((a) => <option key={a.name} value={a.name}>{accountOptionLabel(a, true)}</option>)}
           </Select></label>
           {chosen && (chosen.loggedIn === false || chosen.error) && <div className="account-login" id="account-login">
             {chosen.error && <p>{chosen.error}</p>}

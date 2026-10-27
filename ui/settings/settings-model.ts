@@ -89,7 +89,8 @@ export function buildChanges(snapshot: SettingsSnapshot, drafts: Record<string, 
 /** The error of a claudeAccounts reply for an invalid accounts config: the daemon sends it as one view with no login command. */
 export const accountsError = (accounts?: ClaudeAccountView[]) => (accounts?.length === 1 && accounts[0].error && !accounts[0].loginCommand ? accounts[0].error : undefined);
 
-export const accountOptionLabel = (a: ClaudeAccountView) => `${a.name} · ${a.loggedIn ? [a.email, a.orgName].filter(Boolean).join(', ') || 'logged in' : a.loggedIn === false ? 'not logged in' : 'login unknown'}`;
+/** An account option: its name (with markDefault, " (default)" on the default one) and login state. */
+export const accountOptionLabel = (a: ClaudeAccountView, markDefault = false) => `${a.name}${markDefault && a.isDefault ? ' (default)' : ''} · ${a.loggedIn ? [a.email, a.orgName].filter(Boolean).join(', ') || 'logged in' : a.loggedIn === false ? 'not logged in' : 'login unknown'}`;
 
 /** Where the saved Claude account of root nodes comes from, at this scope. */
 export function accountStatus(snapshot: SettingsSnapshot): string {
