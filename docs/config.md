@@ -75,15 +75,15 @@ For notification levels, `sound` is a banner with a sound and `silent` sends not
 
 ### Copied `node_modules/`
 
-A `.worktreeinclude` that lists `node_modules/` gives each worktree a copy of the main checkout's install, stale or not, even when the worktree's `package-lock.json` pins other versions. To re-install only when the copy doesn't match the worktree's lockfile, use this setup command, which compares the lockfile with npm's record of what it installed (`node_modules/.package-lock.json`). Optional packages skipped on this platform don't count as differences:
+A `.worktreeinclude` that lists `node_modules/` gives each worktree a copy of the main checkout's install, stale or not, even when the worktree's `package-lock.json` pins other versions. This repo's [`scripts/worktree-deps.mjs`](../scripts/worktree-deps.mjs) re-installs only when the copy doesn't match the worktree's lockfile. It compares the `packages` of `package-lock.json` with npm's record of what it installed (`node_modules/.package-lock.json`). Optional packages skipped on this platform don't count as differences. On any other difference, or when the record is missing, it runs `npm ci --no-audit --no-fund`. Setup commands run in the new worktree, so the worktree's own copy of the script is the one that runs:
 
 ```json
 "worktrees": {
-  "setup": ["node -e \"const r=require,s=JSON.stringify,a=r('./package-lock.json').packages,b=r('./node_modules/.package-lock.json').packages;delete a[''];process.exit(Object.keys(b).every(k=>s(a[k])===s(b[k]))&&Object.keys(a).every(k=>b[k]||a[k].optional)?0:1)\" 2>/dev/null || npm ci --no-audit --no-fund"]
+  "setup": ["node scripts/worktree-deps.mjs"]
 }
 ```
 
-A matching copy adds about 30 ms before the agent starts. A stale or missing copy runs `npm ci` instead, which takes about 1.5 s for this repo with a warm npm cache. A plain `"npm ci"` is also correct, but it pays that cost every time and replaces the copy-on-write clone with a full copy of the files.
+Another repo can copy the script. A matching copy adds about 50 ms before the agent starts. A stale or missing copy runs `npm ci` instead, which takes about 1.5–3.5 s for this repo with a warm npm cache. A plain `"npm ci"` is also correct, but it pays that cost every time and replaces the copy-on-write clone with a full copy of the files.
 
 <a id="opt-in-codex-task-defaults"></a>
 
