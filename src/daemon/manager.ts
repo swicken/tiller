@@ -383,7 +383,7 @@ export class NodeManager extends EventEmitter {
     if (isolation !== 'none') {
       const repo = await wt.mainCheckout(req.cwd);
       head = await wt.headInfo(req.cwd);
-      if (adapter?.id === 'claude' && !trustedForWorktree(repo, readClaudeJson(account && claudeConfigDir(this.home, account)))) throw new Error(`refusing isolation "worktree": Claude does not trust ${repo} yet; run claude once in ${repo} to trust it`);
+      if (adapter?.id === 'claude' && !trustedForWorktree(repo, readClaudeJson(account && claudeConfigDir(this.home, account)))) throw new Error(`refusing isolation "${isolation}": Claude does not trust ${repo} yet; run claude once in ${repo} to trust it`);
       if (isolation === 'detached') {
         // A read-only tree checks out an existing branch, or the cwd's HEAD: it never merges, so it needs no task branch.
         if (req.base && !(await wt.branchSha(req.cwd, req.base))) throw new Error(`base branch ${req.base} does not exist`);

@@ -197,7 +197,10 @@ async function worktreePaths(path: string): Promise<{ index: string; objects: st
  */
 async function nodeDiff(w: Worktree, runs: string[][]): Promise<{ out: string[]; dirty: number }> {
   const common = ['diff', '--no-color', '--no-ext-diff', '-M'];
-  if (!existsSync(w.path)) return { out: await Promise.all(runs.map((args) => git(w.repo, [...common, ...args, `${w.baseSha}...${w.branch}`]))), dirty: 0 };
+  if (!existsSync(w.path)) {
+    if (!w.branch) return { out: runs.map(() => ''), dirty: 0 }; // a read-only tree that is gone left nothing to diff
+    return { out: await Promise.all(runs.map((args) => git(w.repo, [...common, ...args, `${w.baseSha}...${w.branch}`]))), dirty: 0 };
+  }
   const dir = await mkdtemp(join(tmpdir(), 'tl-diff-'));
   try {
     const [paths, mergeBase] = await Promise.all([worktreePaths(w.path), git(w.path, ['merge-base', w.baseSha, 'HEAD']).then((s) => s.trim())]);

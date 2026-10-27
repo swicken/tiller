@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import { HARNESSES, PROFILES, isSupportedEffort } from '../shared/harness-policy.js';
-import { EFFORTS, ISOLATIONS, type Harness, type Profile, type Role } from '../shared/protocol.js';
+import { EFFORTS, type Harness, type Profile, type Role } from '../shared/protocol.js';
 import { CLAUDE_ACCOUNT_NAME, CLAUDE_ACCOUNT_NAME_RULE, SETTINGS_PROFILE_DEFAULTS, type SettingsEntry } from '../shared/settings.js';
 import { homeDir } from './home.js';
 import { expandHome } from './util.js';
@@ -82,7 +82,7 @@ export const ConfigFile = z.object({
    * from one of them, or from a detached HEAD, gets a new base branch named by taskBranch, {slug} from its title.
    */
   worktrees: z.object({
-    isolation: z.enum(ISOLATIONS).optional(),
+    isolation: z.enum(['none', 'worktree']).optional(), // not "detached": a read-only default would make every worker read-only
     branchPrefix: z.string().min(1).optional(),
     include: z.array(z.string().min(1)).optional(),
     mergeStyle: z.enum(MERGE_STYLES).optional(),

@@ -405,6 +405,35 @@ describe('read-only (detached) worktree nodes', () => {
     expect(g(repo, 'branch', '--list', 'tl/*')).toBe('');
     expect((await history(m.home))[0]!.branchFate).toBe('discarded');
   });
+
+  it('a read-only node whose worktree is gone has an empty diff', async () => {
+    setup();
+    const v = await spawnD();
+    await exited(v.id);
+    rmSync(v.cwd, { recursive: true, force: true });
+    expect(await m.diff(v.id)).toEqual({ base: 'dev', files: [] });
+  });
+
+  it('judges a detached orphan at its HEAD: startup removes a clean one and lists one with a commit; force reports it', async () => {
+    setup();
+    await spawnW(); // records the repo in worktree-repos.json
+    const sha = g(repo, 'rev-parse', 'HEAD');
+    const orphan = async (id: string) => {
+      const path = join(repo, '.claude', 'worktrees', id);
+      await wt.addDetached(repo, path, sha);
+      await wt.writeMarker(path, { home: m.home, nodeId: id, base: 'dev', baseSha: sha });
+      return path;
+    };
+    const busy = await orphan('n-0000000d');
+    commit(busy, 'x.txt');
+    const idle = await orphan('n-0000000e');
+    const r = await m.worktrees({ clean: 'startup' });
+    expect(r.removed.map((x) => x.what)).toEqual([`worktree ${idle}`]);
+    expect(r.orphans).toEqual([expect.objectContaining({ nodeId: 'n-0000000d', branch: undefined, dirty: [], unmerged: [expect.stringContaining('add x.txt')] })]);
+    expect((await m.worktrees({ cwd: repo, clean: 'safe' })).orphans).toHaveLength(1);
+    const forced = await m.worktrees({ cwd: repo, clean: 'force' });
+    expect(forced.removed).toEqual([{ what: `worktree ${busy}`, commits: [expect.stringContaining('add x.txt')], files: [] }]);
+  });
 });
 
 describe('git state and merge', () => {
