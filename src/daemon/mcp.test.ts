@@ -16,7 +16,8 @@ import type { Outcome } from '../shared/protocol.js';
 
 let home = '', manager: NodeManager, server: http.Server, base = '', admin = '';
 const confirms: string[] = [];
-let answer = true;
+/** The human's answer to each confirm; a pending promise is a decision still to come. */
+let answer: boolean | undefined | Promise<boolean | undefined> = true;
 const focused: string[][] = [];
 
 beforeAll(async () => {
@@ -157,6 +158,41 @@ describe('mcp api', () => {
     answer = true;
   });
 
+  it('a close awaiting the human replies pending at once; the decision, denial or expiry arrives as a notice', async () => {
+    const p = (await spawnT('cp')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    manager.registry.update(p, { kind: 'claude' });
+    inbox(manager, p); // a polling mod, so notices land in its inbox
+    const kid = async () => (await spawnT('ck', p, tok)).body.data.nodeId as string;
+    const pending = async (id: string) => {
+      let decide!: (ok: boolean | undefined) => void;
+      answer = new Promise((r) => { decide = r; });
+      const r = await api('close', { nodeIds: [id] }, p, tok);
+      expect(r.body.data).toEqual({ ok: false, pending: true, requestId: expect.stringMatching(/^close-/) });
+      expect(r.body.text).toContain(`tiller (close ${r.body.data.requestId})`);
+      expect(manager.view(id)).toBeDefined();
+      return { decide, requestId: r.body.data.requestId as string };
+    };
+    const notice = async (n: number) => { await expect.poll(() => inbox(manager, p).length).toBe(n); return inbox(manager, p)[n - 1]; };
+    try {
+      const k1 = await kid();
+      const one = await pending(k1);
+      one.decide(true);
+      expect(await notice(1)).toMatchObject({ from: `tiller (close ${one.requestId} approved)`, text: expect.stringContaining(`\nThe human approved closing ck (${k1}).\nClosed: ${k1}.\n`) });
+      expect(manager.view(k1)).toBeUndefined();
+      const k2 = await kid();
+      const two = await pending(k2);
+      two.decide(false);
+      expect(await notice(2)).toMatchObject({ from: `tiller (close ${two.requestId} denied)`, text: expect.stringContaining(`The human declined closing ck (${k2}); nothing was closed.`) });
+      const three = await pending(k2);
+      three.decide(undefined); // the confirm timed out
+      expect((await notice(3)).text).toContain('arrived in time; nothing was closed');
+      expect(manager.view(k2)).toBeDefined();
+      await manager.close(k2, true);
+    } finally { answer = true; }
+    await manager.close(p, true); // stay under limits.maxLiveNodes for the later tests
+  });
+
   it('fork, read and history reach a closed node only in the caller\'s own tree; fork of a live node needs scope', async () => {
     const tok = (id: string) => manager.tokenFor(id);
     const transcript = join(home, 'archived.jsonl');
@@ -204,7 +240,12 @@ describe('mcp api', () => {
     const p = (await spawnT('cfg', 'human', admin, { cwd: proj })).body.data.nodeId as string;
     const tok = manager.tokenFor(p);
     const kids = async (n: number) => Promise.all(Array.from({ length: n }, async () => (await spawnT('k', p, tok)).body.data.nodeId as string));
-    const close = async (ids: string[]) => { confirms.length = 0; await api('close', { nodeIds: ids }, p, tok); return confirms.length; };
+    const close = async (ids: string[]) => {
+      confirms.length = 0;
+      const r = await api('close', { nodeIds: ids }, p, tok);
+      if (!confirms.length) expect(r.body.data).toEqual({ ok: true, closed: ids }); // skipped approval: the result, synchronously
+      return confirms.length;
+    };
     setMode('done');
     const [a, b] = await kids(2);
     for (const id of [a, b]) manager.applyHook(id, { hook_event_name: 'Stop' });

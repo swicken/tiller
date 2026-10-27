@@ -64,6 +64,8 @@ The daemon messages a parent, once per episode, when a child stops in a way that
 
 When a child's outcome is recorded through `report_outcome`, its parent gets a message with the outcome line, unless a pending `notify_when` of the parent covers that child, in which case the `notify_when` message carries it.
 
+An agent's `close` that needs the human's approval does not hold the agent's turn: it replies at once with `{ ok: false, pending: true, requestId }`, and the decision arrives later as a notice from `tiller (close <requestId> approved|denied|expired)`. An approved notice lists the nodes closed and each node that failed to close, with its error; `expired` means nobody answered within the approval timeout (5 minutes), and nothing was closed. With no UI connected the close is denied at once, as before, and a close that `approvals.close` lets skip the approval, or one by the human, closes and replies with the result.
+
 ## notify_when
 
 `notify_when(ids, when, of)` lets an agent wait for several nodes with one message instead of polling. It returns at once; later the caller receives a single message, "N of M finished:", with one line per node giving its outcome or its state. `when: "all"` waits for every node and `"any"` for the first. `of: "turn"` counts a node once it finishes the turn now in progress (or, for an idle node, its next turn), or exits or is closed; `of: "success"` counts a node once it calls `report_outcome` with either verdict. Calling it again with the same ids replaces the pending one, and it expires after 12 hours. The human has no inbox, so it is for agents only.

@@ -31,7 +31,7 @@ const HISTORY_LINES = 50;
 const MCP_DIFF_CHARS = 100_000;
 
 /** dnd sets do not disturb when `on` is given, and returns it. */
-interface Ctx { updates?: Updater; manager: NodeManager; confirm: (text: string) => Promise<boolean>; focus: (from: string, id: string) => void; dnd: (on?: boolean, minutes?: number) => Dnd; caller: string; mcp?: boolean }
+interface Ctx { updates?: Updater; manager: NodeManager; confirm: (text: string) => Promise<boolean | undefined>; focus: (from: string, id: string) => void; dnd: (on?: boolean, minutes?: number) => Dnd; caller: string; mcp?: boolean }
 interface Out { text?: string; data?: unknown }
 
 /** How long report_outcome waits for a completion gate before replying that it is still running. */
@@ -187,6 +187,27 @@ async function runGate(m: NodeManager, id: string, gate: NonNullable<Config['gat
   return { text, data: { ok: false, gate: 'failed', attemptsLeft: left } };
 }
 
+/**
+ * Reply to a close that waits for the human: pending now, then the decision as a notice to the caller, shaped like a
+ * notify_when notice. `run` closes the batch once approved.
+ */
+function closeLater(c: Ctx, decision: Promise<boolean | undefined>, list: string, run: () => Promise<{ closed: string[]; notes: string[]; errors: string[] }>): Out {
+  const requestId = `close-${randomBytes(4).toString('hex')}`;
+  void decision.then(async (ok) => {
+    let body: string;
+    if (ok) {
+      const r = await run();
+      body = [`The human approved closing ${list}.`, r.closed.length && `Closed: ${r.closed.join(', ')}.`, ...r.notes, ...r.errors.map((e) => `Not closed: ${e}`)].filter(Boolean).join('\n');
+    } else if (ok === false) body = `The human declined closing ${list}; nothing was closed.`;
+    else body = `No decision on closing ${list} arrived in time; nothing was closed. Call close again to ask again.`;
+    await deliver(c.manager, DAEMON, c.caller, body, { fromLabel: `tiller (close ${requestId} ${ok ? 'approved' : ok === false ? 'denied' : 'expired'})`, replyTo: null });
+  }).catch(logError);
+  return {
+    text: `Waiting for the human to approve closing ${list}. Carry on: the decision arrives as a message from tiller (close ${requestId}).`,
+    data: { ok: false, pending: true, requestId },
+  };
+}
+
 // ---- tools ----
 
 /** humanOnly: refused to agents over /api and not listed to them over MCP. */
@@ -337,7 +358,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   close: tool(
     'Close nodes',
-    `Close and delete nodes. Every id must be your descendant (agents cannot close orchestrators), or the whole batch is refused and nothing closes. The human approves the batch once in the UI; declined gives {ok:false, reason:"denied"}. Config approvals.close can skip that (a project's .tiller/config.json may only be stricter than the home file): "always" skips; "done" skips when every node is done, exited or has called report_outcome; "never" (default) asks. A node with its own worktree closes only when its tree is clean, its branch merged and no other live node works in it; otherwise the batch is refused, nothing closes, and the error says why. \`worktree\` overrides that for the batch: "keep" commits uncommitted changes as a WIP commit and keeps the branch; "discard" deletes the worktree and branch with any unmerged work and always needs the human's approval.`,
+    `Close and delete nodes. Every id must be your descendant (agents cannot close orchestrators), or the whole batch is refused and nothing closes. The human approves the batch once in the UI: the reply is then {ok:false, pending:true, requestId} at once, and the decision (closed, with any per-node errors; denied; or expired) arrives later as a message from tiller. Config approvals.close can skip that (a project's .tiller/config.json may only be stricter than the home file): "always" skips; "done" skips when every node is done, exited or has called report_outcome; "never" (default) asks. A node with its own worktree closes only when its tree is clean, its branch merged and no other live node works in it; otherwise the batch is refused, nothing closes, and the error says why. \`worktree\` overrides that for the batch: "keep" commits uncommitted changes as a WIP commit and keeps the branch; "discard" deletes the worktree and branch with any unmerged work and always needs the human's approval.`,
     { nodeIds: z.array(z.string().min(1)).min(1), force: z.boolean().optional(), worktree: z.enum(['keep', 'discard']).optional() },
     async (c, a) => {
       const views = a.nodeIds.map((id) => requireOwned(c, id, false));
@@ -359,14 +380,31 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       // "done" also counts a node that has reported but is still working, so a worker can be closed as soon as its report arrives.
       const preapproved = a.worktree !== 'discard' && (mode === 'always' || (mode === 'done' && views.every((v) => finished(v.status) || v.outcome)));
       const text = `${who(c)} wants to close ${views.length} node(s): ${list}${destroys.length ? `. This deletes their worktrees: ${destroys.join('; ')}` : ''}`;
-      if (c.caller !== HUMAN && !preapproved && !(await c.confirm(text))) {
-        return { data: { ok: false, reason: 'denied' } };
-      }
       const notes: string[] = [];
-      for (const id of a.nodeIds) {
-        const note = await c.manager.close(id, true, a.worktree); // roots were vetted above
-        if (note) notes.push(`${id}: ${note}`);
+      /** Close the batch in order; `keepGoing` records each node's error and moves on, otherwise the first error throws. */
+      const closeAll = async (keepGoing: boolean) => {
+        const closed: string[] = [], errors: string[] = [];
+        for (const id of a.nodeIds) {
+          try {
+            const note = await c.manager.close(id, true, a.worktree); // roots were vetted above
+            if (note) notes.push(`${id}: ${note}`);
+            closed.push(id);
+          } catch (err) {
+            if (!keepGoing) throw err;
+            errors.push(`${id}: ${(err as Error).message}`);
+          }
+        }
+        return { closed, notes, errors };
+      };
+      if (c.caller !== HUMAN && !preapproved) {
+        // An answer already settled (no UI connected) replies at once; otherwise the caller's turn goes on and the
+        // decision arrives as a notice, so a human away from the UI does not hold the turn.
+        const decision = c.confirm(text);
+        const now = await Promise.race([decision, new Promise<'pending'>((r) => setImmediate(r, 'pending'))]);
+        if (now === 'pending') return closeLater(c, decision, list, () => closeAll(true));
+        if (!now) return { data: { ok: false, reason: 'denied' } };
       }
+      await closeAll(false);
       return { data: { ok: true, closed: a.nodeIds, ...(notes.length ? { notes } : {}) } };
     }),
 
