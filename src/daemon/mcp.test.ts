@@ -212,7 +212,7 @@ describe('mcp api', () => {
     const fork = (from: string) => api('spawn', { kind: 'claude', title: 'f', fork: from }, kidA, tok(kidA));
     expect((await fork(kidB)).body.error).toMatch(/outside your lineage/);
     expect((await fork(oldB)).body.error).toBe(`refused: archived node ${oldB} is not of your own tree`);
-    expect((await api('spawn', { kind: 'claude', title: 'f' }, kidA, tok(kidA))).body.error).toMatch(/cwd is required unless you fork/);
+    expect((await api('spawn', { kind: 'claude', title: 'f' })).body.error).toMatch(/cwd is required unless you fork/); // the human has no cwd of its own
     expect((await api('read', { nodeId: oldA, what: 'summary' }, kidA, tok(kidA))).body.text).toBe('user: hello there');
     expect((await api('read', { nodeId: oldB, what: 'summary' }, kidA, tok(kidA))).status).toBe(400);
     // A line in tree B's archive cannot claim tree A by naming it: the tree is the directory the line sits in.
@@ -438,6 +438,42 @@ describe('mcp api', () => {
     rmSync(join(home, 'config.json'));
   });
 
+  it('accepts the parameter aliases, refuses a conflicting pair, and defaults when, kind and cwd', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ daemon: { maxLiveNodes: 100 } }));
+    const p = (await spawnT('ap')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    const [a, b] = [(await spawnT('ak', p, tok)).body.data.nodeId as string, (await spawnT('ak', p, tok)).body.data.nodeId as string];
+    // aliases
+    expect((await api('read', { id: a, what: 'terminal', lines: 1 }, p, tok)).status).toBe(200);
+    expect((await api('rename', { id: a, title: 'renamed' }, p, tok)).body.data).toEqual({ ok: true });
+    expect(manager.view(a)!.title).toBe('renamed');
+    expect((await api('send', { id: b, message: 'hi' }, p, tok)).body.data.outcome).toBeDefined();
+    expect((await api('notify_when', { nodeIds: [a], of: 'turn' }, p, tok)).body.data).toEqual({ ok: true, replaced: false }); // when defaults to "all"
+    expect((await api('notify_when', { ids: [a], when: 'all', of: 'turn' }, p, tok)).body.data).toEqual({ ok: true, replaced: true });
+    // conflicts, and neither given
+    expect((await api('close', { nodeIds: [a], ids: [b] }, p, tok)).body.error).toBe('nodeIds and ids are the same argument with different values: give one');
+    expect((await api('read', { nodeId: a, id: b, what: 'outcome' }, p, tok)).body.error).toMatch(/nodeId and id are the same argument/);
+    expect((await api('send', { nodeId: b, text: 'x', message: 'y' }, p, tok)).body.error).toMatch(/text and message are the same argument/);
+    expect((await api('read', { what: 'outcome' }, p, tok)).body.error).toBe('nodeId is required');
+    expect(manager.view(a) && manager.view(b)).toBeDefined();
+    expect((await api('close', { ids: [a], nodeIds: [a] }, p, tok)).body.data).toMatchObject({ ok: true, closed: [a] }); // the same value twice is fine
+    // spawn defaults: the caller's cwd (its worktree, when it works in one) and its harness
+    const cwd = mkdtempSync(join(home, 'own-'));
+    manager.registry.update(p, { cwd, kind: 'agent', harness: 'codex' });
+    expect(manager.view((await spawnT('t', p, tok, { cwd: undefined })).body.data.nodeId)!.cwd).toBe(cwd);
+    const spawn = vi.spyOn(manager, 'spawn').mockResolvedValue(manager.view(b)!); // no harness process
+    await api('spawn', { title: 'x' }, p, tok);
+    expect(spawn.mock.calls[0][0]).toMatchObject({ kind: 'agent', cwd });
+    manager.registry.update(p, { kind: 'claude', harness: undefined });
+    await api('spawn', { title: 'y' }, p, tok);
+    expect(spawn.mock.calls[1][0]).toMatchObject({ kind: 'claude', cwd });
+    await api('spawn', { title: 'z', harness: 'pi' }, p, tok);
+    expect(spawn.mock.calls[2][0]).toMatchObject({ kind: 'agent', harness: 'pi' });
+    spawn.mockRestore();
+    await manager.close(p, true);
+    rmSync(join(home, 'config.json'));
+  });
+
   describe('completion gate', () => {
     const proj = () => join(home, 'gated');
     /** A gate that runs until a file named go appears. */
@@ -514,7 +550,7 @@ describe('mcp api', () => {
     const client = await connect(id, manager.tokenFor(id));
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(['close', 'diff', 'history', 'list_nodes', 'merge', 'message_status', 'notify_when', 'read', 'rename', 'report_outcome', 'send', 'spawn', 'withdraw', 'write']);
-    expect(tools.find((t) => t.name === 'spawn')!.inputSchema.required).toEqual(['kind', 'title']); // cwd defaults to a fork source's
+    expect(tools.find((t) => t.name === 'spawn')!.inputSchema.required).toEqual(['title']); // kind and cwd default to the caller's
     expect(Object.fromEntries(tools.map((t) => [t.name, t.title]))).toMatchObject({
       notify_when: 'Watch node completion', read: 'Read node output', history: 'List past agents',
       spawn: 'Start node',
