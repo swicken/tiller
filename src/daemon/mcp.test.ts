@@ -16,13 +16,15 @@ import type { Outcome } from '../shared/protocol.js';
 
 let home = '', manager: NodeManager, server: http.Server, base = '', admin = '';
 const confirms: string[] = [];
-let answer = true;
+const signals: (AbortSignal | undefined)[] = [];
+/** The human's answer to each confirm; a pending promise is a decision still to come. */
+let answer: boolean | undefined | Promise<boolean | undefined> = true;
 const focused: string[][] = [];
 
 beforeAll(async () => {
   home = mkdtempSync(join(tmpdir(), 'tl-mcp-'));
   manager = new NodeManager({ home, shell: '/bin/sh' });
-  const { handler, publishAdminToken } = mountMcp(manager, async (t) => { confirms.push(t); return answer; }, (from, id) => focused.push([from, id]));
+  const { handler, publishAdminToken } = mountMcp(manager, async (t, signal) => { confirms.push(t); signals.push(signal); return answer; }, (from, id) => focused.push([from, id]));
   expect(() => readFileSync(join(home, 'admin-token'))).toThrow(); // not written until the server is listening
   server = http.createServer((req, res) => void handler(req, res));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -157,6 +159,84 @@ describe('mcp api', () => {
     answer = true;
   });
 
+  it('a close awaiting the human replies pending at once; the decision, denial or expiry arrives as a notice', async () => {
+    const p = (await spawnT('cp')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    manager.registry.update(p, { kind: 'claude' });
+    inbox(manager, p); // a polling mod, so notices land in its inbox
+    const kid = async () => (await spawnT('ck', p, tok)).body.data.nodeId as string;
+    const pending = async (id: string) => {
+      let decide!: (ok: boolean | undefined) => void;
+      answer = new Promise((r) => { decide = r; });
+      const r = await api('close', { nodeIds: [id] }, p, tok);
+      expect(r.body.data).toEqual({ ok: false, pending: true, requestId: expect.stringMatching(/^[0-9a-f]{8}$/) });
+      expect(r.body.text).toContain(`tiller (close request ${r.body.data.requestId})`);
+      expect(manager.view(id)).toBeDefined();
+      return { decide, requestId: r.body.data.requestId as string };
+    };
+    const notice = async (n: number) => { await expect.poll(() => inbox(manager, p).length).toBe(n); return inbox(manager, p)[n - 1]; };
+    try {
+      const k1 = await kid();
+      const one = await pending(k1);
+      one.decide(true);
+      expect(await notice(1)).toMatchObject({ from: `tiller (close request ${one.requestId} approved)`, text: expect.stringContaining(`\nThe human approved closing ck (${k1}).\nClosed: ${k1}.\n`) });
+      expect(manager.view(k1)).toBeUndefined();
+      const k2 = await kid();
+      const two = await pending(k2);
+      two.decide(false);
+      expect(await notice(2)).toMatchObject({ from: `tiller (close request ${two.requestId} denied)`, text: expect.stringContaining(`The human declined closing ck (${k2}); nothing was closed.`) });
+      const three = await pending(k2);
+      three.decide(undefined); // the confirm timed out
+      expect((await notice(3)).text).toContain('arrived in time; nothing was closed');
+      expect(manager.view(k2)).toBeDefined();
+      // Closed by the human while the request waited: reported as such, not as closed by this request.
+      const four = await pending(k2);
+      expect((await api('close', { nodeIds: [k2] })).body.data).toMatchObject({ ok: true });
+      four.decide(true);
+      const text = (await notice(4)).text;
+      expect(text).toContain(`Already closed by someone else: ${k2}.`);
+      expect(text).not.toContain('Closed:');
+      // The caller closed while its request waits: the dialog is dismissed and nothing closes.
+      const k3 = await kid();
+      const five = await pending(k3);
+      await manager.close(p, true);
+      expect(signals.at(-1)?.aborted).toBe(true);
+      five.decide(true);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(manager.view(k3)).toBeDefined();
+      await manager.close(k3, true);
+    } finally { answer = true; }
+  });
+
+  it('a discard approved later is refused when the worktree now holds more than the human was shown', async () => {
+    const repo = join(home, 'discard-repo'), path = join(repo, '.claude', 'worktrees', 'd');
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' }).trim();
+    mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'root');
+    git(repo, 'worktree', 'add', '-q', '-b', 'tl/d', path);
+    writeFileSync(join(path, 'one.txt'), '1');
+    const p = (await spawnT('dp')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    manager.registry.update(p, { kind: 'claude' });
+    inbox(manager, p);
+    const kid = (await spawnT('dk', p, tok, { cwd: path })).body.data.nodeId as string;
+    manager.registry.update(kid, { worktree: { repo, path, branch: 'tl/d', base: 'main', baseSha: git(repo, 'rev-parse', 'HEAD') } });
+    let decide!: (ok: boolean) => void;
+    answer = new Promise((r) => { decide = r; });
+    try {
+      const r = await api('close', { nodeIds: [kid], worktree: 'discard' }, p, tok);
+      expect(r.body.data).toMatchObject({ pending: true });
+      expect(confirms.at(-1)).toContain('discards 0 commit(s) and 1 changed file(s)');
+      writeFileSync(join(path, 'two.txt'), '2'); // more work lands before the human answers
+      decide(true);
+      await expect.poll(() => inbox(manager, p).map((x) => x.text)).toEqual([expect.stringContaining(`Not closed: ${kid}: refused: it now has 0 commit(s) and 2 changed file(s) to discard, more than the human approved`)]);
+      expect(manager.view(kid)).toBeDefined();
+    } finally { answer = true; }
+    await manager.close(kid, true, 'discard');
+    await manager.close(p, true);
+  });
+
   it('fork, read and history reach a closed node only in the caller\'s own tree; fork of a live node needs scope', async () => {
     const tok = (id: string) => manager.tokenFor(id);
     const transcript = join(home, 'archived.jsonl');
@@ -176,7 +256,7 @@ describe('mcp api', () => {
     const fork = (from: string) => api('spawn', { kind: 'claude', title: 'f', fork: from }, kidA, tok(kidA));
     expect((await fork(kidB)).body.error).toMatch(/outside your lineage/);
     expect((await fork(oldB)).body.error).toBe(`refused: archived node ${oldB} is not of your own tree`);
-    expect((await api('spawn', { kind: 'claude', title: 'f' }, kidA, tok(kidA))).body.error).toMatch(/cwd is required unless you fork/);
+    expect((await api('spawn', { kind: 'claude', title: 'f' })).body.error).toMatch(/cwd is required unless you fork/); // the human has no cwd of its own
     expect((await api('read', { nodeId: oldA, what: 'summary' }, kidA, tok(kidA))).body.text).toBe('user: hello there');
     expect((await api('read', { nodeId: oldB, what: 'summary' }, kidA, tok(kidA))).status).toBe(400);
     // A line in tree B's archive cannot claim tree A by naming it: the tree is the directory the line sits in.
@@ -204,7 +284,12 @@ describe('mcp api', () => {
     const p = (await spawnT('cfg', 'human', admin, { cwd: proj })).body.data.nodeId as string;
     const tok = manager.tokenFor(p);
     const kids = async (n: number) => Promise.all(Array.from({ length: n }, async () => (await spawnT('k', p, tok)).body.data.nodeId as string));
-    const close = async (ids: string[]) => { confirms.length = 0; await api('close', { nodeIds: ids }, p, tok); return confirms.length; };
+    const close = async (ids: string[]) => {
+      confirms.length = 0;
+      const r = await api('close', { nodeIds: ids }, p, tok);
+      if (!confirms.length) expect(r.body.data).toEqual({ ok: true, closed: ids }); // skipped approval: the result, synchronously
+      return confirms.length;
+    };
     setMode('done');
     const [a, b] = await kids(2);
     for (const id of [a, b]) manager.applyHook(id, { hook_event_name: 'Stop' });
@@ -364,12 +449,73 @@ describe('mcp api', () => {
     await api('report_outcome', { outcome: 'succeeded', summary: 'did one' }, w1, manager.tokenFor(w1));
     await expect.poll(() => inbox(manager, p).map((x) => x.text)).toEqual([expect.stringContaining(`${w1} reported succeeded: did one`)]);
     expect((await api('notify_when', { ids: [w2], when: 'all', of: 'success' }, p, manager.tokenFor(p))).status).toBe(200);
-    await api('report_outcome', { outcome: 'failed', note: 'no' }, w2, manager.tokenFor(w2));
+    const summary = 'Tried the approach and hit a wall. '.repeat(20).trim(); // a paragraph: the notice carries it whole
+    await api('report_outcome', { outcome: 'failed', note: 'no', summary }, w2, manager.tokenFor(w2));
     await expect.poll(() => inbox(manager, p).length).toBe(2);
     await new Promise((r) => setTimeout(r, 50));
     const texts = inbox(manager, p).map((x) => x.text);
     expect(texts).toHaveLength(2);
-    expect(texts[1]).toContain(`1 of 1 finished:\n${w2}: failed: no`);
+    expect(texts[1]).toContain(`1 of 1 finished:\n${w2}: failed: ${summary}\n`);
+  });
+
+  it('an agent hears nothing more of nodes it closed itself; a close by the human is still reported', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ daemon: { maxLiveNodes: 100 } }));
+    const p = (await spawnT('sp')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    manager.registry.update(p, { kind: 'claude' });
+    inbox(manager, p);
+    const kid = async () => (await spawnT('sk', p, tok)).body.data.nodeId as string;
+    const [a, b, c, d] = [await kid(), await kid(), await kid(), await kid()];
+    await api('notify_when', { ids: [a, b], when: 'all', of: 'turn' }, p, tok);
+    await api('notify_when', { ids: [c], when: 'all', of: 'turn' }, p, tok);
+    manager.registry.update(d, { kind: 'claude' }); // a stopped notice about d, queued while p is busy
+    manager.applyHook(p, { hook_event_name: 'UserPromptSubmit' });
+    manager.applyHook(d, { hook_event_name: 'UserPromptSubmit' });
+    await api('report_outcome', { outcome: 'succeeded', summary: 'd done' }, d, manager.tokenFor(d));
+    await expect.poll(() => inbox(manager, p).length).toBe(1);
+    expect((await api('close', { nodeIds: [a, b, d] }, p, tok)).body.data).toMatchObject({ ok: true });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(inbox(manager, p)).toEqual([]); // no "2 of 2 finished: closed", and d's queued notice is withdrawn
+    expect((await api('close', { nodeIds: [c] })).body.data).toMatchObject({ ok: true }); // by the human: p did not know
+    await expect.poll(() => inbox(manager, p).map((x) => x.text)).toEqual([expect.stringContaining(`1 of 1 finished:\n${c}: closed`)]);
+    await manager.close(p, true);
+    rmSync(join(home, 'config.json'));
+  });
+
+  it('accepts the parameter aliases, refuses a conflicting pair, and defaults when, kind and cwd', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ daemon: { maxLiveNodes: 100 } }));
+    const p = (await spawnT('ap')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    const [a, b] = [(await spawnT('ak', p, tok)).body.data.nodeId as string, (await spawnT('ak', p, tok)).body.data.nodeId as string];
+    // aliases
+    expect((await api('read', { id: a, what: 'terminal', lines: 1 }, p, tok)).status).toBe(200);
+    expect((await api('rename', { id: a, title: 'renamed' }, p, tok)).body.data).toEqual({ ok: true });
+    expect(manager.view(a)!.title).toBe('renamed');
+    expect((await api('send', { id: b, message: 'hi' }, p, tok)).body.data.outcome).toBeDefined();
+    expect((await api('notify_when', { nodeIds: [a], of: 'turn' }, p, tok)).body.data).toEqual({ ok: true, replaced: false }); // when defaults to "all"
+    expect((await api('notify_when', { ids: [a], when: 'all', of: 'turn' }, p, tok)).body.data).toEqual({ ok: true, replaced: true });
+    // conflicts, and neither given
+    expect((await api('close', { nodeIds: [a], ids: [b] }, p, tok)).body.error).toBe('nodeIds and ids are the same argument with different values: give one');
+    expect((await api('read', { nodeId: a, id: b, what: 'outcome' }, p, tok)).body.error).toMatch(/nodeId and id are the same argument/);
+    expect((await api('send', { nodeId: b, text: 'x', message: 'y' }, p, tok)).body.error).toMatch(/text and message are the same argument/);
+    expect((await api('read', { what: 'outcome' }, p, tok)).body.error).toBe('nodeId is required');
+    expect(manager.view(a) && manager.view(b)).toBeDefined();
+    expect((await api('close', { ids: [a], nodeIds: [a] }, p, tok)).body.data).toMatchObject({ ok: true, closed: [a] }); // the same value twice is fine
+    // spawn defaults: the caller's cwd (its worktree, when it works in one) and its harness
+    const cwd = mkdtempSync(join(home, 'own-'));
+    manager.registry.update(p, { cwd, kind: 'agent', harness: 'codex' });
+    expect(manager.view((await spawnT('t', p, tok, { cwd: undefined })).body.data.nodeId)!.cwd).toBe(cwd);
+    const spawn = vi.spyOn(manager, 'spawn').mockResolvedValue(manager.view(b)!); // no harness process
+    await api('spawn', { title: 'x' }, p, tok);
+    expect(spawn.mock.calls[0][0]).toMatchObject({ kind: 'agent', cwd });
+    manager.registry.update(p, { kind: 'claude', harness: undefined });
+    await api('spawn', { title: 'y' }, p, tok);
+    expect(spawn.mock.calls[1][0]).toMatchObject({ kind: 'claude', cwd });
+    await api('spawn', { title: 'z', harness: 'pi' }, p, tok);
+    expect(spawn.mock.calls[2][0]).toMatchObject({ kind: 'agent', harness: 'pi' });
+    spawn.mockRestore();
+    await manager.close(p, true);
+    rmSync(join(home, 'config.json'));
   });
 
   describe('completion gate', () => {
@@ -448,7 +594,7 @@ describe('mcp api', () => {
     const client = await connect(id, manager.tokenFor(id));
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(['close', 'diff', 'history', 'list_nodes', 'merge', 'message_status', 'notify_when', 'read', 'rename', 'report_outcome', 'send', 'spawn', 'withdraw', 'write']);
-    expect(tools.find((t) => t.name === 'spawn')!.inputSchema.required).toEqual(['kind', 'title']); // cwd defaults to a fork source's
+    expect(tools.find((t) => t.name === 'spawn')!.inputSchema.required).toEqual(['title']); // kind and cwd default to the caller's
     expect(Object.fromEntries(tools.map((t) => [t.name, t.title]))).toMatchObject({
       notify_when: 'Watch node completion', read: 'Read node output', history: 'List past agents',
       spawn: 'Start node',
