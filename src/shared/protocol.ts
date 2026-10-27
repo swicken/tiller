@@ -109,6 +109,8 @@ export interface GitState {
   deletions: number;
   /** When tiller last merged the branch into base; cleared once the branch moves past what was merged. */
   mergedAt?: number;
+  /** Files that would conflict if base were merged into the branch now (git merge-tree); absent when it merges cleanly. */
+  conflicts?: string[];
 }
 
 /** One file of a worktree node's diff. Binary files have no patch; neither do files past the 2 MB patch cap (Diff.truncated). */

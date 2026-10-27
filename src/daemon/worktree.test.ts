@@ -8,10 +8,12 @@ import { dirname, join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { history } from './archive.js';
 import { NodeManager, type SpawnRequest } from './manager.js';
+import { ADMIN_TOKEN_FILE } from './home.js';
 import { mountMcp } from './mcp.js';
+import { inbox } from './messaging.js';
 import { transcriptFor } from './transcript.js';
 import * as wt from './worktree.js';
-import { refreshGit } from './worktree-lifecycle.js';
+import { queueMerge, refreshGit, refreshMovedTips } from './worktree-lifecycle.js';
 
 const g = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim();
 const commit = (dir: string, file: string) => { writeFileSync(join(dir, file), `${file}\n`); g(dir, 'add', file); g(dir, 'commit', '-qm', `add ${file}`); };
@@ -406,6 +408,35 @@ describe('read-only (detached) worktree nodes', () => {
     expect((await history(m.home))[0]!.branchFate).toBe('discarded');
   });
 
+  it('a whenIdle merge of a working read-only node is refused at once, queueing nothing', async () => {
+    setup();
+    const v = await spawnD();
+    m.applyHook(v.id, { hook_event_name: 'UserPromptSubmit' });
+    const settle = vi.fn();
+    await expect(queueMerge(m, v.id, 'n-caller', settle)).rejects.toThrow(`${v.id} has a read-only (detached) worktree: there is no branch to merge`);
+    m.applyHook(v.id, { hook_event_name: 'Stop' });
+    await null;
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it('the tip watch sees a base move under a read-only node, which never gets a conflict check', async () => {
+    setup();
+    const v = await spawnD();
+    writeFileSync(join(v.cwd, 'README'), 'theirs\n');
+    g(v.cwd, 'commit', '-qam', 'theirs'); // a stray commit that would conflict with base
+    m.applyHook(v.id, { hook_event_name: 'Stop' });
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 1, behind: 0 });
+    writeFileSync(join(repo, 'README'), 'ours\n');
+    g(repo, 'commit', '-qam', 'ours'); // no hook: only the tip watch sees dev move
+    const err = vi.spyOn(console, 'error');
+    await refreshMovedTips(m);
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 1, behind: 1 });
+    expect(m.view(v.id)!.status.git!.conflicts).toBeUndefined();
+    expect(m.view(v.id)!.status.git!.branch).toBeUndefined();
+    expect(err.mock.calls.flat().join(' ')).not.toContain('merge-tree'); // never asked: there is no branch to merge into
+    err.mockRestore();
+  });
+
   it('a read-only node whose worktree is gone has an empty diff', async () => {
     setup();
     const v = await spawnD();
@@ -518,6 +549,29 @@ describe('git state and merge', () => {
     setup();
     const t = (await m.spawn({ kind: 'terminal', title: 't', cwd: repo }));
     await expect(m.diff(t.id)).rejects.toThrow(`${t.id} has no worktree of its own to diff`);
+  });
+
+  it('notices a base that moves under an idle node: behind first, then the conflicting files, until the base is merged in', async () => {
+    setup();
+    const v = await spawnW();
+    writeFileSync(join(v.cwd, 'README'), 'theirs\n');
+    g(v.cwd, 'commit', '-qam', 'theirs');
+    stop(v.id);
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 1, behind: 0 });
+    commit(repo, 'c.txt'); // no hook: the tip watch sees dev move
+    await refreshMovedTips(m);
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 1, behind: 1 });
+    expect(m.view(v.id)!.status.git!.conflicts).toBeUndefined();
+    writeFileSync(join(repo, 'README'), 'ours\n');
+    g(repo, 'commit', '-qam', 'ours');
+    await refreshMovedTips(m);
+    await expect.poll(() => m.view(v.id)!.status.git?.conflicts).toEqual(['README']);
+    expect(g(repo, 'status', '--porcelain') + g(v.cwd, 'status', '--porcelain')).toBe(''); // merge-tree touched nothing
+
+    g(v.cwd, 'merge', '-q', 'dev', '-X', 'ours', '-m', 'take dev');
+    await refreshMovedTips(m);
+    await expect.poll(() => m.view(v.id)!.status.git).toMatchObject({ ahead: 2, behind: 0 });
+    expect(m.view(v.id)!.status.git!.conflicts).toBeUndefined();
   });
 
   it('refuses a conflicting merge, naming the paths and touching no file', async () => {
@@ -732,6 +786,162 @@ describe('git state and merge', () => {
     const u = await spawnW({ base: 'main' });
     commit(u.cwd, 'u.txt');
     await expect(m.merge(u.id)).rejects.toThrow('refusing to merge into protected branch main');
+  });
+});
+
+describe('queued merges (whenIdle)', () => {
+  let server: http.Server | undefined;
+  afterEach(async () => {
+    server?.closeAllConnections();
+    await new Promise((r) => server?.close(r) ?? r(undefined));
+    server = undefined;
+  });
+  /** A Claude parent whose mod polls its inbox, a working worktree child, and the merge tool as the parent (or the human). */
+  async function scene() {
+    setup();
+    const confirms: string[] = [];
+    const { handler, publishAdminToken } = mountMcp(m, async (t) => { confirms.push(t); return true; }, () => {});
+    publishAdminToken();
+    server = http.createServer((req, res) => void handler(req, res));
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
+    const port = (server.address() as AddressInfo).port;
+    const parent = (await m.spawn({ kind: 'claude', title: 'boss', cwd: repo, byHuman: true })).id;
+    inbox(m, parent);
+    const kid = await spawnW({ parentId: parent });
+    commit(kid.cwd, 'a.txt');
+    m.applyHook(kid.id, { hook_event_name: 'UserPromptSubmit' });
+    const merge = async (args: object, as = parent) => {
+      const res = await fetch(`http://127.0.0.1:${port}/api/merge`, {
+        method: 'POST', body: JSON.stringify({ nodeId: kid.id, ...args }),
+        headers: as === 'human' ? { Authorization: `Bearer ${readFileSync(join(m.home, ADMIN_TOKEN_FILE), 'utf8')}`, 'X-TL-Node': 'human' } : { Authorization: `Bearer ${m.tokenFor(as)}`, 'X-TL-Node': as },
+      });
+      return (await res.json()) as { text?: string; data?: any; error?: string };
+    };
+    /** The bodies of the daemon's queued-merge notices to the parent. */
+    const notices = () => inbox(m, parent).filter((x) => x.from.startsWith('tiller (queued merge of '))
+      .map((x) => x.text.split('\n').slice(3, -1).join('\n'));
+    return { parent, kid, merge, notices, confirms };
+  }
+
+  it('queues while the node works, refuses a second, and merges when its turn ends, telling the caller', async () => {
+    const { kid, merge, notices } = await scene();
+    expect((await merge({})).error).toBe(`refusing to merge while ${kid.id} is working; wait until its turn ends`);
+    expect(await merge({ whenIdle: true })).toMatchObject({ data: { ok: true, queued: true } });
+    expect((await merge({ whenIdle: true })).error).toMatch(new RegExp(`^a merge of ${kid.id} is already queued by n-`));
+    expect((await merge({ whenIdle: true }, 'human')).error).toMatch(/^whenIdle is only for agent nodes/);
+    const before = g(repo, 'rev-parse', 'dev');
+    m.applyHook(kid.id, { hook_event_name: 'Stop' });
+    await expect.poll(() => notices().length).toBe(1);
+    expect(notices()).toEqual([`merged tl/${kid.id} into dev (merge), now at ${g(repo, 'rev-parse', '--short=7', 'dev')}`]);
+    expect(g(repo, 'rev-parse', 'dev^1')).toBe(before);
+  });
+
+  it('asks the human for a deferred merge, and holds it past an errored turn until a clean one ends', async () => {
+    const { kid, merge, notices, confirms } = await scene();
+    expect((await merge({ whenIdle: true })).data).toMatchObject({ queued: true });
+    expect(confirms).toEqual([expect.stringMatching(/branch tl\/n-\w+ into dev when its turn ends$/)]);
+    const dev = g(repo, 'rev-parse', 'dev');
+    m.applyHook(kid.id, { hook_event_name: 'StopFailure' });
+    await new Promise((r) => setTimeout(r, 200));
+    expect([notices(), g(repo, 'rev-parse', 'dev')]).toEqual([[], dev]);
+    m.applyHook(kid.id, { hook_event_name: 'UserPromptSubmit' });
+    m.applyHook(kid.id, { hook_event_name: 'Stop' });
+    await expect.poll(() => notices().length).toBe(1);
+    expect(notices()[0]).toMatch(new RegExp(`^merged tl/${kid.id} into dev`));
+  });
+
+  it('merges an idle node at once with the usual reply', async () => {
+    const { kid, merge } = await scene();
+    m.applyHook(kid.id, { hook_event_name: 'Stop' });
+    expect((await merge({ whenIdle: true })).data).toEqual({ ok: true, base: 'dev', sha: g(repo, 'rev-parse', 'dev'), style: 'merge' });
+  });
+
+  it('tells the caller of a conflict found when the turn ends, in the same words as an immediate merge', async () => {
+    const { kid, merge, notices } = await scene();
+    expect((await merge({ whenIdle: true })).data).toMatchObject({ queued: true });
+    writeFileSync(join(kid.cwd, 'README'), 'theirs\n');
+    g(kid.cwd, 'commit', '-qam', 'theirs');
+    writeFileSync(join(repo, 'README'), 'ours\n');
+    g(repo, 'commit', '-qam', 'ours');
+    m.applyHook(kid.id, { hook_event_name: 'Stop' });
+    await expect.poll(notices).toEqual([`merge refused, nothing changed: tl/${kid.id} conflicts with dev in README. Send the worker a rebase instruction: rebase tl/${kid.id} onto dev, resolve, commit, then merge again.`]);
+  });
+
+  it('drops the merge, telling the caller, when the node is closed or the daemon stops first', async () => {
+    const { parent, kid, merge, notices } = await scene();
+    await merge({ whenIdle: true });
+    await m.close(kid.id, true, 'discard');
+    await expect.poll(notices).toEqual([`merge of ${kid.id} failed: ${kid.id} was closed before its turn ended; nothing was merged`]);
+    const again = await spawnW({ parentId: parent });
+    commit(again.cwd, 'b.txt');
+    m.applyHook(again.id, { hook_event_name: 'UserPromptSubmit' });
+    expect((await merge({ whenIdle: true, nodeId: again.id })).data).toMatchObject({ queued: true });
+    const dev = g(repo, 'rev-parse', 'dev');
+    await m.shutdown();
+    await expect.poll(() => notices()[1]).toBe(`merge of ${again.id} failed: the daemon stopped before ${again.id}'s turn ended; nothing was merged, merge again`);
+    expect(readFileSync(join(m.home, 'inbox.json'), 'utf8')).toContain(`the daemon stopped before ${again.id}'s turn ended`); // the next daemon delivers it
+    expect(g(repo, 'rev-parse', 'dev')).toBe(dev);
+  });
+});
+
+describe('carry', () => {
+  /** v1 from dev, v2 from v1, v3 from v2, each with its own file; then dev moves. */
+  function stack(): void {
+    setup();
+    let prev = 'dev';
+    for (const b of ['v1', 'v2', 'v3']) {
+      g(repo, 'checkout', '-q', '-b', b, prev);
+      commit(repo, `${b}.txt`);
+      prev = b;
+    }
+    g(repo, 'checkout', '-q', 'dev');
+    commit(repo, 'dev.txt');
+  }
+  const tip = (b: string) => g(repo, 'rev-parse', b);
+  const has = (b: string, c: string) => { try { g(repo, 'merge-base', '--is-ancestor', c, b); return true; } catch { return false; } };
+
+  it('merges the base up the chain with merge commits, each move a fast-forward; a second run finds all up to date', async () => {
+    stack();
+    const before = { v1: tip('v1'), v2: tip('v2'), v3: tip('v3') };
+    const steps = await wt.carry(repo, 'dev', ['v1', 'v2', 'v3'], ['main']);
+    expect(steps.map((s) => [s.branch, s.from, 'sha' in s])).toEqual([['v1', 'dev', true], ['v2', 'v1', true], ['v3', 'v2', true]]);
+    for (const b of ['v1', 'v2', 'v3'] as const) {
+      expect(g(repo, 'log', '-1', '--format=%P', b).split(' ')[0]).toBe(before[b]); // first parent: the old tip
+      expect(has(b, 'dev')).toBe(true);
+    }
+    expect(has('v3', 'v2') && has('v2', 'v1')).toBe(true);
+    expect(g(repo, 'log', '-1', '--format=%s', 'v2')).toBe('Merge v1 into v2');
+    expect(g(repo, 'status', '--porcelain')).toBe('');
+    expect((await wt.carry(repo, 'dev', ['v1', 'v2', 'v3'], [])).every((s) => 'upToDate' in s)).toBe(true);
+    g(repo, 'branch', 'idle', 'dev~1'); // nothing of its own: fast-forwards like git merge
+    expect(await wt.carry(repo, 'dev', ['idle'], [])).toEqual([{ branch: 'idle', from: 'dev', sha: tip('dev') }]);
+  });
+
+  it('stops at the first conflict, naming the layer and files, and leaves that branch and the rest untouched', async () => {
+    stack();
+    g(repo, 'checkout', '-q', 'v2');
+    writeFileSync(join(repo, 'README'), 'v2\n');
+    g(repo, 'commit', '-qam', 'v2 README');
+    g(repo, 'checkout', '-q', 'dev');
+    writeFileSync(join(repo, 'README'), 'dev\n');
+    g(repo, 'commit', '-qam', 'dev README');
+    const v2 = tip('v2'), v3 = tip('v3');
+    const steps = await wt.carry(repo, 'dev', ['v1', 'v2', 'v3'], []);
+    expect(steps).toEqual([{ branch: 'v1', from: 'dev', sha: tip('v1') }, { branch: 'v2', from: 'v1', conflicts: ['README'] }]);
+    expect(has('v1', 'dev')).toBe(true);
+    expect([tip('v2'), tip('v3')]).toEqual([v2, v3]);
+  });
+
+  it('refuses before anything moves: a branch checked out in a worktree, a protected branch, a missing one', async () => {
+    stack();
+    const tips = () => ['v1', 'v2', 'v3'].map(tip);
+    const before = tips();
+    const at = join(home, 'v2-checkout');
+    g(repo, 'worktree', 'add', '-q', at, 'v2');
+    await expect(wt.carry(repo, 'dev', ['v1', 'v2', 'v3'], [])).rejects.toThrow(`carry refused, nothing changed: v2 is checked out at ${at}`);
+    await expect(wt.carry(repo, 'dev', ['v1', 'dev'], ['dev'])).rejects.toThrow('dev is protected');
+    await expect(wt.carry(repo, 'dev', ['v1', 'nope'], [])).rejects.toThrow('nope is not a local branch');
+    expect(tips()).toEqual(before);
   });
 });
 
