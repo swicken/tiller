@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ftsTerms } from '../../../src/daemon/memory-schema.js';
 import { GATE_CUTOFF, GATE_TREES, HOT_FILE_SHARE } from '../lib/archive.js';
 import { Case, type Fixture } from '../lib/fixture.js';
+import { rng } from '../lib/stats.js';
 import { wordpieceGolden } from './embedders.js';
 import {
   RESULT_VERSION, type Comparison, type Criterion, type Embedder, type Estimate, type FtsVariant, type Need, type Noise, type QueryScore,
@@ -192,18 +193,6 @@ export async function scoreQueries(qs: RetrievalQuery[], ranks: Map<RankerName, 
 }
 
 // --- Uncertainty (§2.3) ---
-
-/** mulberry32: a small seeded PRNG, so a rerun with the same seed resamples identically. */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /** The p-th percentile (0-100) of ascending xs, interpolating linearly between ranks. */
 export function percentile(xs: number[], p: number): number {
