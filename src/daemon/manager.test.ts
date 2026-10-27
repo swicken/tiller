@@ -11,6 +11,15 @@ import type { NodeStatus, NodeView } from '../shared/protocol.js';
 import { setProjectTrust } from './trust.js';
 import { trustPolicy } from './worktree-lifecycle.js';
 
+/** A fake claude running `script` in `home`/bin, so nothing real launches; returns NodeManager options that find it. */
+function fakeClaude(home: string, script = 'sleep 5') {
+  const bin = join(home, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'claude'), `#!/bin/sh\n${script}\n`);
+  chmodSync(join(bin, 'claude'), 0o755);
+  return { home, shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` };
+}
+
 describe('trustPolicy', () => {
   const json = { projects: { '/work/repo': { hasTrustDialogAccepted: true }, '/work/no': { hasTrustDialogAccepted: false } } };
   it.each([
@@ -635,14 +644,11 @@ describe('NodeManager model and effort defaults', () => {
 
   it('records the configured model for the role unless spawn passes one; project beats home', async () => {
     home = mkdtempSync(join(tmpdir(), 'tl-'));
-    const bin = join(home, 'bin'), proj = join(home, 'proj');
-    mkdirSync(bin);
+    const proj = join(home, 'proj');
     mkdirSync(join(proj, '.tiller'), { recursive: true });
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nsleep 5\n'); // stands in for claude so nothing real launches
-    chmodSync(join(bin, 'claude'), 0o755);
     writeFileSync(join(home, 'config.json'), JSON.stringify({ roles: { orchestrator: { model: 'opus' }, worker: { model: 'sonnet' } } }));
     writeFileSync(join(proj, '.tiller', 'config.json'), JSON.stringify({ roles: { worker: { model: 'haiku' } } }));
-    m = new NodeManager({ home, shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` });
+    m = new NodeManager(fakeClaude(home));
     const model = async (req: { parentId?: string; model?: string; role?: 'none' }) => m.registry.get((await m.spawn({ kind: 'claude', title: 'c', cwd: proj, ...req })).id)!.model;
     const root = (await m.spawn({ kind: 'claude', title: 'root', cwd: proj }));
     expect(m.registry.get(root.id)!.model).toBe('opus');        // orchestrator: home file
@@ -654,16 +660,13 @@ describe('NodeManager model and effort defaults', () => {
 
   it('resolves effort from spawn, then the project file, then the home file, and passes it to claude as --effort', async () => {
     home = mkdtempSync(join(tmpdir(), 'tl-'));
-    const bin = join(home, 'bin'), proj = join(home, 'proj'), other = join(home, 'other');
-    mkdirSync(bin);
+    const proj = join(home, 'proj'), other = join(home, 'other');
     mkdirSync(join(proj, '.tiller'), { recursive: true });
     mkdirSync(other);
-    // Fake claude: writes its argv next to the node's settings.json, then idles.
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nfor a in "$@"; do case "$prev" in --settings) out="$(dirname "$a")/argv";; esac; prev="$a"; done\necho "$@" > "$out"\nsleep 5\n');
-    chmodSync(join(bin, 'claude'), 0o755);
     writeFileSync(join(home, 'config.json'), JSON.stringify({ roles: { orchestrator: { effort: 'max' }, worker: { effort: 'high' } } }));
     writeFileSync(join(proj, '.tiller', 'config.json'), JSON.stringify({ roles: { worker: { effort: 'low' } } }));
-    m = new NodeManager({ home, shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` });
+    // Fake claude: writes its argv next to the node's settings.json, then idles.
+    m = new NodeManager(fakeClaude(home, 'for a in "$@"; do case "$prev" in --settings) out="$(dirname "$a")/argv";; esac; prev="$a"; done\necho "$@" > "$out"\nsleep 5'));
     const root = (await m.spawn({ kind: 'claude', title: 'root', cwd: proj }));
     const spawn = async (req: { cwd?: string; effort?: 'medium' }) => m.registry.get((await m.spawn({ kind: 'claude', title: 'c', cwd: proj, parentId: root.id, ...req })).id)!;
     expect(m.registry.get(root.id)!.effort).toBe('max');            // orchestrator: home file
@@ -700,10 +703,7 @@ describe('NodeManager live set and resume on start', () => {
 
   it('resumes live Claude nodes parents first, skipping missing, idle and worktree-less ones, then forgets the set', async () => {
     home = mkdtempSync(join(tmpdir(), 'tl-'));
-    const bin = join(home, 'bin');
-    mkdirSync(bin);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nsleep 5\n'); // stands in for claude
-    chmodSync(join(bin, 'claude'), 0o755);
+    const opts = fakeClaude(home);
     const transcript = join(home, 't.jsonl');
     writeFileSync(transcript, '');
     const now = Date.now(), day = 86_400_000;
@@ -714,7 +714,7 @@ describe('NodeManager live set and resume on start', () => {
       rec('exited', 'root'), // not in the live set
     ];
     writeFileSync(join(home, 'state.json'), JSON.stringify({ version: 1, nodes, live: ['kid', 'root', 'idle', 'nowt', 'deleted'] }));
-    m = new NodeManager({ home, shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` });
+    m = new NodeManager(opts);
     const order: string[] = [];
     const resume = m.resume.bind(m);
     m.resume = (id) => { order.push(id); return resume(id); };
@@ -731,7 +731,7 @@ describe('NodeManager live set and resume on start', () => {
 describe('NodeManager guardrails', () => {
   let home = '';
   let m: NodeManager;
-  afterEach(async () => { await m.shutdown(); rmSync(home, { recursive: true, force: true }); });
+  afterEach(async () => { vi.useRealTimers(); await m.shutdown(); rmSync(home, { recursive: true, force: true }); });
 
   it('refuses an agent spawn at each cap, naming it; the human is exempt', async () => {
     home = mkdtempSync(join(tmpdir(), 'tl-'));
@@ -754,12 +754,9 @@ describe('NodeManager guardrails', () => {
   });
 
   it('keeps each node\'s spend across a session restart and a daemon restart', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-06-01T12:00:00') }); // a fixed day, even across midnight
     home = mkdtempSync(join(tmpdir(), 'tl-'));
-    const bin = join(home, 'bin');
-    mkdirSync(bin);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nsleep 5\n'); // stands in for claude
-    chmodSync(join(bin, 'claude'), 0o755);
-    const opts = { home, shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` };
+    const opts = fakeClaude(home);
     m = new NodeManager(opts);
     const id = (await m.spawn({ kind: 'claude', title: 'c', cwd: home, byHuman: true })).id;
     const measure = (usd: number) => m.applyModEvent(id, { event: 'session.measure', payload: { cost: { usd } } });
@@ -771,18 +768,14 @@ describe('NodeManager guardrails', () => {
     m.shutdown();
     m = new NodeManager(opts);
     expect(m.view(id)!.spentUsd).toBeCloseTo(1.05);
-    expect(m.view(id)!.spentToday).toEqual({ day: new Date().toLocaleDateString('en-CA'), usd: expect.closeTo(1.05) });
+    expect(m.view(id)!.spentToday).toEqual({ day: '2026-06-01', usd: expect.closeTo(1.05) });
     measure(0.1); // the resumed node's first measure after the daemon restart
     expect(m.view(id)!.spentUsd).toBeCloseTo(1.15);
   });
 
   it('does not count a resumed session\'s earlier spend again after a daemon restart', async () => {
     home = mkdtempSync(join(tmpdir(), 'tl-'));
-    const bin = join(home, 'bin');
-    mkdirSync(bin);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nsleep 5\n'); // stands in for claude
-    chmodSync(join(bin, 'claude'), 0o755);
-    const opts = { home, shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` };
+    const opts = fakeClaude(home);
     m = new NodeManager(opts);
     const id = (await m.spawn({ kind: 'claude', title: 'c', cwd: home, byHuman: true })).id;
     const measure = (usd: number) => m.applyModEvent(id, { event: 'session.measure', payload: { cost: { usd } } });
@@ -795,13 +788,10 @@ describe('NodeManager guardrails', () => {
   });
 
   it('marks spend incomplete when a measure says some usage had no price, and only then', async () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-06-01T12:00:00') }); // a fixed day, even across midnight
+    const day = '2026-06-01';
     home = mkdtempSync(join(tmpdir(), 'tl-'));
-    const bin = join(home, 'bin');
-    mkdirSync(bin);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nsleep 5\n'); // stands in for claude
-    chmodSync(join(bin, 'claude'), 0o755);
-    m = new NodeManager({ home, shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` });
-    const day = new Date().toLocaleDateString('en-CA');
+    m = new NodeManager(fakeClaude(home));
     const unpriced = (await m.spawn({ kind: 'claude', title: 'unpriced', cwd: home, byHuman: true })).id;
     const priced = (await m.spawn({ kind: 'claude', title: 'priced', cwd: home, byHuman: true })).id;
     // Unpriced usage only: no known amount yet, but not a known $0.
@@ -833,11 +823,7 @@ describe('restart drain and the cut-off message', () => {
   /** Fake claude in a temp home; `claude(title)` spawns one with a resumable transcript. */
   async function setup() {
     home = mkdtempSync(join(tmpdir(), 'tl-drain-'));
-    const bin = join(home, 'bin');
-    mkdirSync(bin);
-    writeFileSync(join(bin, 'claude'), '#!/bin/sh\nsleep 30\n');
-    chmodSync(join(bin, 'claude'), 0o755);
-    const opts = { home: join(home, 'tl'), shell: '/bin/sh', path: `${bin}:/usr/bin:/bin` };
+    const opts = { ...fakeClaude(home, 'sleep 30'), home: join(home, 'tl') };
     m = new NodeManager(opts);
     const claude = async (title: string, extra = {}) => {
       const { id } = await m.spawn({ kind: 'claude', title, cwd: home, byHuman: true, ...extra });
