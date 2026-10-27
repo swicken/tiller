@@ -10,7 +10,7 @@ import type { NodeManager } from './manager.js';
 import { buildChildEnv } from './pty.js';
 import { tillerTrusts } from './trust.js';
 import { initialState } from './status.js';
-import { count, inside, logError } from './util.js';
+import { canonical, count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
 
 /** Main checkouts in which this daemon has created worktrees, so reconciliation finds them after a lost record. */
@@ -237,8 +237,8 @@ async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 's
   await wt.prune(repo);
   const entries = await wt.listWorktrees(repo);
   const live = (path: string) => m.registry.list().some((n) => m.session(n.id) && inside(n.cwd, path));
-  const dir = wt.canonical(join(repo, wt.WORKTREES_DIR)) + sep;
-  for (const e of entries.filter((x) => wt.canonical(x.path).startsWith(dir))) {
+  const dir = canonical(join(repo, wt.WORKTREES_DIR)) + sep;
+  for (const e of entries.filter((x) => canonical(x.path).startsWith(dir))) {
     const marker = await wt.readMarker(e.path);
     if (!marker || marker.home !== m.home || m.registry.get(marker.nodeId)?.worktree) continue; // not ours, or a node's
     const dirty = await wt.dirtyFiles(e.path);
