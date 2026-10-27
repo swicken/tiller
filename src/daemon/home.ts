@@ -14,8 +14,8 @@ export const REPO_FILE = 'repo';
 /** TL_HOME, else ~/.tiller. */
 export const homeDir = (): string => process.env.TL_HOME ?? join(homedir(), '.tiller');
 
-/** TL_PORT when set and non-empty, else the port file, else DEFAULT_PORT. */
-export function daemonPort(home = homeDir()): number {
-  if (process.env.TL_PORT) return Number(process.env.TL_PORT);
+/** TL_PORT (or `envPort`) when set and non-empty, else the port file, else DEFAULT_PORT. */
+export function daemonPort(home = homeDir(), envPort = process.env.TL_PORT): number {
+  if (envPort) return Number(envPort);
   try { return Number(readFileSync(join(home, PORT_FILE), 'utf8').trim()) || DEFAULT_PORT; } catch { return DEFAULT_PORT; }
 }
