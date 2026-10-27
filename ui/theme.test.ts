@@ -97,9 +97,8 @@ it('index.html pre-paint script resolves every stored value and OS like theme.ts
 });
 
 it('prefers-color-scheme is read only by theme.ts and the pre-paint script', () => {
-  // terminals.ts keeps its own query until it subscribes to theme.ts.
   const files = globSync('**/*.{css,ts,tsx,html}', { cwd: fileURLToPath(new URL('.', import.meta.url)), exclude: ['node_modules/**', 'dist/**', '**/*.test.ts'] });
-  expect(files.filter((f) => read(`./${f}`).includes('prefers-color-scheme')).sort()).toEqual(['index.html', 'terminals.ts', 'theme.ts']);
+  expect(files.filter((f) => read(`./${f}`).includes('prefers-color-scheme')).sort()).toEqual(['index.html', 'theme.ts']);
 });
 
 // WCAG 2.x contrast of the light tokens, including the tints that badges, counts and diff rows mix over a surface.

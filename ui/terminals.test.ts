@@ -4,11 +4,10 @@ import { createTerm, disposeTerm, shiftEnterKey } from './terminals';
 import { openExternalUrl } from './controls/externalLink';
 import { toast } from './store';
 
-const state = vi.hoisted(() => {
-  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn() }));
-  return { native: true };
-});
+const state = vi.hoisted(() => ({ native: true, theme: 'dark' as 'light' | 'dark', onTheme: [] as ((t: 'light' | 'dark') => void)[] }));
 vi.mock('@xterm/xterm', () => ({ Terminal: vi.fn(class {
+  options: ITerminalOptions;
+  constructor(options: ITerminalOptions) { this.options = { ...options }; }
   loadAddon = vi.fn();
   open = vi.fn();
   dispose = vi.fn();
@@ -18,6 +17,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: vi.fn(class {
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn(class {}) }));
 vi.mock('./url', () => ({ get IN_APP() { return state.native; } }));
 vi.mock('./controls/externalLink', () => ({ openExternalUrl: vi.fn() }));
+vi.mock('./theme', () => ({ currentTheme: () => state.theme, onThemeChange: (fn: (t: 'light' | 'dark') => void) => state.onTheme.push(fn) }));
 vi.mock('./store', () => ({ toast: vi.fn(), getState: () => ({ nodes: { node: { kind: 'agent' }, shell: { kind: 'terminal' } } }) }));
 
 afterEach(() => {
@@ -25,6 +25,28 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   state.native = true;
+  state.theme = 'dark';
+});
+
+const lastTerm = () => vi.mocked(Terminal).mock.results.at(-1)!.value as { options: ITerminalOptions };
+const setTheme = (t: 'light' | 'dark') => { state.theme = t; state.onTheme.forEach((fn) => fn(t)); };
+
+it('opens with the resolved theme and lifts contrast in light only', () => {
+  createTerm('node', {} as HTMLElement);
+  expect(lastTerm().options).toMatchObject({ theme: { background: '#0e1116' }, minimumContrastRatio: 1 });
+  disposeTerm('node');
+  state.theme = 'light';
+  createTerm('node', {} as HTMLElement);
+  expect(lastTerm().options).toMatchObject({ theme: { background: '#ffffff' }, minimumContrastRatio: 4.5 });
+});
+
+it('switches open terminals when the app theme changes', () => {
+  createTerm('node', {} as HTMLElement);
+  const { options } = lastTerm();
+  setTheme('light');
+  expect(options).toMatchObject({ theme: { background: '#ffffff' }, minimumContrastRatio: 4.5 });
+  setTheme('dark');
+  expect(options).toMatchObject({ theme: { background: '#0e1116' }, minimumContrastRatio: 1 });
 });
 
 function linkHandler() {
