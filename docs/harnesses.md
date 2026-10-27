@@ -343,6 +343,13 @@ the repository (such as a parent folder) stays and is shown as the source. With 
 selected, the field sets `claude.account`. Both write the home file, never the repository's
 `.tiller/config.json`.
 
+Changing a repository's account does not move its running sessions. A root Claude node whose
+account differs from the one a new session in its repository would now use shows **account
+changed** on its sidebar row, and its **Account** detail reads "Runs in work; this repository now
+uses other. Start a new session to switch." Its children run in its account, so only the root
+shows the warning. The warning updates when you save Settings; an edit to `config.json` by hand
+shows on the next Settings save or daemon restart. Nothing shows while `claude.accounts` is invalid.
+
 ### Check that it worked
 
 1. Open Settings → **Claude**. The **Claude account** field lists each account with its login

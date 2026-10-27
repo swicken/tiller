@@ -213,6 +213,13 @@ it('retains collapsed descendant attention, gate, unmerged and errored signals w
   expect(getState().collapsed).toEqual([]);
 });
 
+it('signals on the row when the repository now uses another account', () => {
+  const row = (node: typeof a) => renderToStaticMarkup(<NodeRow row={{ node, depth: 0, hasChildren: false, collapsed: false, descendants: [], guides: [], last: true }} />);
+  expect(row({ ...a, account: 'work', repoAccount: 'other' }))
+    .toContain('<span class="count warn" title="Runs in work; this repository now uses other. Start a new session to switch.">account changed</span>');
+  expect(row({ ...a, account: 'work' })).not.toContain('account changed');
+});
+
 it('preserves inline rename commit, cancellation and click-away handlers', () => {
   setRenaming({ id: child.id, at: 'row' });
   const input = RenameInput({ id: child.id, title: child.title });

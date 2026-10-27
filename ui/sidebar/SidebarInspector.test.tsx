@@ -178,3 +178,9 @@ it('shows the Claude account only when the node has one', () => {
   expect(html(mk('a', null, 0))).not.toContain('<dt>Account</dt>');
   expect(html({ ...mk('shell', null, 0, { state: 'none' }), kind: 'terminal', account: 'work' })).not.toContain('<dt>Account</dt>');
 });
+
+it('warns when the daemon reports the repository now uses another account, including from the default home', () => {
+  expect(html({ ...mk('a', null, 0), account: 'work', repoAccount: 'other' }))
+    .toContain('<dd><span class="warn">Runs in work; this repository now uses other. Start a new session to switch.</span></dd>');
+  expect(html({ ...mk('a', null, 0), repoAccount: 'work' })).toContain('Runs in default; this repository now uses work.');
+});

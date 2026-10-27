@@ -7,7 +7,7 @@ import { Icon } from '../controls/icons';
 import { RenameInput } from '../controls/RenameInput';
 import { selectNode, toggleCollapsed, useStore } from '../store';
 import { isAgentKind, needsYou } from '../../src/shared/protocol';
-import { kindTag, KIND_LABEL, statusKind, type Row } from './tree';
+import { accountMismatch, kindTag, KIND_LABEL, statusKind, type Row } from './tree';
 
 export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
   const { node, depth, hasChildren, collapsed, descendants } = row;
@@ -49,11 +49,12 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
           <span className={`row-state ${kind}`}>{node.kind === 'terminal' ? `terminal · ${state}` : state}</span>
           {s.activity && <span className={`row-activity${blocked ? ' warn' : ''}`} title={s.activity}>{s.activity}</span>}
         </div>
-        {(node.gate || node.outcome || node.worktree?.missing || s.git?.conflicts || hasChanges(node) || collapsed || (s.stalled && !s.exited)) && <div className="row-signals">
+        {(node.gate || node.outcome || node.repoAccount || node.worktree?.missing || s.git?.conflicts || hasChanges(node) || collapsed || (s.stalled && !s.exited)) && <div className="row-signals">
           {node.outcome && <span role="note" className={`count${node.outcome.outcome === 'failed' ? ' bad' : ''}`}
             aria-label={`Reported task outcome: ${outcome}`}
             title={`Reported task outcome: ${outcome}${node.outcome.summary ?? node.outcome.note ? ` · ${node.outcome.summary ?? node.outcome.note}` : ''}`}>
             {node.outcome.outcome === 'failed' ? outcome : `outcome ${outcome}`}</span>}
+          {node.repoAccount && <span className="count warn" title={accountMismatch(node)}>account changed</span>}
           {node.worktree?.missing && <span className="count warn" title="The worktree directory is gone; resume is refused">worktree missing</span>}
           {s.git?.conflicts && <span className="count warn" title={`Merging ${s.git.base} into ${s.git.branch} would conflict in:\n${s.git.conflicts.join('\n')}`}>
             conflicts with base · {s.git.conflicts.length}</span>}
