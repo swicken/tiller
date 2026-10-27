@@ -1,9 +1,10 @@
 // Pi selects its runtime cwd from the session header, not the CLI's launch directory.
 // Own the resumed copy in the current tree so its archive and transcript expire together.
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import type { NodeRecord } from '../shared/protocol.js';
+import { adoptedSessions, writeAdopted } from './transcript-adoption.js';
 
 export function piTranscript(sessionDir: string, nodeId: string, sessionId: string): string {
   // Archive lines can be edited by agents; never let an id escape the owned directory.
@@ -43,7 +44,7 @@ export function preparePiTranscript(n: NodeRecord, sessionDir: string, resume = 
   }
   // Copy the current file and any recorded prior sessions, never append to the archived source.
   // Validate before writing, and refuse collisions rather than silently resuming stale content.
-  const copies = [n.sessionId, ...(n.previousSessions ?? []).filter((sid) => !n.sessionHistory?.some((s) => s.sessionId === sid))].map((sid) => {
+  const copies = adoptedSessions(n).map((sid) => {
     const to = piTranscript(sessionDir, n.id, sid);
     const from = sid === n.sessionId ? source : join(dirname(source), `${sid}.jsonl`);
     if (!existsSync(from) && (sid !== n.sessionId || !resume)) return undefined; // Missing prior file, or a fresh restart session.
@@ -51,16 +52,6 @@ export function preparePiTranscript(n: NodeRecord, sessionDir: string, resume = 
     return { to, raw: withCwd(readFileSync(from, 'utf8'), n.cwd) };
   }).filter((c) => c !== undefined);
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  const created: string[] = [];
-  try {
-    for (const { to, raw } of copies) {
-      const fd = openSync(to, 'wx', 0o600); // Once open succeeds, even a partial write belongs to us.
-      created.push(to);
-      try { writeFileSync(fd, raw); } finally { closeSync(fd); }
-    }
-  } catch (err) {
-    for (const file of created) rmSync(file, { force: true });
-    throw err;
-  }
+  writeAdopted(copies);
   return target;
 }

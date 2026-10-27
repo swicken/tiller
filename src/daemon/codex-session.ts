@@ -1,9 +1,9 @@
 // Tiller owns this readable transcript; Codex owns the native thread referenced by its header.
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { NodeRecord } from '../shared/protocol.js';
 import { codexHeader } from '../shared/codex-transcript.js';
-export { codexHeader, type CodexHeader } from '../shared/codex-transcript.js';
+import { adoptedSessions, writeAdopted } from './transcript-adoption.js';
 
 export function codexTranscript(sessionDir: string, nodeId: string, sessionId: string): string {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(sessionId)) throw new Error('invalid Codex session id');
@@ -21,7 +21,7 @@ export function prepareCodexTranscript(n: NodeRecord, sessionDir: string, resume
     return target;
   }
   // A follow-up forks the native thread, so two nodes never append to the same conversation.
-  const copies = [n.sessionId, ...(n.previousSessions ?? []).filter((sid) => !n.sessionHistory?.some((s) => s.sessionId === sid))].flatMap((sid) => {
+  const copies = adoptedSessions(n).flatMap((sid) => {
     const from = sid === n.sessionId ? source : join(dirname(source), `${sid}.jsonl`);
     if (!existsSync(from)) return [];
     const to = codexTranscript(sessionDir, n.id, sid);
@@ -30,17 +30,6 @@ export function prepareCodexTranscript(n: NodeRecord, sessionDir: string, resume
     const newline = raw.indexOf('\n');
     return [{ to, raw: JSON.stringify({ ...header, fork: true }) + (newline < 0 ? '\n' : raw.slice(newline)) }];
   });
-  const created: string[] = [];
-  try {
-    for (const copy of copies) {
-      // Remove only files this adoption created if a later copy fails.
-      const fd = openSync(copy.to, 'wx', 0o600);
-      created.push(copy.to);
-      try { writeFileSync(fd, copy.raw); } finally { closeSync(fd); }
-    }
-  } catch (error) {
-    for (const path of created) rmSync(path, { force: true });
-    throw error;
-  }
+  writeAdopted(copies);
   return target;
 }
