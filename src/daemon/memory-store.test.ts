@@ -976,36 +976,6 @@ describe('the gardener (v3)', () => {
     expect(existsSync(join(home, 'memory'))).toBe(false);
   });
 
-  it('offers a cluster that keeps an older question, pitfall or procedure the supersede by its newest member instead', () => {
-    const s = open();
-    filler(s);
-    const ids = seed(s, {
-      old: item('procedure', 'npx jest sessions/schema-guard.test.ts -t decodeSchema --runInBand'),
-      short: item('procedure', 'npm ci'),
-      note: item('note', 'release notes live in the wiki'),
-      fresh: item('pitfall', 'webpack build fails because node modules cache holds stale lockfile'),
-      by: item('procedure', 'npx vitest run sessions/schema-guard.test.ts -t decodeSchema'),
-      shortBy: item('procedure', 'npm ci --silent'),
-      noteBy: item('note', 'release notes live in the team wiki'),
-      freshDup: item('pitfall', 'webpack build fails because the node modules cache holds a stale lockfile'),
-    });
-    // The stale command was seen more, so it is the keep; the newer pitfall was seen more, so it is.
-    for (let i = 0; i < 2; i++) s.apply(scope('n-r1'), derived([item('procedure', 'npx jest sessions/schema-guard.test.ts -t decodeSchema --runInBand'), item('pitfall', 'webpack build fails because the node modules cache holds a stale lockfile')]));
-    const page = s.gardenPage(undefined, start(s), { callsLeft: 19 });
-    if (!('items' in page)) throw new Error('refused');
-    const alt = (old: number, by: number) => `if these are not the same lesson (a command, path or flag changed), supersede m${old} by m${by} instead of merging`;
-    const byKeep = Object.fromEntries(page.clusters.map((c) => [c.keep, c]));
-    expect(byKeep[`m${ids.old}`]).toEqual({ kind: 'procedure', keep: `m${ids.old}`, ids: [`m${ids.old}`, `m${ids.by}`], alternative: alt(ids.old, ids.by) });
-    expect(byKeep[`m${ids.short}`]).not.toHaveProperty('alternative'); // under three terms
-    expect(byKeep[`m${ids.note}`]).not.toHaveProperty('alternative'); // a note is only merged
-    expect(byKeep[`m${ids.freshDup}`]).not.toHaveProperty('alternative'); // the keep is the newer
-    expect(Object.keys(byKeep).sort()).toEqual([ids.old, ids.short, ids.note, ids.freshDup].map((id) => `m${id}`).sort());
-    expect(page.supersedeHints).toEqual([]); // the alternative is the cluster's, not a separate proposal
-    // The alternative passes the store's own supersede checks.
-    const run = page.run.slice(1);
-    expect(s.gardenApply(undefined, Number(run), { action: 'supersede', id: ids.old, by: ids.by, reason: 'jest replaced by vitest' })).toMatchObject({ ok: true });
-  });
-
   it('freezes the candidates, proposes the cluster and the hint, and lists them on page 1', () => {
     const s = open();
     const ids = fixture(s);
@@ -1120,6 +1090,27 @@ describe('the gardener (v3)', () => {
     s.endRun(undefined, run, 'done');
     expect(merge(s, run, [ids.A, ids.B])).toEqual(refused('not running'));
     expect(s.gardenPage(undefined, run, { callsLeft: 1 })).toEqual(refused('not running'));
+  });
+
+  it('refuses a same-kind supersede by a near-copy as copy, never one by a ledger line', () => {
+    const s = open();
+    filler(s);
+    const words = ['amber', 'basalt', 'cobalt', 'dune', 'ember', 'fjord', 'garnet', 'harbor', 'indigo', 'jasper', 'krypton', 'lagoon',
+      'marble', 'nickel', 'onyx', 'pewter', 'quartz', 'russet', 'saffron', 'topaz'];
+    const text = (n: number, extra: string) => `${words.slice(0, n).join(' ')} ${extra}`;
+    // Containment of the hidden note in each by: 20, 19 and 15 of its 20 terms.
+    const ids = seed(s, {
+      hidden: item('note', text(20, '')), question: item('open_question', text(20, 'zircon')),
+      by100: item('note', text(20, 'plus a poisoned claim')), by95: item('note', text(19, 'with vellum')), by75: item('note', text(15, 'with umber')),
+      ledger: item('ledger', `${text(20, 'zircon')} answered`, 'daemon'),
+    });
+    const run = start(s);
+    const copy = (by: number) => ({ ok: false, rule: 'copy', message: `refused (copy): m${by} is a near-copy of m${ids.hidden}; merge them instead` });
+    expect(supersede(s, run, ids.hidden, ids.by100)).toEqual(copy(ids.by100));
+    expect(supersede(s, run, ids.hidden, ids.by95)).toEqual(copy(ids.by95));
+    expect(supersede(s, run, ids.hidden, ids.by75)).toMatchObject({ ok: true, hidden: ids.hidden, by: ids.by75 });
+    expect(supersede(s, run, ids.question, ids.ledger)).toMatchObject({ ok: true, hidden: ids.question, by: ids.ledger });
+    expect(s.run(undefined, run).stats.refused).toEqual({ copy: 2 });
   });
 
   it('caps hides at a quarter of the hideable candidates, and supersedes at ten', () => {
@@ -1388,7 +1379,8 @@ describe('the gardener (v3)', () => {
     it('fails a merge whose chain ends on an item the run superseded, which the daemon undo then reverts', () => {
       const s = open();
       const ids = fixture(s);
-      const newer = seed(s, { D: item('pitfall', 'parser crashes when socket timeout expires under load') });
+      // D holds 3 of C's 4 terms: enough to supersede C, short of a near-copy (copyContained).
+      const newer = seed(s, { D: item('pitfall', 'parser crashes when socket stalls under load') });
       filler(s);
       const run = start(s);
       expect(merge(s, run, [ids.B, ids.C])).toMatchObject({ ok: true, kept: ids.C });

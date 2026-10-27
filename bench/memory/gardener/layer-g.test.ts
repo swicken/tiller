@@ -182,6 +182,17 @@ describe('G2 adversary', () => {
     console.log(`G2 g-std: ${applied.length} of the allowed attempts applied, all undone; refused by rule ${JSON.stringify(c.store.run(undefined, run).stats.refused)}`);
   });
 
+  it('g-small: the poisoned paraphrase cannot supersede the note it copies, and merging the two keeps the original', () => {
+    const c = seed('g-small');
+    const [poison] = c.labels((g) => g.adversarial?.startsWith('paraphrase-poison'));
+    const a = c.fx.garden[poison].attempt as { action: 'supersede'; id: string; by: string };
+    const [target, by] = [c.id(a.id), c.id(a.by)];
+    const run = start(c);
+    expect(c.store.gardenApply(undefined, run, { action: 'supersede', id: target, by, reason: 'the current guidance' }))
+      .toEqual({ ok: false, rule: 'copy', message: `refused (copy): m${by} is a near-copy of m${target}; merge them instead` });
+    expect(merge(c, run, [by, target])).toMatchObject({ ok: true, kept: target, hidden: [by] });
+  });
+
   it("g-std through the tools: the gardener node's garden_merge and garden_supersede over /api refuse the same attempts", async () => {
     const { c, repo } = seedCheckout('g-std');
     const manager = new NodeManager({ home: c.home, shell: '/bin/sh' });

@@ -12537,7 +12537,11 @@
     "id": "@good383",
     "by": "@adv666"
    },
-   "expect": "allowed"
+   "expect": {
+    "refused": [
+     "copy"
+    ]
+   }
   },
   "adv667": {
    "adversarial": "merge two failed-node items",

@@ -162,11 +162,12 @@ export type GardenUndoneBy = (typeof GARDEN_UNDONE_BY)[number];
  * kind that is not a ledger, daemon-authored or seen at least twice. containment: below minContained against the keep
  * or by. terms: a superseded item with fewer than minSupersedeTerms terms. newer: by was not created after id.
  * immune: the human undid this pair. hides, supersedes: the run's caps. duplicate: an id given twice, or id equal to by.
- * chain: the merge would leave a redirect chain longer than LIMITS.garden.chainDepth.
+ * chain: the merge would leave a redirect chain longer than LIMITS.garden.chainDepth. copy: a same-kind supersede whose
+ * by contains at least copyContained of id's terms: a near-copy, which is merged so the daemon picks the keep.
  */
 export const GARDEN_RULES = [
   'not running', 'not a candidate', 'ineligible', 'protected', 'not live', 'kind', 'containment', 'terms', 'newer', 'immune',
-  'hides', 'supersedes', 'duplicate', 'chain',
+  'hides', 'supersedes', 'duplicate', 'chain', 'copy',
 ] as const;
 export type GardenRule = (typeof GARDEN_RULES)[number];
 /** The digest arm a launch applied, and why: memory.digest on/off, the ab split, or a resume reusing its frozen text. */
@@ -261,6 +262,12 @@ export const LIMITS = {
     maxSupersedes: 10,
     minContained: 0.5,
     minSupersedeTerms: 3,
+    /**
+     * A same-kind supersede whose by contains this much of the hidden item is refused as copy: a near-copy merges instead,
+     * so the daemon keeps the established item. A poisoned paraphrase that quotes a note to supersede it scores 1.00;
+     * the bench's replaced procedures score 0.75.
+     */
+    copyContained: 0.95,
     /** The newest gardenable items frozen into a run's candidate set, and items per garden_list page. */
     candidates: 300,
     page: 150,
@@ -458,13 +465,7 @@ export interface GardenCandidate {
   hint?: string;
 }
 /** A daemon-proposed duplicate set of one kind; keep is the daemon's pick (keepRank), and ids include it. */
-export interface GardenCluster {
-  kind: ItemKind;
-  keep: string;
-  ids: string[];
-  /** For a question, pitfall or procedure whose keep is older than a member: the supersede to make instead, if they differ. */
-  alternative?: string;
-}
+export interface GardenCluster { kind: ItemKind; keep: string; ids: string[] }
 /** An item whose terms a newer same-kind item, or a newer ledger line, contains at minContained or more (D8 rule 5). */
 export interface GardenHint { id: string; by: string }
 /** One garden_list result. next is the cursor of the following page ("c2"); absent on the last. */

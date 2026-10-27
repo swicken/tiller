@@ -193,8 +193,6 @@ const unfit = (r: EligibleRow, refuse: Refuse): GardenRefused | undefined =>
 const protectedWhy = (r: ItemRow): string | undefined =>
   (r.pinned ? 'pinned' : r.author === 'human' ? "the human's" : r.kind === 'ledger' ? 'a ledger line' : undefined);
 const gardenBy = (runId: number) => `gardener:${runRef(runId)}`;
-/** The kinds a supersede hint may hide: notes are only merged. */
-const HINT_KINDS: readonly ItemKind[] = ['open_question', 'pitfall', 'procedure'];
 /** A duration as "40m", "5h" or "12d". */
 function since(ms: number): string {
   const min = Math.max(0, Math.floor(ms / 60_000));
@@ -205,13 +203,11 @@ const emptySnapshot = (): GardenSnapshot => ({ live: {}, digest: { ids: [], char
 /**
  * The daemon's proposals over live, eligible rows (§3.4). clusters: union-find over same-kind pairs whose lower-ranked
  * member is hideable, not immune against the higher, and contained in it at minContained; each cluster is its keep
- * (keepRank) first, then the members that pass against that keep. hints: an open question, pitfall or procedure outside
- * every cluster, with at least minSupersedeTerms terms, and the newer same-kind item or ledger line containing the most of it.
- * alternatives, one per cluster: when a cluster of a hint kind keeps an older item, a supersede of that keep by the newest
- * member that passes the same rule-5 checks, since only the model can tell a duplicate from a command that changed (a
- * stale command often has the higher seen, so it is the keep). immune holds "<item>:<into>" pairs.
+ * (keepRank) first, then the members that pass against that keep. hints: an open question or pitfall outside every
+ * cluster, with at least minSupersedeTerms terms, and the newer same-kind item or ledger line containing the most of it.
+ * immune holds "<item>:<into>" pairs.
  */
-function propose(rows: ItemRow[], immune: Set<string>): { clusters: ItemRow[][]; alternatives: ([ItemRow, ItemRow] | undefined)[]; hints: [ItemRow, ItemRow][] } {
+function propose(rows: ItemRow[], immune: Set<string>): { clusters: ItemRow[][]; hints: [ItemRow, ItemRow][] } {
   const g = LIMITS.garden;
   const terms = new Map(rows.map((r) => [r.id, ftsTerms(r.text, Infinity)]));
   const sets = new Map(rows.map((r) => [r.id, new Set(terms.get(r.id))]));
@@ -245,16 +241,9 @@ function propose(rows: ItemRow[], immune: Set<string>): { clusters: ItemRow[][];
     return members.length ? [[keep, ...members]] : [];
   });
   const clustered = new Set(clusters.flat().map((r) => r.id));
-  const supersedable = (h: ItemRow) => HINT_KINDS.includes(h.kind) && !protectedWhy(h) && terms.get(h.id)!.length >= g.minSupersedeTerms;
-  const alternatives = clusters.map(([keep, ...members]): [ItemRow, ItemRow] | undefined => {
-    if (!supersedable(keep)) return undefined;
-    const by = members.filter((m) => m.created_at > keep.created_at && !immune.has(`${keep.id}:${m.id}`) && covers(keep, m) >= g.minContained)
-      .sort((a, b) => b.created_at - a.created_at || b.id - a.id)[0];
-    return by && [keep, by];
-  });
   const hints: [ItemRow, ItemRow][] = [];
   for (const h of rows) {
-    if (!supersedable(h) || clustered.has(h.id)) continue;
+    if ((h.kind !== 'open_question' && h.kind !== 'pitfall') || clustered.has(h.id) || protectedWhy(h) || terms.get(h.id)!.length < g.minSupersedeTerms) continue;
     let best: ItemRow | undefined, score: number = g.minContained;
     for (const by of rows) {
       if (by.created_at <= h.created_at || (by.kind !== h.kind && by.kind !== 'ledger') || immune.has(`${h.id}:${by.id}`)) continue;
@@ -263,7 +252,7 @@ function propose(rows: ItemRow[], immune: Set<string>): { clusters: ItemRow[][];
     }
     if (best) hints.push([h, best]);
   }
-  return { clusters, alternatives, hints };
+  return { clusters, hints };
 }
 
 function runView(r: RunRow): GardenRunView {
@@ -793,7 +782,7 @@ export class MemoryStore implements DigestSource, GardenStore {
         const mark = recent[0]?.watermark ?? 0;
         const newItems = Number((db.prepare(`SELECT count(*) AS n FROM items i WHERE i.repo_id = ? AND i.id > ? AND i.invalid_at IS NULL
           AND i.pinned = 0 AND i.kind IN (${GARDEN_IN}) AND ${ELIGIBLE}`).get(repo.id, mark) as { n: number }).n);
-        const p = newItems ? this.freeze(db, repo.id).proposals : { clusters: [], alternatives: [], hints: [] };
+        const p = newItems ? this.freeze(db, repo.id).proposals : { clusters: [], hints: [] };
         const proposals = p.clusters.filter((c) => c.some((r) => r.id > mark)).length + p.hints.filter(([h, by]) => h.id > mark || by.id > mark).length;
         return { key, repoKey: repo.key, repoPath: repo.path, newItems, proposals, recent };
       });
@@ -865,17 +854,11 @@ export class MemoryStore implements DigestSource, GardenStore {
         }
       }
       const shown = (r: EligibleRow) => r.invalid_at === null && r.eligible === 1;
-      const p = n === 1 ? propose(rows.filter(shown), this.immunePairs(db)) : { clusters: [], alternatives: [], hints: [] };
+      const p = n === 1 ? propose(rows.filter(shown), this.immunePairs(db)) : { clusters: [], hints: [] };
       return {
         run: runRef(run.id), page: n, pages: Math.max(1, pages.length), ...(n < pages.length ? { next: `c${n + 1}` } : {}), now,
         rules: { ...this.left(db, run.id, stats), callsLeft: q.callsLeft, minContained: g.minContained },
-        clusters: p.clusters.map(([keep, ...rest], i) => {
-          const alt = p.alternatives[i];
-          return {
-            kind: keep.kind, keep: itemRef(keep.id), ids: [keep, ...rest].map((r) => itemRef(r.id)),
-            ...(alt ? { alternative: `if these are not the same lesson (a command, path or flag changed), supersede ${itemRef(alt[0].id)} by ${itemRef(alt[1].id)} instead of merging` } : {}),
-          };
-        }),
+        clusters: p.clusters.map(([keep, ...rest]) => ({ kind: keep.kind, keep: itemRef(keep.id), ids: [keep, ...rest].map((r) => itemRef(r.id)) })),
         supersedeHints: p.hints.map(([h, by]) => ({ id: itemRef(h.id), by: itemRef(by.id) })),
         items: (pages[n - 1] ?? []).filter(shown).map((r) => candidateView(r, now)),
       };
@@ -937,7 +920,10 @@ export class MemoryStore implements DigestSource, GardenStore {
           && refuse('kind', `${ref(by)} is a ${by.kind}: a supersede's by is the same kind, a ledger line, daemon-written or seen twice`))
         || (by.created_at <= item.created_at && refuse('newer', `${ref(by)} is not newer than ${ref(item)}`))
         || (ftsTerms(item.text, Infinity).length < g.minSupersedeTerms && refuse('terms', `${ref(item)} has under ${g.minSupersedeTerms} terms`))
-        || cover(item, by) || immune(item, by)
+        || cover(item, by)
+        || (by.kind === item.kind && contained(item.text, by.text) >= g.copyContained
+          && refuse('copy', `${ref(by)} is a near-copy of ${ref(item)}; merge them instead`))
+        || immune(item, by)
         || (done.hidesLeft < 1 && refuse('hides', 'this run may hide no more items'))
         || (done.supersedesLeft < 1 && refuse('supersedes', 'this run may supersede no more items'));
       if (refused) return refused;
