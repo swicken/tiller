@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import type { InstalledReleaseNotes, ReleaseUpdate, UpdateStatus } from '../shared/protocol.js';
+import { pidAlive } from './util.js';
 
 export const REPO = fileURLToPath(new URL('../..', import.meta.url));
 export const UPDATE_LOG = 'update.log';
@@ -291,9 +292,7 @@ export function lockFileHolder(path: string): LockHolder | undefined {
     return { path, stale: false };
   }
   if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) return { path, stale: false };
-  // EPERM means the process exists under another user.
-  try { process.kill(pid, 0); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') return { path, pid, stale: true }; }
-  return { path, pid, stale: false };
+  return { path, pid, stale: !pidAlive(pid) };
 }
 
 export const UPDATE_NOTES = 'update-notes.json';

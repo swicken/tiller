@@ -12,8 +12,6 @@ import { expandHome } from './util.js';
 
 export const MERGE_STYLES = ['merge', 'squash', 'ff-only'] as const;
 export type MergeStyle = (typeof MERGE_STYLES)[number];
-export const NOTIFY_KINDS = ['needsYou', 'done', 'errored', 'exited'] as const;
-export type NotifyKind = (typeof NOTIFY_KINDS)[number];
 export const NOTIFY_LEVELS = ['banner', 'sound', 'silent'] as const;
 export type NotifyLevel = (typeof NOTIFY_LEVELS)[number];
 /** "HH:MM-HH:MM", local time; the end may be earlier than the start (across midnight). */
@@ -276,7 +274,7 @@ export function effectiveProfileEntries(entries: Record<string, SettingsEntry>):
  * a project mapped to one account would silently run in Claude's default home, so callers that pick an account fail closed on this instead.
  */
 export function claudeAccountsError(home = homeDir()): string | undefined {
-  const path = join(home, 'config.json'), claude = homeClaude(path), listError = claudeAccountListError(home);
+  const path = join(home, 'config.json'), claude = homeClaude(path), listError = accountListError(path, claude?.accounts);
   if (listError) return listError;
   const account = claude?.account;
   if (account !== undefined && !(Array.isArray(claude?.accounts) && claude.accounts.some((a: { name?: unknown }) => a?.name === account))) {
@@ -287,7 +285,11 @@ export function claudeAccountsError(home = homeDir()): string | undefined {
 
 /** Why the home file's claude.accounts list itself is invalid, or undefined (claude.account aside). */
 export function claudeAccountListError(home = homeDir()): string | undefined {
-  const path = join(home, 'config.json'), accounts = homeClaude(path)?.accounts;
+  const path = join(home, 'config.json');
+  return accountListError(path, homeClaude(path)?.accounts);
+}
+
+function accountListError(path: string, accounts: unknown): string | undefined {
   if (accounts === undefined) return undefined;
   const r = ClaudeAccounts.safeParse(accounts);
   return r.success ? undefined : `claude.accounts in ${path} is invalid: ${r.error.issues.map((i) => `${['claude', 'accounts', ...i.path].join('.')}: ${i.message}`).join('; ')}`;

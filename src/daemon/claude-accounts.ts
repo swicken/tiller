@@ -1,13 +1,13 @@
 // Claude accounts (home config claude.accounts): each is a CLAUDE_CONFIG_DIR, or Claude's default home when it has none.
 // A node records the account's name; its directory is looked up in the config at every launch.
 import { execFile } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ClaudeAccountView } from '../shared/protocol.js';
 import { claudeAccountsError, loadConfig } from './config.js';
 import { buildChildEnv } from './pty.js';
-import { expandHome, inside } from './util.js';
+import { canonical, expandHome, inside } from './util.js';
 
 export interface ClaudeAccount { name: string; configDir?: string; projects: string[] }
 
@@ -24,7 +24,7 @@ export function claudeAccounts(home: string): ClaudeAccount[] {
 }
 
 /** A project path for comparison: expanded and, when it exists, its real path (Settings writes real paths). */
-export const canonicalProject = (path: string) => { const p = expandHome(path); try { return realpathSync(p); } catch { return p; } };
+export const canonicalProject = (path: string) => canonical(expandHome(path));
 
 /**
  * The account a root node in `dir` runs in and why: the account whose `projects` entry contains it (longest wins, then
