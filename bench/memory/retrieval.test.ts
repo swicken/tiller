@@ -156,7 +156,7 @@ describe('R2a fixture', () => {
   afterAll(() => r?.close());
   const needs = r2aNeeds();
   /** ftsTerms tokens of a whole text, uncapped: ftsTerms per whitespace-separated chunk. */
-  const tokens = (s: string) => new Set(s.split(/\s+/).flatMap(ftsTerms));
+  const tokens = (s: string) => new Set(s.split(/\s+/).flatMap((chunk) => ftsTerms(chunk, Infinity)));
 
   it('has at least 350 items, 40 needs (10 with zero relevance), and one lexical, two paraphrase, one synonym and one harness query each', () => {
     expect(r.case.rows().length).toBeGreaterThanOrEqual(350);
