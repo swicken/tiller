@@ -59,12 +59,12 @@ function summarize(v: NodeView, now: number, all: NodeView[]) {
 
 function worktreeSummary(v: NodeView) {
   const w = v.worktree!, g = v.status.git;
-  return { path: w.path, branch: w.branch, base: w.base, ahead: g?.ahead, behind: g?.behind, dirty: g?.dirty, missing: !!w.missing, merged: !!g?.mergedAt };
+  return { path: w.path, branch: w.branch, base: w.base, ahead: g?.ahead, behind: g?.behind, dirty: g?.dirty, missing: !!w.missing, merged: !!g?.mergedAt, conflicts: g?.conflicts };
 }
 
-/** `⎇ tl/n-3f2a ↑3 ↓1 dirty merged` for the tree line. */
+/** `⎇ tl/n-3f2a ↑3 ↓1 conflicts:2 dirty merged` for the tree line. */
 function branchText(w: ReturnType<typeof worktreeSummary>): string {
-  return [`⎇ ${w.branch} from ${w.base}`, w.ahead && `↑${w.ahead}`, w.behind && `↓${w.behind}`, w.dirty && 'dirty', w.merged && 'merged', w.missing && '(worktree missing)'].filter(Boolean).join(' ');
+  return [`⎇ ${w.branch} from ${w.base}`, w.ahead && `↑${w.ahead}`, w.behind && `↓${w.behind}`, w.conflicts && `conflicts:${w.conflicts.length}`, w.dirty && 'dirty', w.merged && 'merged', w.missing && '(worktree missing)'].filter(Boolean).join(' ');
 }
 
 function modelInfo(n: ReturnType<typeof summarize>): string {
