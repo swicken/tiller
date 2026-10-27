@@ -46,14 +46,14 @@ export function memoryOn(home: string, projectDir: string | null, account: strin
 
 export type MemorySetting = 'on' | 'off' | 'inherit';
 /** What `tl memory on|off|inherit` changes: an account's memory, a project's memory.projects entry, or neither (memory.enabled). */
-export interface MemoryTarget { account?: string; project?: string }
+interface SwitchTarget { account?: string; project?: string }
 
 /**
  * Apply one memory opt-in to home file `data` in place, validating it: `inherit` removes the setting. A project's entry
  * replaces its exact-path entries, as Settings does for an account's projects. Shared by `tl memory` and Settings, so both
  * write the same bytes.
  */
-export function applyMemorySetting(data: Record<string, unknown>, home: string, target: MemoryTarget, value: MemorySetting): void {
+export function applyMemorySetting(data: Record<string, unknown>, home: string, target: SwitchTarget, value: MemorySetting): void {
   if (target.account !== undefined && target.project !== undefined) throw new SettingsError(400, 'Choose an account or a project, not both');
   const path = join(home, 'config.json');
   const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -85,7 +85,7 @@ export function applyMemorySetting(data: Record<string, unknown>, home: string, 
 }
 
 /** Set or remove (inherit) one memory opt-in in the home file, with Settings' atomic writer: a concurrent edit fails with 409. */
-export function switchMemory(home: string, target: MemoryTarget, value: MemorySetting): void {
+export function switchMemory(home: string, target: SwitchTarget, value: MemorySetting): void {
   const path = join(home, 'config.json'), { raw, data } = read(path);
   applyMemorySetting(data, home, target, value);
   writeConfig(path, data, revision(raw));

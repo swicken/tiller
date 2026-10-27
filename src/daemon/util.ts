@@ -1,7 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
+import { statSync } from 'node:fs';
 import type http from 'node:http';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 
 /** Constant-time string comparison for tokens. */
 export function safeEqual(a: string, b: string): boolean {
@@ -20,6 +21,11 @@ export const inside = (path: string, dir: string) => path === dir || path.starts
 
 /** `~/x` under the user's home, then path.resolve: no trailing slash, no realpath. */
 export const expandHome = (path: string) => resolve(path.startsWith('~/') ? join(homedir(), path.slice(2)) : path);
+
+/** Throws unless `path`, the argument `name`, is the absolute path of an existing directory. */
+export function requireDir(path: string, name: string): void {
+  if (!isAbsolute(path) || !statSync(path, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${name} must be the absolute path of a directory: ${path}`);
+}
 
 /** For `.catch(logError)` on fire-and-forget promises. */
 export const logError = (err: unknown): void => console.error('tiller:', err);

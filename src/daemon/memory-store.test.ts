@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  LIMITS, normalizeDedupe, type Actor, type Derived, type DerivedItem, type EpisodeInput, type ItemKind, type MemoryScope,
+  LIMITS, normalizeDedupe, type Actor, type Derived, type DerivedItem, type HistoryEntry, type ItemKind, type MemoryScope,
 } from './memory-schema.js';
 import { DIGEST_SECTIONS, digestFor } from './memory-digest.js';
 import { ftsQuery, MemoryStore, readFailure } from './memory-store.js';
@@ -40,9 +40,9 @@ const human: Actor = { kind: 'human' };
 const agent = (nodeId = 'n-w1', rootId = 'n-r1'): Actor => ({ kind: 'agent', nodeId, rootId, harness: 'claude', model: 'claude-x' });
 const item = (kind: ItemKind, text: string, author: DerivedItem['author'] = 'agent', body?: string): DerivedItem =>
   ({ kind, text, author, dedupe: normalizeDedupe(kind, text), ...(body === undefined ? {} : { body }) });
-const derived = (items: DerivedItem[], episode: EpisodeInput = { kind: 'spawn', ts: clock, data: { parentId: null, kind: 'claude' } }, cites: number[] = []): Derived =>
+const derived = (items: DerivedItem[], episode: HistoryEntry = { kind: 'spawn', ts: clock, data: { parentId: null, kind: 'claude' } }, cites: number[] = []): Derived =>
   ({ episode, items, cites });
-const outcome = (outcome: 'succeeded' | 'failed', gate?: 'passed' | 'failed', ts = clock): EpisodeInput =>
+const outcome = (outcome: 'succeeded' | 'failed', gate?: 'passed' | 'failed', ts = clock): HistoryEntry =>
   ({ kind: 'outcome', ts, data: { outcome, ...(gate ? { gate } : {}) } });
 /** A raw handle on the account file, for checks the store does not expose. */
 const raw = () => new DatabaseSync(file());
@@ -133,6 +133,9 @@ describe('upsert and retraction', () => {
     for (let i = 0; i < 20; i++) s.add(scope(), agent('n-cap'), { kind: 'note', text: `note ${i}` });
     expect(() => s.add(scope(), agent('n-cap'), { kind: 'note', text: 'the twenty-first' })).toThrow('memory_add is limited to 20 per node');
     expect(s.add(scope(), agent('n-other'), { kind: 'note', text: 'the twenty-first' }).id).toBeGreaterThan(1);
+    const ids = Array.from({ length: 21 }, (_, i) => s.add(scope(), human, { kind: 'note', text: `human note ${i}` }).id);
+    for (const id of ids.slice(0, 20)) s.forget(scope(), agent('n-cap'), { id, reason: 'stale' });
+    expect(() => s.forget(scope(), agent('n-cap'), { id: ids[20]!, reason: 'stale' })).toThrow('memory_forget is limited to 20 per node');
   });
 
   it('pins restore a retracted item, and unpin undoes a pin', () => {
@@ -401,7 +404,7 @@ describe('search, history and eligibility', () => {
 
   it("returns a node's episodes since its latest outcome", () => {
     const s = open();
-    const gate = (ok: boolean): EpisodeInput => ({ kind: 'gate', ts: clock, data: { ok, command: 'npm test', attempt: 1 } });
+    const gate = (ok: boolean): HistoryEntry => ({ kind: 'gate', ts: clock, data: { ok, command: 'npm test', attempt: 1 } });
     s.apply(scope(), derived([], gate(false)));
     s.apply(scope(), derived([], outcome('failed', 'failed')));
     s.apply(scope(), derived([], gate(false)));

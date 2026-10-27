@@ -5,14 +5,16 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Gardener, type GardenHost } from './gardener.js';
-import { NodeManager } from './manager.js';
+import type { Gardener } from './gardener.js';
+import type { NodeManager } from './manager.js';
 import { switchMemory } from './memory-config.js';
-import { startServer, type DaemonServer } from './server.js';
+import { startTestDaemon, type TestDaemon } from './memory-test-daemon.js';
+import type { DaemonServer } from './server.js';
 
 // The garden tools and memory_garden over /api and /mcp, against a real store and a Gardener whose host spawns a
 // terminal node relabelled as a gardener record, so no harness runs.
 let dir: string, home: string, repo: string, manager: NodeManager, server: DaemonServer, gardener: Gardener;
+let api: TestDaemon['api'], token: TestDaemon['token'], agent: TestDaemon['agent'], close: TestDaemon['close'];
 
 beforeEach(async () => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), 'tl-gardentools-')));
@@ -20,51 +22,25 @@ beforeEach(async () => {
   repo = join(dir, 'repo');
   for (const d of [home, repo]) mkdirSync(d);
   execFileSync('git', ['init', '-q', repo]);
-  manager = new NodeManager({ home, shell: '/bin/sh' });
-  server = await startServer(manager, { port: 0 });
-  vi.spyOn(server.updates, 'start').mockImplementation(() => {});
+  let useGardener: TestDaemon['useGardener'];
+  ({ manager, server, api, token, agent, useGardener, close } = await startTestDaemon(home));
   switchMemory(home, {}, 'on');
-  const host: GardenHost = {
-    home, store: manager.memory,
-    async spawnGardener(req) {
-      const id = await terminal('Memory gardener');
-      manager.registry.update(id, { kind: 'claude', gardener: { repoKey: req.repoKey, runId: req.runId } });
-      return id;
-    },
-    stopGardener: async () => {}, closePreviousGardener: async () => {},
-    quiet: () => true, usageFor: () => undefined, trusted: () => true,
-    live: (id) => !!manager.registry.get(id), record: (id) => manager.registry.get(id), gardenerRecords: () => [], setOutcome: () => {},
-  };
-  gardener = new Gardener(host);
-  Object.assign(manager, { gardener });
+  gardener = useGardener(repo);
 });
 
 afterEach(async () => {
-  await gardener.stop();
-  await manager.shutdown();
-  await server.close();
+  await close();
   rmSync(dir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
-type Reply = { status: number; text?: string; data?: any; error?: string };
-async function api(tool: string, args: object, id = 'human'): Promise<Reply> {
-  const token = id === 'human' ? readFileSync(join(home, 'admin-token'), 'utf8') : manager.tokenFor(id);
-  const res = await fetch(`http://127.0.0.1:${server.port}/api/${tool}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-TL-Node': id }, body: JSON.stringify(args) });
-  return { status: res.status, ...(await res.json()) };
-}
 async function connect(id: string): Promise<Client> {
-  const token = id === 'human' ? readFileSync(join(home, 'admin-token'), 'utf8') : manager.tokenFor(id);
   const c = new Client({ name: 't', version: '0' });
-  await c.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${server.port}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token}`, 'X-TL-Node': id } } }));
+  await c.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${server.port}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${token(id)}`, 'X-TL-Node': id } } }));
   return c;
 }
 /** A root node in the repository: a terminal relabelled, so no harness runs; a root's items are digest-eligible at once. */
-async function terminal(title: string): Promise<string> {
-  const id = (await api('spawn', { kind: 'terminal', title, cwd: repo })).data.nodeId as string;
-  manager.registry.update(id, { kind: 'claude' });
-  return id;
-}
+const terminal = (title: string) => agent(repo, title);
 const A = 'parser crashes when socket timeout expires', B = 'parser crashes when socket timeout expires early';
 /** Two duplicate pitfalls (A older, so the keep) and six notes, so a run may hide two items. */
 async function seed(): Promise<{ a: string; b: string; author: string }> {

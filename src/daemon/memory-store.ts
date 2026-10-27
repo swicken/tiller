@@ -5,18 +5,18 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { MemoryItemDetail } from '../shared/protocol.js';
+import { MEMORY_ITEM_KINDS, type MemoryInjectionView, type MemoryItemDetail, type MemoryItemView } from '../shared/protocol.js';
 import { claudeAccounts, type ClaudeAccount } from './claude-accounts.js';
 import { loadConfig } from './config.js';
 import { digestFor, oneLine } from './memory-digest.js';
 import {
-  accountKey, ADD_KINDS, contained, firstErrorLine, ftsTerms, GARDEN_KINDS, ITEM_KINDS, itemRef, keepRank, LIMITS, MIGRATIONS, normalizeDedupe,
+  accountKey, ADD_KINDS, contained, firstErrorLine, ftsTerms, GARDEN_KINDS, itemRef, keepRank, LIMITS, MIGRATIONS, normalizeDedupe,
   pinDedupe, redact, runRef, SCHEMA_V1, SCHEMA_VERSION,
-  type Actor, type Arm, type Cause, type Derived, type DigestCandidates, type DigestRole, type DigestSource, type EpisodeInput,
+  type Actor, type Arm, type Cause, type Derived, type DigestCandidates, type DigestRole, type DigestSource,
   type EpisodeKind, type EpisodeSkeleton, type GardenActionInput, type GardenActionKind, type GardenActionView, type GardenApplyResult,
   type GardenCandidate, type GardenPage, type GardenRefused, type GardenRule, type GardenRunStats, type GardenRunView, type GardenSnapshot,
   type GardenStore, type GardenTarget, type GardenTrigger, type GardenUndoneBy, type GardenUndoResult, type GardenUndoTarget,
-  type HistoryEntry, type InjectionRow, type InjectionView, type ItemKind, type ItemRow, type ItemView, type MemoryScope, type RunState,
+  type HistoryEntry, type InjectionRow, type ItemKind, type ItemRow, type MemoryScope, type RunState,
 } from './memory-schema.js';
 import { logError } from './util.js';
 
@@ -84,7 +84,7 @@ export type AddResult = { id: number; existing?: true; revived?: true; merged?: 
 export interface ListCursor { updatedAt: number; id: number }
 /** Live items per kind in one repository, plus its live pins and its retracted items (tombstones included). */
 export type ItemCounts = Record<ItemKind, number> & { pinned: number; retracted: number };
-export const noCounts = (): ItemCounts => ({ ...Object.fromEntries(ITEM_KINDS.map((k) => [k, 0])), pinned: 0, retracted: 0 }) as ItemCounts;
+export const noCounts = (): ItemCounts => ({ ...Object.fromEntries(MEMORY_ITEM_KINDS.map((k) => [k, 0])), pinned: 0, retracted: 0 }) as ItemCounts;
 
 const EMPTY_CANDIDATES = (): DigestCandidates => ({ pins: [], ledger: [], openQuestions: [], procedures: [], pitfalls: [], notes: [], matched: [] });
 
@@ -116,7 +116,7 @@ function skeleton(kind: string, data: Record<string, unknown>): Record<string, u
 /** A human text pin (memory_pin { text }): its dedupe key is in the PIN: namespace. */
 const isTextPin = (r: Pick<ItemRow, 'dedupe'>) => r.dedupe.startsWith('PIN:');
 
-function view(r: ItemRow, withBody = false): ItemView {
+function view(r: ItemRow, withBody = false): MemoryItemView {
   return {
     id: r.id, kind: r.kind, text: r.text, ...(withBody ? { body: r.body } : {}), author: r.author,
     ...(r.node_id ? { nodeId: r.node_id } : {}), ...(r.root_id ? { rootId: r.root_id } : {}),
@@ -133,12 +133,12 @@ function view(r: ItemRow, withBody = false): ItemView {
 }
 
 /** A panel row, selected with `${ELIGIBLE} AS eligible`: without body, cites, gets and rootId. */
-function rowView(r: ItemRow & { eligible: number }): ItemView {
+function rowView(r: ItemRow & { eligible: number }): MemoryItemView {
   const { cites: _cites, gets: _gets, rootId: _rootId, ...v } = view(r);
   return { ...v, eligible: r.eligible === 1 };
 }
 
-const injectionView = (r: InjectionRow): InjectionView =>
+const injectionView = (r: InjectionRow): MemoryInjectionView =>
   ({ sessionId: r.session_id, arm: r.arm, cause: r.cause, itemIds: JSON.parse(r.item_ids) as number[], text: r.text, ts: r.ts });
 
 const errcode = (err: unknown): number => ((err as { errcode?: number }).errcode ?? -1) & 0xff;
@@ -380,7 +380,7 @@ export class MemoryStore implements DigestSource, GardenStore {
       ).all({ repo, ...params }) as unknown as ItemRow[]).map((r) => view(r));
       const kind = (k: ItemKind) => `i.kind = '${k}' AND i.repo_id = :repo AND i.pinned = 0 AND ${ELIGIBLE}`;
       const halfLife = LIMITS.procedure.halfLifeDays * DAY;
-      const weight = (v: ItemView) => v.seen * 0.5 ** ((q.now - v.updatedAt) / halfLife);
+      const weight = (v: MemoryItemView) => v.seen * 0.5 ** ((q.now - v.updatedAt) / halfLife);
       const terms = ftsQuery(q.terms);
       return {
         pins: list('i.repo_id = :repo AND i.pinned = 1', c.pins),
@@ -406,7 +406,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   }
 
   /** The newest fresh (non-resume) injection of a session, which a resume reuses; undefined when none or on any failure. */
-  frozen(account: string | undefined, sessionId: string): InjectionView | undefined {
+  frozen(account: string | undefined, sessionId: string): MemoryInjectionView | undefined {
     return this.quiet(account, undefined, () => {
       const row = this.db(account, false)?.prepare(
         `SELECT * FROM injections WHERE session_id = ? AND cause <> 'resume' ORDER BY ts DESC, id DESC LIMIT 1`,
@@ -460,10 +460,9 @@ export class MemoryStore implements DigestSource, GardenStore {
    * nothing. pinned keeps pinned items only; eligible returns panel rows (rowView). The tools cap limit at
    * LIMITS.tools.search.max in zod; the panel asks for up to LIMITS.panel.page.
    */
-  search(scope: MemoryScope, q: { query: string; kind?: ItemKind; pinned?: boolean; limit?: number; includeRetracted?: boolean; eligible?: boolean }): ItemView[] {
+  search(scope: MemoryScope, q: { query: string; kind?: ItemKind; pinned?: boolean; limit?: number; includeRetracted?: boolean; eligible?: boolean }): MemoryItemView[] {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       const terms = ftsQuery(ftsTerms(q.query));
       if (!db || repo === undefined || !terms) return [];
       const rows = db.prepare(`SELECT i.*${q.eligible ? `, ${ELIGIBLE} AS eligible` : ''} FROM items_fts CROSS JOIN items i ON i.id = items_fts.rowid
@@ -480,10 +479,9 @@ export class MemoryStore implements DigestSource, GardenStore {
    * The panel's browse: the repository's items newest first (updated_at, then id), after `before` when given. pinned
    * keeps pinned items only; retracted includes retracted ones. Rows are rowView's; next is set when more follow.
    */
-  list(scope: MemoryScope, q: { kind?: ItemKind; pinned?: boolean; retracted?: boolean; before?: ListCursor; limit?: number }): { items: ItemView[]; next?: ListCursor } {
+  list(scope: MemoryScope, q: { kind?: ItemKind; pinned?: boolean; retracted?: boolean; before?: ListCursor; limit?: number }): { items: MemoryItemView[]; next?: ListCursor } {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) return { items: [] };
       const limit = Math.min(q.limit ?? LIMITS.panel.page, LIMITS.panel.page);
       // The page's ids first, so ELIGIBLE runs for its rows only.
@@ -502,8 +500,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   counts(scope: MemoryScope): ItemCounts {
     return this.loud(() => {
       const counts = noCounts();
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) return counts;
       for (const r of db.prepare('SELECT kind, count(*) AS n FROM items WHERE repo_id = ? AND invalid_at IS NULL GROUP BY kind').all(repo) as { kind: ItemKind; n: number }[]) {
         counts[r.kind] = Number(r.n);
@@ -525,8 +522,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   /** One item in full for the panel, with eligible, its newest superseder and the digests that gave it; the read is not counted. */
   peek(scope: MemoryScope, id: number): MemoryItemDetail {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       const row = db && repo !== undefined
         ? db.prepare(`SELECT i.*, ${ELIGIBLE} AS eligible FROM items i WHERE i.id = ? AND i.repo_id = ?`).get(id, repo) as (ItemRow & { eligible: number }) | undefined
         : undefined;
@@ -546,10 +542,9 @@ export class MemoryStore implements DigestSource, GardenStore {
   }
 
   /** One item in full, counting the read. Another repository's item is "no such item". */
-  get(scope: MemoryScope, id: number): ItemView {
+  get(scope: MemoryScope, id: number): MemoryItemView {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(`no such item ${itemRef(id)}`);
       const row = this.item(db, repo, id);
       db.prepare('UPDATE items SET gets = gets + 1 WHERE id = ?').run(id);
@@ -593,12 +588,11 @@ export class MemoryStore implements DigestSource, GardenStore {
    * memory_forget. An agent's retraction (at most LIMITS.perNode.forgets) lasts until later work records the item again;
    * the human's is permanent. purge (human only) also blanks the item's episode and siblings and removes the bytes.
    */
-  forget(scope: MemoryScope, actor: Actor, input: { id: number; reason: string; purge?: boolean }): ItemView {
+  forget(scope: MemoryScope, actor: Actor, input: { id: number; reason: string; purge?: boolean }): MemoryItemView {
     return this.loud(() => {
       if (input.purge && actor.kind !== 'human') throw new MemoryError('only the human can purge');
       const reason = redact(input.reason.trim()).slice(0, LIMITS.tools.reason);
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(`no such item ${itemRef(input.id)}`);
       const who = this.who(actor);
       const row = tx(db, () => {
@@ -619,7 +613,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   }
 
   /** memory_pin (human only): pin an item by id, restoring it if retracted, or pin new text as a human note; unpin undoes either. */
-  pin(scope: MemoryScope, actor: Actor, input: { id?: number; text?: string; unpin?: boolean }): ItemView {
+  pin(scope: MemoryScope, actor: Actor, input: { id?: number; text?: string; unpin?: boolean }): MemoryItemView {
     return this.loud(() => {
       if (actor.kind !== 'human') throw new MemoryError('only the human can pin');
       if ((input.id === undefined) === (input.text === undefined)) throw new MemoryError('memory_pin takes exactly one of id and text');
@@ -664,11 +658,10 @@ export class MemoryStore implements DigestSource, GardenStore {
    * A gardener hide is undone instead, as `tl memory garden undo m<id>` does, which makes that pair immune. Refuses live
    * items, tombstones, text pins (pinning the text again revives one) and any other kind of hiding.
    */
-  restore(scope: MemoryScope, actor: Actor, input: { id: number }): ItemView {
+  restore(scope: MemoryScope, actor: Actor, input: { id: number }): MemoryItemView {
     return this.loud(() => {
       if (actor.kind !== 'human') throw new MemoryError('only the human can restore');
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(`no such item ${itemRef(input.id)}`);
       const row = tx(db, () => {
         const item = this.item(db, repo, input.id), ref = itemRef(item.id);
@@ -697,13 +690,12 @@ export class MemoryStore implements DigestSource, GardenStore {
    * The human's edit of their own text pin O to new text: the pin of that text (its PIN: row revived when one exists,
    * else inserted) supersedes O, which is unpinned and hidden as superseded. Pinning O's text again revives O.
    */
-  editPin(scope: MemoryScope, actor: Actor, input: { id: number; text: string }): ItemView {
+  editPin(scope: MemoryScope, actor: Actor, input: { id: number; text: string }): MemoryItemView {
     return this.loud(() => {
       if (actor.kind !== 'human') throw new MemoryError('only the human can pin');
       const text = redact(input.text.trim());
       if (!text || text.length > LIMITS.tools.pinText) throw new MemoryError(`text must be 1-${LIMITS.tools.pinText} characters`);
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(`no such item ${itemRef(input.id)}`);
       const row = tx(db, () => {
         const old = this.item(db, repo, input.id);
@@ -737,7 +729,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   }
 
   /** A node's injection rows, oldest first (memory_status { nodeId }); with newest, only that many, newest first (the panel). */
-  injections(account: string | undefined, nodeId: string, newest?: number): InjectionView[] {
+  injections(account: string | undefined, nodeId: string, newest?: number): MemoryInjectionView[] {
     const sql = newest === undefined ? 'ORDER BY ts, id' : `ORDER BY ts DESC, id DESC LIMIT ${Math.trunc(newest)}`;
     return this.loud(() => (this.db(account, false)?.prepare(`SELECT * FROM injections WHERE node_id = ? ${sql}`)
       .all(nodeId) as InjectionRow[] | undefined ?? []).map(injectionView));
@@ -791,8 +783,7 @@ export class MemoryStore implements DigestSource, GardenStore {
 
   startRun(scope: MemoryScope, input: { trigger: GardenTrigger; model: string }): { ok: true; run: GardenRunView } | { ok: false; reason: string } {
     return this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) return { ok: false, reason: 'no memory for this repository yet' };
       return tx(db, () => {
         const g = LIMITS.garden, now = this.now();
@@ -814,8 +805,7 @@ export class MemoryStore implements DigestSource, GardenStore {
 
   skipRun(scope: MemoryScope, input: { trigger: GardenTrigger; note: string }): void {
     this.loud(() => {
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) return;
       tx(db, () => {
         const last = db.prepare('SELECT state, note FROM garden_runs WHERE repo_id = ? ORDER BY id DESC LIMIT 1').get(repo) as { state: string; note: string | null } | undefined;
@@ -1010,8 +1000,7 @@ export class MemoryStore implements DigestSource, GardenStore {
   undo(scope: MemoryScope, target: GardenUndoTarget, by: GardenUndoneBy): GardenUndoResult {
     return this.loud(() => {
       const missing = 'run' in target ? `no such run ${runRef(target.run)}` : `no such item ${itemRef(target.item)}`;
-      const db = this.db(scope.account, false);
-      const repo = db && this.repo(db, scope, false);
+      const { db, repo } = this.existing(scope);
       if (!db || repo === undefined) throw new MemoryError(missing);
       return tx(db, () => {
         if ('run' in target) {
@@ -1213,6 +1202,12 @@ export class MemoryStore implements DigestSource, GardenStore {
     }
   }
 
+  /** The scope's account file and repository row, each when it exists; neither is created. */
+  private existing(scope: MemoryScope): { db?: DatabaseSync; repo?: number } {
+    const db = this.db(scope.account, false);
+    return db ? { db, repo: this.repo(db, scope, false) } : {};
+  }
+
   private repo(db: DatabaseSync, scope: MemoryScope, create: boolean): number | undefined {
     const row = db.prepare('SELECT id FROM repos WHERE key = ?').get(scope.repoKey) as { id: number } | undefined;
     if (row || !create) return row?.id;
@@ -1227,7 +1222,7 @@ export class MemoryStore implements DigestSource, GardenStore {
     return row;
   }
 
-  private episode(db: DatabaseSync, repo: number, scope: MemoryScope, e: EpisodeInput): number {
+  private episode(db: DatabaseSync, repo: number, scope: MemoryScope, e: HistoryEntry): number {
     return Number((db.prepare(`INSERT INTO episodes (ts, repo_id, root_id, node_id, kind, harness, model, role, profile, data)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(
       e.ts, repo, scope.rootId ?? scope.nodeId ?? '', scope.nodeId ?? '', e.kind,
@@ -1494,7 +1489,7 @@ export class MemoryStore implements DigestSource, GardenStore {
     if (brief) return { ...base, state: 'ok' }; // opening read user_version, which a corrupt header fails
     try {
       const count = (sql: string) => Number((db.prepare(sql).get() as { n: number }).n);
-      const items = Object.fromEntries(ITEM_KINDS.map((k) => [k, 0])) as Record<ItemKind, number>;
+      const items = Object.fromEntries(MEMORY_ITEM_KINDS.map((k) => [k, 0])) as Record<ItemKind, number>;
       for (const r of db.prepare('SELECT kind, count(*) AS n FROM items WHERE invalid_at IS NULL GROUP BY kind').all() as { kind: ItemKind; n: number }[]) items[r.kind] = Number(r.n);
       const size = (f: string) => { try { return statSync(f).size; } catch { return 0; } };
       return {

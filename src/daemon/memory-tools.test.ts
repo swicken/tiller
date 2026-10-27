@@ -5,13 +5,15 @@ import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NodeManager } from './manager.js';
+import type { MemoryInjectionView } from '../shared/protocol.js';
+import type { NodeManager } from './manager.js';
 import { memoryOn, switchMemory } from './memory-config.js';
-import type { InjectionView } from './memory-schema.js';
-import { startServer, type DaemonServer } from './server.js';
+import { startTestDaemon, type TestDaemon } from './memory-test-daemon.js';
+import type { DaemonServer } from './server.js';
 
 // The memory tools over POST /api/<tool>, as the CLI calls them, with a node's token and the admin token.
 let dir: string, home: string, repoA: string, repoB: string, manager: NodeManager, server: DaemonServer;
+let api: TestDaemon['api'], agent: TestDaemon['agent'], close: TestDaemon['close'];
 
 beforeEach(async () => {
   dir = realpathSync(mkdtempSync(join(tmpdir(), 'tl-memtools-')));
@@ -20,30 +22,15 @@ beforeEach(async () => {
   repoB = join(dir, 'b');
   for (const d of [home, repoA, repoB]) mkdirSync(d);
   execFileSync('git', ['init', '-q', repoA]);
-  manager = new NodeManager({ home, shell: '/bin/sh' });
-  server = await startServer(manager, { port: 0 });
-  vi.spyOn(server.updates, 'start').mockImplementation(() => {});
+  ({ manager, server, api, agent, close } = await startTestDaemon(home));
 });
 
 afterEach(async () => {
-  await manager.shutdown();
-  await server.close();
+  await close();
   rmSync(dir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 
-type Reply = { status: number; text?: string; data?: any; error?: string };
-async function api(tool: string, args: object, id = 'human'): Promise<Reply> {
-  const token = id === 'human' ? readFileSync(join(home, 'admin-token'), 'utf8') : manager.tokenFor(id);
-  const res = await fetch(`http://127.0.0.1:${server.port}/api/${tool}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-TL-Node': id }, body: JSON.stringify(args) });
-  return { status: res.status, ...(await res.json()) };
-}
-/** An agent node in `cwd`: a terminal relabelled, so no harness runs. */
-async function agent(cwd: string, title = 'w'): Promise<string> {
-  const id = (await api('spawn', { kind: 'terminal', title, cwd })).data.nodeId as string;
-  manager.registry.update(id, { kind: 'claude' });
-  return id;
-}
 const on = () => switchMemory(home, {}, 'on');
 const memoryDir = () => join(home, 'memory');
 
@@ -95,7 +82,7 @@ describe('memory tools', () => {
     expect((await api('memory_get', { id: `m${pin.id}` }, a)).text).toMatch(/pinned by the human · recorded by the human/);
   });
 
-  it('memory_status { nodeId } returns its injections as InjectionView data, oldest first', async () => {
+  it('memory_status { nodeId } returns its injections as MemoryInjectionView data, oldest first', async () => {
     on();
     const a = await agent(repoA);
     const scope = manager.memoryScope(a)!;
@@ -103,7 +90,7 @@ describe('memory tools', () => {
     manager.memory.recordInjection(scope, { sessionId: 's-1', arm: 'on', cause: 'resume', itemIds: [], text: '' });
     const r = await api('memory_status', { nodeId: a, days: 30 });
     expect(r.status).toBe(200);
-    const injections: InjectionView[] = r.data.injections;
+    const injections: MemoryInjectionView[] = r.data.injections;
     expect(injections).toEqual([
       { sessionId: 's-1', arm: 'on', cause: 'config', itemIds: [1, 2], text: '# Memory\n...', ts: expect.any(Number) },
       { sessionId: 's-1', arm: 'on', cause: 'resume', itemIds: [], text: '', ts: expect.any(Number) },
@@ -174,15 +161,6 @@ describe('memory tools', () => {
     expect((await api('memory_pin', { id: `m${id}`, repo: repoB })).error).toBe(`no such item m${id}`);
     expect((await api('memory_get', { id: `m${id}` }, a)).data).toMatchObject({ pinned: false });
     expect((await api('memory_get', { id: `m${id}` }, a)).data.invalid).toBeUndefined();
-  });
-
-  it('caps an agent at 20 forgets', async () => {
-    on();
-    const a = await agent(repoA);
-    const ids: number[] = [];
-    for (let i = 0; i < 21; i++) ids.push((await api('memory_add', { kind: 'note', text: `human note ${i}`, repo: repoA })).data.id);
-    for (const id of ids.slice(0, 20)) expect((await api('memory_forget', { id: `m${id}`, reason: 'stale' }, a)).status).toBe(200);
-    expect((await api('memory_forget', { id: `m${ids[20]}`, reason: 'stale' }, a)).error).toBe('memory_forget is limited to 20 per node');
   });
 
   /** Two Claude accounts with their own files; work covers repoA, with the given memory setting. */

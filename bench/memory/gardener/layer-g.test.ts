@@ -14,8 +14,8 @@ import {
   keepRank, type Actor, type GardenActionInput, type GardenApplyResult, type ItemRow, type MemoryScope,
 } from '../../../src/daemon/memory-schema.js';
 import { MemoryStore } from '../../../src/daemon/memory-store.js';
+import { startTestDaemon } from '../../../src/daemon/memory-test-daemon.js';
 import { PtySession } from '../../../src/daemon/pty.js';
-import { startServer } from '../../../src/daemon/server.js';
 import { digestMeasure, loadFixture, Seeded, type GardenLabel } from './fixture.js';
 
 const homes: string[] = [];
@@ -195,31 +195,14 @@ describe('G2 adversary', () => {
 
   it("g-std through the tools: the gardener node's garden_merge and garden_supersede over /api refuse the same attempts", async () => {
     const { c, repo } = seedCheckout('g-std');
-    const manager = new NodeManager({ home: c.home, shell: '/bin/sh' });
-    const server = await startServer(manager, { port: 0 });
-    vi.spyOn(server.updates, 'start').mockImplementation(() => {});
+    // The gardener node is a terminal relabelled, so no harness runs.
+    const { manager, api, useGardener, close } = await startTestDaemon(c.home);
     switchMemory(c.home, {}, 'on');
-    const api = async (tool: string, args: object, id = 'human') => {
-      const token = id === 'human' ? readFileSync(join(c.home, 'admin-token'), 'utf8') : manager.tokenFor(id);
-      const res = await fetch(`http://127.0.0.1:${server.port}/api/${tool}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-TL-Node': id }, body: JSON.stringify(args) });
-      return (await res.json()) as { data?: { id: number; nodeId: string }; error?: string };
-    };
-    // As memory-garden-tools.test.ts does: the gardener node is a terminal relabelled, so no harness runs.
-    const gardener = new Gardener({
-      home: c.home, store: manager.memory,
-      async spawnGardener(req) {
-        const id = (await api('spawn', { kind: 'terminal', title: 'Memory gardener', cwd: repo })).data!.nodeId;
-        manager.registry.update(id, { kind: 'claude', gardener: { repoKey: req.repoKey, runId: req.runId } });
-        return id;
-      },
-      stopGardener: async () => {}, closePreviousGardener: async () => {}, quiet: () => true, usageFor: () => undefined, trusted: () => true,
-      live: (id) => !!manager.registry.get(id), record: (id) => manager.registry.get(id), gardenerRecords: () => [], setOutcome: () => {},
-    });
-    Object.assign(manager, { gardener });
+    useGardener(repo);
     try {
       const started = await api('memory_garden', { action: 'run', repo });
       expect(started.error).toBeUndefined();
-      const { id: run, nodeId: node } = started.data!;
+      const { id: run, nodeId: node } = started.data as { id: number; nodeId: string };
       const call = async (input: GardenActionInput): Promise<Outcome> => {
         const r = input.action === 'merge'
           ? await api('garden_merge', { ids: input.ids.map((id) => `m${id}`), reason: input.reason }, node)
@@ -232,9 +215,7 @@ describe('G2 adversary', () => {
       expect(judge(results, await call(guessed(c)))).toEqual([]);
       fenced(c, manager.memory, run);
     } finally {
-      await gardener.stop();
-      await manager.shutdown();
-      await server.close();
+      await close();
     }
   });
 });
