@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 vi.mock('./autostart.js', () => ({ agentMatches: vi.fn(), agentStatus: vi.fn(), kickstart: vi.fn() }));
+// drainDaemon polls every second; vi.useFakeTimers does not reach node:timers/promises, so the waits resolve at once.
+vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async (_ms: number, value?: unknown) => value) }));
 import { spawn } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { agentMatches, agentStatus, kickstart } from './autostart.js';
 import { drainDaemon, restartDaemon } from './up.js';
 
@@ -78,11 +81,14 @@ describe('drainDaemon before a restart', () => {
     const fetch = vi.fn().mockResolvedValue(drain(['a']));
     vi.stubGlobal('fetch', fetch);
     const abort = new AbortController();
+    // This wait lasts until the abort, which may land before drainDaemon reaches it.
+    vi.mocked(sleep).mockImplementationOnce((_ms, _value, o) => new Promise((_, reject) => {
+      const signal = o!.signal!; signal.throwIfAborted(); signal.addEventListener('abort', () => reject(signal.reason));
+    }));
     const done = drainDaemon(home, 7799, { reason: 'tl reload', signal: abort.signal });
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     abort.abort();
     await expect(done).rejects.toThrow();
-    await new Promise((r) => setTimeout(r, 1100));
     expect(fetch).toHaveBeenCalledOnce();
   });
 

@@ -46,7 +46,7 @@ Run checks appropriate to the changed area from the repository root:
 | Release helpers | `node --test scripts/release-test.mjs` |
 | Native Rust app | `cargo test --locked --all-targets --manifest-path src-tauri/Cargo.toml` |
 
-Tests generally live beside their source as `*.test.ts` or `*.test.tsx`. Keep daemon integration tests isolated with temporary homes and ephemeral ports, as in `src/daemon/server.test.ts`. Vitest runs up to two test files at once to bound resource use for tests that create real git repositories and child processes. `mod/` and `mod-rows/` tests run only through the Claude plugin runner.
+Tests generally live beside their source as `*.test.ts` or `*.test.tsx`. Keep daemon integration tests isolated with temporary homes and ephemeral ports, as in `src/daemon/server.test.ts`. Vitest runs up to one test file per two CPU cores at once (at least two) to bound resource use for tests that create real git repositories and child processes. `mod/` and `mod-rows/` tests run only through the Claude plugin runner.
 
 Implementation workers must run relevant focused tests for their changes and report the commands and results. Reviewers run targeted checks as needed to assess the diff; read-only analyses do not need broad testing. The orchestrator runs the full Vitest suite (`npm test`) once on the final integrated tree before publication.
 
