@@ -6,6 +6,7 @@ import { accountOptionLabel, accountStatus, accountsError, buildChanges, cliStat
 import { HARNESSES, HARNESS_LABELS, PROFILES } from '../../src/shared/protocol';
 import { Modal } from '../controls/Modal';
 import { Select } from '../controls/Select';
+import { ThemeChoice } from './ThemeChoice';
 import { CLAUDE_ACCOUNT_NAME, CLAUDE_ACCOUNT_NAME_RULE, type ClaudeConfigDirCheck } from '../../src/shared/settings';
 import './settings.css';
 
@@ -343,6 +344,7 @@ export function SettingsPanel({ nodeId, onClose }: { nodeId?: string; onClose: (
       <div className="settings-scope"><label htmlFor="settings-scope">Editing settings for</label><div className="settings-scope-picker"><SettingsIcon name="Globe" /><Select id="settings-scope" aria-label="Settings scope" value={scope} disabled={busy} onChange={(event) => leave(event.target.value as Scope)}><option value="home">All repositories</option><option value="project" disabled={!nodeId}>{snapshot?.projectPath?.split('/').filter(Boolean).at(-1) ?? 'This repository'}</option></Select></div></div>
       <button className="settings-close" disabled={busy} onClick={() => leave('close')}>Close</button>
       <p className="settings-inheritance-copy">{scope === 'project' ? 'Repository settings override shared defaults. Unset values inherit from all repositories or built-in defaults.' : 'Shared defaults for all repositories. Individual repositories can override these settings.'}{!nodeId && ' Select a node to edit repository settings.'}</p>
+      <ThemeChoice />
     </header>
     <div className="settings-content" ref={content} aria-busy={busy}>
       {discard && <div className="settings-notice" role="alert"><p>Discard unsaved changes?</p><button className="btn" onClick={() => setDiscard(null)}>Keep editing</button>{' '}<button className="btn danger" onClick={() => { const target = discard; setDiscard(null); setDrafts({}); if (target === 'close') onClose(); else setScope(target); }}>Discard changes</button></div>}

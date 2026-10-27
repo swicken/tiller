@@ -22,6 +22,10 @@
 .settings-close { padding: 6px 0 6px 14px; border: 0; background: transparent; color: var(--dim); }
 .settings-close:hover { color: var(--fg); }
 .settings-inheritance-copy { grid-column: 1 / -1; color: var(--dim); margin: 0; font-size: 14px; line-height: 1.5; max-width: 90ch; }
+/* Per viewer and outside the form: a theme choice applies at once and is never an unsaved change. */
+.settings-theme { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 14px; }
+.settings-theme .seg { grid-template-columns: repeat(3, 1fr); width: 240px; }
+.settings-theme small { color: var(--dim); font-size: 13px; }
 .settings-content { min-height: 0; flex: 1; overflow: auto; padding: 0 28px 24px; scrollbar-color: var(--line) var(--bg); }
 .settings-page-heading { margin: 24px 0 20px; }
 .settings-page-heading h1 { margin: 0 0 6px; font-size: 28px; line-height: 1.25; font-weight: 650; letter-spacing: -.02em; }
