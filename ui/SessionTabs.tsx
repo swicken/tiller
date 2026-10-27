@@ -15,6 +15,14 @@ export function stepSession(dir: 1 | -1) {
   selectSession(list[next].root.id);
 }
 
+/** Cmd+Shift+1..9: select the Nth session tab, if there is one. */
+export function nthSession(n: number): boolean {
+  const { nodes, order } = getState();
+  const s = sessions(nodes, order)[n - 1];
+  if (s) selectSession(s.root.id);
+  return !!s;
+}
+
 /** One tab per session along the top; in the app it is the title bar, so empty space drags the window. */
 export function SessionTabs() {
   const nodes = useStore((s) => s.nodes);

@@ -8,7 +8,7 @@ import { ArchivePane } from './transcript/History';
 import { useDocumentSync } from './hooks';
 import { LastMessagePanel } from './LastMessagePanel';
 import { Palette } from './Palette';
-import { SessionTabs, stepSession } from './SessionTabs';
+import { nthSession, SessionTabs, stepSession } from './SessionTabs';
 import { Sidebar, useRows } from './sidebar/Sidebar';
 import { StatusBar } from './StatusBar';
 import { TerminalPane } from './TerminalPane';
@@ -36,9 +36,10 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if (settingsNode) return;
       if (!e.metaKey || e.altKey) return; // Ctrl must reach the terminal
-      // e.code, since Shift turns e.key into '{' / '}'.
+      // e.code, since Shift turns e.key into '{' / '}' and '!'..'('.
       if (e.shiftKey) {
         if (e.code === 'BracketLeft' || e.code === 'BracketRight') { e.preventDefault(); stepSession(e.code === 'BracketLeft' ? -1 : 1); }
+        else if (/^Digit[1-9]$/.test(e.code) && nthSession(Number(e.code.slice(5)))) e.preventDefault();
         return;
       }
       if (e.key === 'k') { e.preventDefault(); openDialog(getState().dialog?.kind === 'palette' ? null : { kind: 'palette' }); }

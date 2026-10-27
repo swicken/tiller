@@ -59,7 +59,7 @@ it('opens the New session dialog from + in the current session directory', () =>
   expect(getState().dialog).toEqual({ kind: 'spawn', parentId: null, cwd: a.cwd });
 });
 
-it('steps through session tabs with Cmd+Shift+[ and ], wrapping at either end', () => {
+it('steps through session tabs with Cmd+Shift+[ and ], wrapping at either end, and jumps with Cmd+Shift+1..9', () => {
   let shortcut: (event: Record<string, unknown>) => void = () => {};
   vi.stubGlobal('addEventListener', (type: string, handler: typeof shortcut) => { if (type === 'keydown') shortcut = handler; });
   App(); hooks.effects.find((fn) => String(fn).includes('keydown'))!();
@@ -67,6 +67,11 @@ it('steps through session tabs with Cmd+Shift+[ and ], wrapping at either end', 
   press('BracketRight'); expect(getState().session).toBe('b');
   press('BracketRight'); expect(getState().session).toBe('c');
   press('BracketLeft'); expect(getState().session).toBe('b');
+  // Cmd+Shift+N jumps to the Nth tab, matched by code since Shift+2 reports key '@'; a missing tab is left unhandled.
+  const digit = (n: number) => { const preventDefault = vi.fn(); shortcut({ metaKey: true, shiftKey: true, key: '!@#$'[n - 1] ?? '%', code: `Digit${n}`, preventDefault }); return preventDefault; };
+  expect(digit(2)).toHaveBeenCalled(); expect(getState().session).toBe('a');
+  expect(digit(1)).toHaveBeenCalled(); expect(getState().session).toBe('c');
+  expect(digit(4)).not.toHaveBeenCalled(); expect(getState().session).toBe('c');
   // Shift with other keys stays unhandled so the terminal still gets them.
   const preventDefault = vi.fn();
   shortcut({ metaKey: true, shiftKey: true, key: 'K', code: 'KeyK', preventDefault });

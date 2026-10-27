@@ -29,7 +29,7 @@ Claude session measurements currently provide limits without account identity. T
 
 - `?k=<token>` is stored in localStorage and removed from the address bar. `?node=<id>` selects that node and its session; the UI keeps it in step with the selection.
 - Cmd+K jump to any node, Cmd+1..9 select the Nth row of the current session, Cmd+0 focus the sidebar tree.
-- Cmd+Shift+[ and Cmd+Shift+] select the previous and next session tab, wrapping around. Left and right arrows move focus between tabs.
+- Cmd+Shift+[ and Cmd+Shift+] select the previous and next session tab, wrapping around; Cmd+Shift+1..9 select the Nth session tab. Left and right arrows move focus between tabs.
 - With the tree focused: j/k or arrows move, h/l collapse and expand.
 - Clicking terminal hyperlinks (including rendered Markdown links) opens HTTP/HTTPS URLs in your default browser in the app, or a new tab in the browser UI. File and custom-protocol links are not opened.
 
