@@ -26,5 +26,5 @@
 .usage-panel .usage-notice { font-size: 13px; }
 .usage-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 8px; }
 .usage-panel .usage-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-@media (prefers-color-scheme: dark) { .usage-brand .usage-openai-logo { filter: invert(1); } }
+.usage-brand .usage-openai-logo { filter: invert(var(--logo-invert)); }
 @media (max-width: 400px) { .dlg > .modal.usage-panel { padding: 20px; } .usage-cli { gap: 10px; } .usage-quota-heading { flex-wrap: wrap; gap: 4px 12px; } }

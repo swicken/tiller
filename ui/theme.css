@@ -16,6 +16,11 @@
   --bad: #f85149;
   --idle: #6e7a8a;
   --shadow: 0 8px 32px rgb(0 0 0 / 0.5);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.25);
+  --shadow-lg: 0 16px 64px rgb(0 0 0 / 0.3);
+  --scrim: rgb(0 0 0 / 0.5);
+  --on-bad: #fff;
+  --logo-invert: 1;
   --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
   --l1: 16px; /* vertical centre of a row's first line: where connectors meet it */
@@ -39,6 +44,7 @@
     --bad: #cf222e;
     --idle: #8c959f;
     --shadow: 0 8px 32px rgb(31 41 51 / 0.2);
+    --logo-invert: 0;
   }
 }
 
