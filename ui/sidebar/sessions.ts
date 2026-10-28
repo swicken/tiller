@@ -14,6 +14,20 @@ export const rootOf = (nodes: Nodes, id: string): string => ancestry(nodes, id)[
 export const roots = (nodes: Nodes, order: string[]): NodeView[] =>
   order.map((id) => nodes[id]).filter((n): n is NodeView => !!n && !(n.parentId && nodes[n.parentId]));
 
+/** `order` with its roots in the saved tab order, roots the saved order does not name after them, then every other node as it was. */
+export function arrange(nodes: Nodes, order: string[], saved: string[]): string[] {
+  const rs = roots(nodes, order).map((r) => r.id);
+  const placed = saved.filter((id) => rs.includes(id));
+  return [...placed, ...rs.filter((id) => !placed.includes(id)), ...order.filter((id) => !rs.includes(id))];
+}
+
+/** The session tab to the right of root `id`, else the one to its left. */
+export function besideSession(nodes: Nodes, order: string[], id: string): string | undefined {
+  const rs = roots(nodes, order);
+  const i = rs.findIndex((r) => r.id === id);
+  return i < 0 ? undefined : (rs[i + 1] ?? rs[i - 1])?.id;
+}
+
 /** Most urgent first: this is the colour a session's dot takes. */
 const URGENCY: StatusKind[] = ['needs', 'errored', 'working', 'done', 'queued', 'armed', 'unknown', 'exited'];
 
