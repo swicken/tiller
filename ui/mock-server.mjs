@@ -42,6 +42,12 @@ const accountFor = (cwd) => accounts.find((a) => a.projects.some((p) => cwd === 
 const MIN = 60_000;
 const nodes = new Map();
 let dnd = { on: false };
+/** Session tab order as the UI last set it; the snapshot fills in roots it leaves out, oldest first, as the daemon does. */
+let sessionOrder = [];
+const tabOrder = () => {
+  const roots = [...nodes.values()].filter((n) => !n.parentId).map((n) => n.id);
+  return [...sessionOrder.filter((id) => roots.includes(id)), ...roots.filter((id) => !sessionOrder.includes(id))];
+};
 // A node's spend is its session cost, all of it today.
 const add = (id, parentId, title, cwd, kind, { ago = 0, ...st } = {}, extra = {}) =>
   nodes.set(id, {
@@ -223,7 +229,7 @@ wss.on('connection', (ws) => {
       if (m.t !== 'auth' || m.token !== 'mock') return ws.close();
       authed = true;
       clients.add(client);
-      send({ t: 'snapshot', nodes: [...nodes.values()], dnd, ...(updateStatus ? { update: updateStatus } : {}) });
+      send({ t: 'snapshot', nodes: [...nodes.values()], dnd, sessionOrder: tabOrder(), ...(updateStatus ? { update: updateStatus } : {}) });
       if (!updateScenario) setTimeout(() => ws.readyState === 1 && send({ t: 'confirm', confirmId: 'c1', text: 'ui polish wants to close node "shell".\nIt has been idle for 40 minutes.' }), 15_000);
       return;
     }
@@ -299,6 +305,7 @@ wss.on('connection', (ws) => {
         else if (n?.status.git) touch(n, { git: { ...n.status.git, ahead: 0, mergedAt: Date.now() } }); break;
       case 'mute': if (n) { n.muted = m.muted || undefined; broadcast({ t: 'node', node: n }); } break;
       case 'dnd': dnd = m.on ? { on: true, ...(m.minutes && { until: Date.now() + m.minutes * MIN }) } : { on: false }; broadcast({ t: 'dnd', ...dnd }); break;
+      case 'sessionOrder': sessionOrder = m.ids; broadcast({ t: 'sessionOrder', ids: sessionOrder }); break;
       case 'send': console.log(`send to ${m.id}:\n${m.text}`); send({ t: 'sent', id: m.id, result: { outcome: 'queued', retryable: false, messageId: `m-${Date.now()}` } }); break;
     }
   });

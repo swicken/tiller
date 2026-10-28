@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { harnessFor, isAgentKind, type NodeView } from '../../src/shared/protocol';
 import { canMerge } from '../worktree';
@@ -47,12 +47,74 @@ export function actionMenuPosition(rect: Pick<DOMRect, 'top' | 'bottom' | 'right
   };
 }
 
+/**
+ * Node actions in a portal menu below `at`, with arrow-key focus; a click elsewhere (outside `trigger`), Escape, a
+ * resize or a scroll closes it. `onClose(true)` asks for focus back where the menu came from.
+ */
+export function ActionMenu({ id, label, actions, at, focusLast, trigger, onClose }: {
+  id?: string; label: string; actions: Act[]; at: Pick<DOMRect, 'top' | 'bottom' | 'right'>; focusLast?: boolean;
+  trigger?: RefObject<HTMLElement | null>; onClose: (restoreFocus?: boolean) => void;
+}) {
+  const [position, setPosition] = useState<CSSProperties>({});
+  const menu = useRef<HTMLDivElement>(null);
+
+  // Placed once, when it opens: `at` is where its opener was then.
+  useLayoutEffect(() => {
+    setPosition(actionMenuPosition(at, document.documentElement.clientWidth, document.documentElement.clientHeight, menu.current!.getBoundingClientRect().width));
+  }, []);
+  useEffect(() => {
+    const items = menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+    items?.[focusLast ? items.length - 1 : 0]?.focus();
+    const away = (e: PointerEvent) => {
+      if (!menu.current?.contains(e.target as Node) && !trigger?.current?.contains(e.target as Node)) onClose();
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(true); }
+    };
+    const moved = (e: Event) => { if (!menu.current?.contains(e.target as Node)) onClose(); };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', escape, true);
+    window.addEventListener('resize', moved);
+    window.addEventListener('scroll', moved, true);
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      document.removeEventListener('keydown', escape, true);
+      window.removeEventListener('resize', moved);
+      window.removeEventListener('scroll', moved, true);
+    };
+  }, []);
+
+  return createPortal(
+    <div ref={menu} id={id} className="node-action-menu" role="menu" aria-label={label} style={position}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.metaKey || e.ctrlKey) { onClose(); return; }
+        if (e.altKey) return;
+        e.stopPropagation();
+        const items = Array.from(menu.current!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+        const index = items.indexOf(document.activeElement as HTMLButtonElement);
+        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
+          e.preventDefault();
+          const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (index + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+          items[next]?.focus();
+        } else if (e.key === 'Tab') {
+          // Return to the trigger before the native Tab step leaves this action group.
+          onClose(true);
+        }
+      }}>
+      {actions.map((a) => (
+        <button key={a.key} role="menuitem" tabIndex={-1} className={a.danger ? 'danger' : ''} onClick={() => { onClose(true); a.run(); }}>
+          <Icon name={a.icon} size={14} /><span>{a.label}</span>
+        </button>
+      ))}
+    </div>, document.body,
+  );
+}
+
 /** Header actions with labels; compact row actions without them. */
 export function ActionButtons({ node, labels }: { node: NodeView; labels?: boolean }) {
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<CSSProperties>({});
   const trigger = useRef<HTMLButtonElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
   const menuId = useId();
   const focusLast = useRef(false);
   const actions = actionsFor(node, labels ? 'title' : 'row');
@@ -64,40 +126,12 @@ export function ActionButtons({ node, labels }: { node: NodeView; labels?: boole
     if (restoreFocus) trigger.current?.focus();
   };
   const reveal = (last = false) => {
-    if (!open) setPosition({});
     setOpen(true);
     // Focus after React has mounted the menu, for pointer and keyboard users alike.
     focusLast.current = last;
   };
 
   useEffect(() => { setOpen(false); }, [node.id]);
-  useLayoutEffect(() => {
-    if (!open) return;
-    setPosition(actionMenuPosition(trigger.current!.getBoundingClientRect(), document.documentElement.clientWidth,
-      document.documentElement.clientHeight, menu.current!.getBoundingClientRect().width));
-  }, [open]);
-  useEffect(() => {
-    if (!open) return;
-    const items = menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
-    items?.[focusLast.current ? items.length - 1 : 0]?.focus();
-    const away = (e: PointerEvent) => {
-      if (!menu.current?.contains(e.target as Node) && !trigger.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const escape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
-    };
-    const moved = (e: Event) => { if (!menu.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('pointerdown', away);
-    document.addEventListener('keydown', escape, true);
-    window.addEventListener('resize', moved);
-    window.addEventListener('scroll', moved, true);
-    return () => {
-      document.removeEventListener('pointerdown', away);
-      document.removeEventListener('keydown', escape, true);
-      window.removeEventListener('resize', moved);
-      window.removeEventListener('scroll', moved, true);
-    };
-  }, [open]);
 
   return (
     <span className={`actions node-actions${labels ? ' labelled' : ''}`} onClick={(e) => e.stopPropagation()}>
@@ -115,31 +149,8 @@ export function ActionButtons({ node, labels }: { node: NodeView; labels?: boole
         }}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
       </button>
-      {open && createPortal(
-        <div ref={menu} id={menuId} className="node-action-menu" role="menu" aria-label={`Actions for ${node.title}`} style={position}
-          onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            if (e.metaKey || e.ctrlKey) { close(); return; }
-            if (e.altKey) return;
-            e.stopPropagation();
-            const items = Array.from(menu.current!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
-            const index = items.indexOf(document.activeElement as HTMLButtonElement);
-            if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) {
-              e.preventDefault();
-              const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (index + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-              items[next]?.focus();
-            } else if (e.key === 'Tab') {
-              // Return to the trigger before the native Tab step leaves this action group.
-              close(true);
-            }
-          }}>
-          {secondary.map((a) => (
-            <button key={a.key} role="menuitem" tabIndex={-1} className={a.danger ? 'danger' : ''} onClick={() => { close(true); a.run(); }}>
-              <Icon name={a.icon} size={14} /><span>{a.label}</span>
-            </button>
-          ))}
-        </div>, document.body,
-      )}
+      {open && <ActionMenu id={menuId} label={`Actions for ${node.title}`} actions={secondary} at={trigger.current!.getBoundingClientRect()}
+        focusLast={focusLast.current} trigger={trigger} onClose={close} />}
     </span>
   );
 }

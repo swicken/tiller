@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { claudeAccounts, conversation, mk } from './fixtures';
-import { applyServer, conversationRequested, conversationsRequested, diffRequested, expectSpawn, getState, toggleShowTools, update, transcriptRequested } from './store';
+import { applyServer, conversationRequested, conversationsRequested, diffRequested, expectSpawn, getState, selectSession, toggleShowTools, update, transcriptRequested } from './store';
+import { roots } from './sidebar/sessions';
 
 it('the diff panel shows the diff reply\'s own failure, not another error for the same node', () => {
   diffRequested('a');
@@ -143,3 +144,27 @@ it('keeps the latest claudeAccounts reply', () => {
   applyServer({ t: 'claudeAccounts', accounts: [] });
   expect(getState().claudeAccounts).toEqual([]);
 });
+
+it('keeps session tabs in the daemon\'s saved order, puts new sessions last and hands a closed session\'s selection to its right-hand neighbour', () => {
+  const [a, b, c, child] = [mk('a', null, 1), mk('b', null, 3), mk('c', null, 2), mk('child', 'b', 4)];
+  update(() => ({ nodes: {}, order: [], sessionOrder: [], selected: null, session: null }));
+  applyServer({ t: 'snapshot', nodes: [a, b, c, child], sessionOrder: ['c', 'a', 'b'] });
+  const tabs = () => roots(getState().nodes, getState().order).map((r) => r.id);
+  expect(tabs()).toEqual(['c', 'a', 'b']);
+  // A new session goes last, though it changed most recently; its child stays with its siblings.
+  applyServer({ t: 'node', node: mk('d', null, 99) });
+  expect(tabs()).toEqual(['c', 'a', 'b', 'd']);
+  applyServer({ t: 'sessionOrder', ids: ['b', 'd', 'c', 'a'] });
+  expect(tabs()).toEqual(['b', 'd', 'c', 'a']);
+  expect(getState().sessionOrder).toEqual(['b', 'd', 'c', 'a']);
+  // A reload keeps it.
+  applyServer({ t: 'snapshot', nodes: [a, b, c, child, mk('d', null, 99)], sessionOrder: ['b', 'd', 'c', 'a'] });
+  expect(tabs()).toEqual(['b', 'd', 'c', 'a']);
+  selectSession('d');
+  applyServer({ t: 'removed', id: 'd' });
+  expect(getState().session).toBe('c');
+  selectSession('a');
+  applyServer({ t: 'removed', id: 'a' }); // the last tab: its left-hand neighbour
+  expect(getState().session).toBe('c');
+});
+
