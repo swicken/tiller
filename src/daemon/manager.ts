@@ -800,16 +800,22 @@ export class NodeManager extends EventEmitter {
     if (this.registry.update(id, { title })) this.emitNode(id);
   }
 
+  /** Ids of the nodes that get a session tab, oldest first: those with no parent, or whose parent was closed (its children stay), as the UI counts them. */
+  private tabRoots(): string[] {
+    return this.registry.list().filter((n) => !(n.parentId && this.registry.get(n.parentId)))
+      .sort((a, b) => a.createdAt - b.createdAt).map((n) => n.id);
+  }
+
   /** Root ids in tab order: the human's arrangement, then any root it does not name, oldest first. */
   sessionOrder(): string[] {
-    const roots = this.registry.list().filter((n) => n.parentId === null).sort((a, b) => a.createdAt - b.createdAt).map((n) => n.id);
+    const roots = this.tabRoots();
     const saved = this.registry.sessionOrder.filter((id) => roots.includes(id));
     return [...saved, ...roots.filter((id) => !saved.includes(id))];
   }
 
   /** Save the human's tab order, dropping ids that are not session roots, and announce it. */
   setSessionOrder(ids: string[]): void {
-    const roots = new Set(this.registry.list().filter((n) => n.parentId === null).map((n) => n.id));
+    const roots = new Set(this.tabRoots());
     this.registry.setSessionOrder([...new Set(ids)].filter((id) => roots.has(id)));
     this.emit('sessionOrder', this.sessionOrder());
   }
