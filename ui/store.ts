@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
 import type { ReviewComment } from './diff';
-import { pickInitial, rootOf } from './sidebar/sessions';
+import { arrange, besideSession, pickInitial, rootOf } from './sidebar/sessions';
 import { insertSorted, type Nodes } from './sidebar/tree';
 import { readPref, writePref } from './prefs';
 import { wantedNode } from './url';
@@ -26,11 +26,13 @@ export type Dialog =
   | { kind: 'update' }
   | { kind: 'whatsNew'; notes: InstalledReleaseNotes };
 
-export interface Renaming { id: string; at: 'title' | 'row' | 'session' }
+export interface Renaming { id: string; at: 'title' | 'row' | 'session' | 'tab' }
 
 export interface State {
   nodes: Nodes;
   order: string[];
+  /** Root ids in the tab order the daemon saved; `order` keeps its roots in this order. */
+  sessionOrder: string[];
   selected: string | null;
   /** Root of the selected node's tree: the session shown in the sidebar. */
   session: string | null;
@@ -93,7 +95,7 @@ const stored = readPref('tl.panel') === '1';
 const storedTools = readPref('tl.showTools') === '1';
 
 let state: State = {
-  nodes: {}, order: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
+  nodes: {}, order: [], sessionOrder: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
   connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
   transcriptOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
 };
@@ -179,6 +181,9 @@ function choose(s: State, nodes: Nodes, id: string | null): Partial<State> {
 
 export const selectNode = (id: string) => update((s) => (s.nodes[id] ? { archived: null, ...choose(s, s.nodes, id) } : {}));
 
+/** Put the session tabs in this order (root ids); the daemon's broadcast and a drag both land here, and a drag also sends it. */
+export const arrangeSessions = (ids: string[]) => update((s) => ({ sessionOrder: ids, order: arrange(s.nodes, s.order, ids) }));
+
 /** Switching session selects its root. */
 export const selectSession = (rootId: string) => update((s) => (s.session === rootId ? {} : { archived: null, ...choose(s, s.nodes, rootId) }));
 
@@ -191,9 +196,11 @@ export function applyServer(m: ServerMessage) {
         let order = s.order.filter((id) => nodes[id]);
         const fresh = m.nodes.filter((n) => !order.includes(n.id)).sort((a, b) => b.status.changedAt - a.status.changedAt);
         for (const n of fresh) order = insertSorted(order, nodes, n);
+        const sessionOrder = m.sessionOrder ?? s.sessionOrder;
+        order = arrange(nodes, order, sessionOrder);
         const base = { ...s, order, opened: s.opened.filter((id) => nodes[id]) };
         const sel = s.selected && nodes[s.selected] ? s.selected : pickInitial(nodes, order, s.selected ? undefined : wantedNode);
-        return { order, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
+        return { order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
       });
     case 'update':
       if (m.update.failed && m.update.failed !== state.update?.failed) toast(m.update.failed, undefined, 'bad');
@@ -208,11 +215,15 @@ export function applyServer(m: ServerMessage) {
       return update(() => ({ usage: m.usage }));
     case 'claudeAccounts':
       return update(() => ({ claudeAccounts: m.accounts }));
+    case 'sessionOrder':
+      return arrangeSessions(m.ids);
     case 'node':
       return update((s) => {
         const isNew = !s.order.includes(m.node.id);
         const nodes = { ...s.nodes, [m.node.id]: m.node };
-        const order = isNew ? insertSorted(s.order, s.nodes, m.node) : s.order;
+        // A new session's tab goes last; a child goes among its siblings.
+        const root = !(m.node.parentId && s.nodes[m.node.parentId]);
+        const order = !isNew ? s.order : root ? [...s.order, m.node.id] : insertSorted(s.order, s.nodes, m.node);
         // The selected node is being looked at, so it never shows as unread.
         if (s.selected === m.node.id) nodes[m.node.id] = { ...m.node, unread: false };
         if (isNew && s.awaitSpawn) return { order, awaitSpawn: false, archived: null, ...choose(s, nodes, m.node.id) };
@@ -223,7 +234,8 @@ export function applyServer(m: ServerMessage) {
         const { [m.id]: gone, ...nodes } = s.nodes;
         const order = without(s.order, m.id);
         const base = { ...s, opened: without(s.opened, m.id) };
-        const next = s.selected !== m.id ? s.selected : gone?.parentId && nodes[gone.parentId] ? gone.parentId : pickInitial(nodes, order);
+        // A closed session hands the selection to its neighbouring tab, right first.
+        const next = s.selected !== m.id ? s.selected : gone?.parentId && nodes[gone.parentId] ? gone.parentId : besideSession(s.nodes, s.order, m.id) ?? pickInitial(nodes, order);
         return { order, opened: base.opened, removals: s.removals + 1, ...choose(base, nodes, next) };
       });
     case 'focus':

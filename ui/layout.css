@@ -2,7 +2,16 @@
 /* Session tabs strip. In the app it is the overlay title bar: 78px clear on the left for the traffic lights. */
 .dragstrip { grid-column: 1 / -1; display: flex; align-items: stretch; gap: 2px; height: 38px; padding: 0 8px; box-sizing: border-box; background: var(--surface); border-bottom: 1px solid var(--line); user-select: none; -webkit-user-select: none; }
 [data-app] .dragstrip { padding-left: 78px; }
-.stabs { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.stabs { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; scroll-padding-inline: 24px; }
+.stabs::-webkit-scrollbar { display: none; }
+/* Fade an edge that has tabs hidden past it. */
+.stabs.fade-l { mask-image: linear-gradient(to right, transparent, #000 24px); }
+.stabs.fade-r { mask-image: linear-gradient(to left, transparent, #000 24px); }
+.stabs.fade-l.fade-r { mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent); }
+/* While a tab is dragged its neighbours slide aside; the dragged one follows the pointer, above them. */
+.stabs[data-dragging] .stab:not([data-lifted]) { transition: transform 150ms ease; }
+.stab[data-lifted] { z-index: 1; background: var(--hover); color: var(--fg); }
+.stab.on[data-lifted] { background: var(--bg); }
 .stab { position: relative; display: flex; align-items: center; flex: 0 1 200px; min-width: 110px; margin-top: 5px; border-radius: 8px 8px 0 0; color: var(--dim); }
 .stab:hover { background: var(--hover); color: var(--fg); }
 .stab.on { background: var(--bg); color: var(--fg); box-shadow: inset 0 2px 0 var(--accent); }

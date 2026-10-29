@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ancestry, pickInitial, rootOf, sessions } from './sessions';
+import { ancestry, arrange, besideSession, pickInitial, rootOf, sessions } from './sessions';
 import { mk } from '../fixtures';
 
 const nodes = Object.fromEntries([
@@ -29,5 +29,19 @@ describe('sessions', () => {
     const dead = { r1: mk('r1', null, 1, { exited: true }), r2: mk('r2', null, 2, { exited: true }) };
     expect(pickInitial(dead, ['r1', 'r2'])).toBe('r1');
     expect(pickInitial({}, [])).toBeNull();
+  });
+
+  it('arrange puts roots in the saved order, roots it does not name last, and keeps every other node where it was', () => {
+    // r3 is saved first; r1 and the orphan are not saved, so they follow in their current order; 'gone' is ignored.
+    expect(arrange(nodes, order, ['r3', 'gone', 'r2'])).toEqual(['r3', 'r2', 'r1', 'orphan', 'c', 'g']);
+    expect(sessions(nodes, arrange(nodes, order, ['r3', 'r2'])).map((x) => x.root.id)).toEqual(['r3', 'r2', 'r1', 'orphan']);
+    expect(arrange(nodes, order, [])).toEqual(['r1', 'r2', 'r3', 'orphan', 'c', 'g']);
+  });
+
+  it('besideSession picks the tab to the right, else the left', () => {
+    expect(besideSession(nodes, order, 'r2')).toBe('r3');
+    expect(besideSession(nodes, order, 'orphan')).toBe('r3');
+    expect(besideSession(nodes, ['r1'], 'r1')).toBeUndefined();
+    expect(besideSession(nodes, order, 'c')).toBeUndefined(); // not a root
   });
 });

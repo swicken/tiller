@@ -101,6 +101,42 @@ describe('websocket', () => {
     await until(() => vi.mocked(server.updates.stop).mock.calls.length > stopped || undefined);
   });
 
+  it('saves the session tab order in state.json, broadcasts it, and fills in roots it does not name', async () => {
+    const mk = (title: string, parentId: string | null = null) => manager.registry.create({ parentId, kind: 'terminal', title, cwd: home });
+    const a = mk('a'), b = mk('b'), c = mk('c'), child = mk('child', a.id);
+    await connect();
+    const snap = await until(() => seen.find((m) => m.t === 'snapshot'));
+    expect(snap.t === 'snapshot' && snap.sessionOrder).toEqual([a.id, b.id, c.id]);
+    // Children, unknown and repeated ids are dropped; roots left out follow, oldest first.
+    send({ t: 'sessionOrder', ids: [c.id, 'n-gone', child.id, a.id, c.id] });
+    const sent = await until(() => seen.find((m) => m.t === 'sessionOrder'));
+    expect(sent).toEqual({ t: 'sessionOrder', ids: [c.id, a.id, b.id] });
+    manager.registry.remove(a.id);
+    manager.registry.flush();
+    expect(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).sessionOrder).toEqual([c.id]);
+    const next = new NodeManager({ home, shell: '/bin/sh' });
+    const d = next.registry.create({ parentId: null, kind: 'terminal', title: 'd', cwd: home });
+    expect(next.sessionOrder()).toEqual([c.id, b.id, child.id, d.id]); // a's child outlives it as a tab of its own
+    await next.shutdown();
+  });
+
+  it('keeps an orphaned child in the saved tab order once its root closes, as the UI gives it a tab', async () => {
+    const mk = (title: string, parentId: string | null = null) => manager.registry.create({ parentId, kind: 'terminal', title, cwd: home });
+    const a = mk('a'), b = mk('b'), orphan = mk('orphan', a.id);
+    await manager.close(a.id, true); // a root's children are kept
+    expect(manager.registry.get(orphan.id)?.parentId).toBe(a.id);
+    await connect();
+    const snap = await until(() => seen.find((m) => m.t === 'snapshot'));
+    expect(snap.t === 'snapshot' && snap.sessionOrder).toEqual([b.id, orphan.id]);
+    send({ t: 'sessionOrder', ids: [orphan.id, b.id] });
+    expect(await until(() => seen.find((m) => m.t === 'sessionOrder'))).toEqual({ t: 'sessionOrder', ids: [orphan.id, b.id] });
+    manager.registry.flush();
+    expect(JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).sessionOrder).toEqual([orphan.id, b.id]);
+    const next = new NodeManager({ home, shell: '/bin/sh' });
+    expect(next.sessionOrder()).toEqual([orphan.id, b.id]);
+    await next.shutdown();
+  });
+
   it('rejects a bad token', async () => {
     await connect('wrong');
     const code = await new Promise((ok) => ws!.once('close', ok));
