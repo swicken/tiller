@@ -9,6 +9,7 @@ const fieldHelp: Record<string, string> = {
   'notifications.kinds.errored': 'An agent encounters an error.',
   'notifications.kinds.done': 'Level for the tree completion summary, or each finished turn when summaries are off.',
   'notifications.kinds.exited': 'An agent process exits.',
+  'notifications.kinds.approval': 'An agent asks you to approve a close, merge or terminal write.',
   'notifications.treeDoneSummary': 'Notify once all agents, including the root, finish. Terminals do not count; pending work and gates delay the summary.',
   'claude.account': 'Which Claude account root nodes run in; a choice in the new-node dialog wins, and children inherit their parent’s. Stored in ~/.tiller/config.json, never in the repository.',
   'claude.inheritMcpServers': 'Load your user and plugin MCP servers alongside Tiller’s. A project’s .mcp.json servers stay off. Off gives Claude nodes only Tiller’s server.',
@@ -38,7 +39,7 @@ export const profileFields = (harness: Harness): Field[] => PROFILES.flatMap((pr
 ]);
 export const groups: { title: string; homeOnly?: boolean; help?: string; fields: Field[] }[] = [
   { title: 'Notifications', help: 'Choose how Tiller gets your attention when agents need you or finish work.', fields: [
-    ...['needsYou', 'errored', 'done', 'exited'].map((kind) => field(`notifications.kinds.${kind}`, kind)),
+    ...['needsYou', 'errored', 'done', 'exited', 'approval'].map((kind) => field(`notifications.kinds.${kind}`, kind)),
     field('notifications.treeDoneSummary', 'One completion summary per tree'),
     field('notifications.quietHours', 'Quiet hours', { help: 'Local time HH:MM-HH:MM; can cross midnight. Needs-you banners remain visible without sound.' }),
   ] },

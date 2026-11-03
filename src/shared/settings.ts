@@ -69,7 +69,7 @@ export const SETTINGS_FIELDS: SettingsField[] = [
   field('gate.command', 'text'), field('gate.retries', 'number', { min: 0, integer: true }), field('gate.timeoutMinutes', 'number', { min: 0 }),
   field('daemon.resumeOnStart', 'boolean'),
   ...['resumeMaxAgeDays', 'sessionsKeepDays', 'digestAfterMinutes', 'maxLiveNodes', 'maxWorking'].map(k => field(`daemon.${k}`, 'number', { min: 0, integer: k.startsWith('max') })),
-  ...['needsYou', 'done', 'errored', 'exited'].map(k => field(`notifications.kinds.${k}`, 'select', { options: ['banner', 'sound', 'silent'] })),
+  ...['needsYou', 'done', 'errored', 'exited', 'approval'].map(k => field(`notifications.kinds.${k}`, 'select', { options: ['banner', 'sound', 'silent'] })),
   field('notifications.treeDoneSummary', 'boolean'), field('notifications.quietHours', 'text'),
   ...['maxDepth', 'maxChildren', 'stallMinutes', 'maxMessagesPer10Min'].map(k => field(`limits.${k}`, 'number', { min: 0, integer: k !== 'stallMinutes' })),
 ];

@@ -241,7 +241,7 @@ export function applyServer(m: ServerMessage) {
     case 'focus':
       return update((s) => ((m.from === 'human' || s.selected === m.from) && s.nodes[m.id] ? choose(s, s.nodes, m.id) : {}));
     case 'confirm':
-      return update((s) => ({ confirms: [...s.confirms, { confirmId: m.confirmId, text: m.text }] }));
+      return update((s) => (s.confirms.some((c) => c.confirmId === m.confirmId) ? {} : { confirms: [...s.confirms, { confirmId: m.confirmId, text: m.text }] }));
     case 'confirmDone':
       return dropConfirm(m.confirmId);
     case 'diff': {

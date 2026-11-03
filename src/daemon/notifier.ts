@@ -8,6 +8,11 @@ import type { NotifyEvent } from './manager.js';
 
 const THROTTLE_MS = 5000;
 const APP_BUNDLE = 'dev.tiller.app';
+/** Stands in for a node id on an approval notification; the UI ignores a click on an id it has no node for. */
+const APPROVAL_ID = 'approval';
+
+/** A node event, or an agent's request for the human's approval. */
+export type Kind = NotifyEvent['kind'] | 'approval';
 
 export interface Content { title: string; subtitle?: string; body: string; sound: boolean }
 
@@ -35,10 +40,10 @@ export function inQuietHours(spec: string, now: Date): boolean {
 }
 
 /** How to show `kind` under the notifications config, and which setting decided it. */
-export function decide(kind: NotifyEvent['kind'], cfg: Notifications, now: Date): { level: NotifyLevel; why: string } {
+export function decide(kind: Kind, cfg: Notifications, now: Date): { level: NotifyLevel; why: string } {
   const level = cfg.kinds[kind];
   if (level === 'silent') return { level, why: `kinds.${kind}` };
-  if (cfg.quietHours && inQuietHours(cfg.quietHours, now)) return kind === 'needsYou' ? { level: 'banner', why: 'quietHours' } : { level: 'silent', why: 'quietHours' };
+  if (cfg.quietHours && inQuietHours(cfg.quietHours, now)) return kind === 'needsYou' || kind === 'approval' ? { level: 'banner', why: 'quietHours' } : { level: 'silent', why: 'quietHours' };
   return { level, why: `kinds.${kind}` };
 }
 
@@ -92,7 +97,7 @@ const summaryInputs = (v: NodeView) => [v.status.state, !!v.status.exited, v.gat
  * observe skips a node event that changed none of summaryInputs; recheck always runs; forget drops a removed node's state.
  */
 export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
-  observe(node: NodeView): void; recheck(node: NodeView): void; forget(id: string): void;
+  observe(node: NodeView): void; approval(text: string): void; recheck(node: NodeView): void; forget(id: string): void;
 } {
   const last = new Map<string, number>();
   const seen = new Map<string, unknown[]>();
@@ -103,7 +108,7 @@ export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
     sessionId?: string; exited: boolean; gate: NodeView['gate']; outcomeBeforeGate: NodeView['outcome'];
   }>();
   const log = d.log ?? console.log;
-  const post = (id: string, kind: NotifyEvent['kind'], key: string, c: Omit<Content, 'sound'>, now: number) => {
+  const post = (id: string, kind: Kind, key: string, c: Omit<Content, 'sound'>, now: number) => {
     const say = (what: string) => log(`notify ${id} ${key}: ${what}`);
     if (d.view(id)?.muted) return say('suppressed (muted)');
     if (dndActive(d.dnd(), now)) return say('suppressed (do not disturb)');
@@ -111,7 +116,7 @@ export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
     const { level, why } = decide(kind, d.config(id), new Date(now));
     if (level === 'silent') return say(`suppressed (${why})`);
     const k = `${id}:${key}`;
-    if (key !== 'tree' && now - (last.get(k) ?? -Infinity) < THROTTLE_MS) return say('suppressed (throttled)');
+    if (key !== 'tree' && kind !== 'approval' && now - (last.get(k) ?? -Infinity) < THROTTLE_MS) return say('suppressed (throttled)');
     last.set(k, now);
     const payload = { ...c, id, sound: level === 'sound' };
     const fallback = () => {
@@ -172,6 +177,8 @@ export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
     }
     post(n.id, n.kind, n.kind, content(node, n.kind, root.title), now);
   };
+  /** An approval request is not about one node: it has no mute, watcher or throttle, and the project config is the home one. */
+  const approval = (text: string) => post(APPROVAL_ID, 'approval', 'approval', { title: 'Approval needed', body: firstLine(text) }, (d.now ?? Date.now)());
   const recheck = (node: NodeView) => summarize(node.id, (d.now ?? Date.now)());
   // Working, pending, restart and gate transitions do not emit notification events.
   const observe = (node: NodeView) => {
@@ -186,7 +193,7 @@ export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
     announced.delete(id);
     active.delete(id);
   };
-  return Object.assign(notify, { observe, recheck, forget });
+  return Object.assign(notify, { observe, recheck, forget, approval });
 }
 
 /** First executable named `name` on `path`, else undefined. */

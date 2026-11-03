@@ -35,7 +35,7 @@ describe('loadConfig', () => {
       gate: { command: 'npm test', retries: 5, timeoutMinutes: 10 }, // each gate key resolves on its own
       daemon: { resumeOnStart: true, resumeMaxAgeDays: 7, sessionsKeepDays: 14, digestAfterMinutes: 30, maxLiveNodes: 20, maxWorking: 4 },
       limits: { maxDepth: 3, maxChildren: 2, stallMinutes: 2, maxMessagesPer10Min: 20 },
-      notifications: { kinds: { needsYou: 'sound', errored: 'silent', done: 'silent', exited: 'silent' }, treeDoneSummary: true, quietHours: '22:00-07:00' },
+      notifications: { kinds: { needsYou: 'sound', errored: 'silent', done: 'silent', exited: 'silent', approval: 'sound' }, treeDoneSummary: true, quietHours: '22:00-07:00' },
     });
     const sources = Object.fromEntries(Object.entries(configEntries(cwd, homeDir)).map(([k, e]) => [k, e.source]));
     expect(sources).toEqual({
@@ -46,7 +46,7 @@ describe('loadConfig', () => {
       'worktrees.isolation': home, 'worktrees.branchPrefix': 'default', 'worktrees.include': proj, 'worktrees.mergeStyle': proj, 'worktrees.setup': home, 'worktrees.teardown': 'default', 'worktrees.protected': 'default', 'worktrees.taskBranch': proj,
       'gate.command': proj, 'gate.retries': home, 'gate.timeoutMinutes': 'default',
       'daemon.resumeOnStart': 'default', 'daemon.resumeMaxAgeDays': home, 'daemon.sessionsKeepDays': 'default', 'daemon.digestAfterMinutes': home, 'daemon.maxLiveNodes': 'default', 'daemon.maxWorking': home,
-      'notifications.kinds.needsYou': 'default', 'notifications.kinds.done': proj, 'notifications.kinds.errored': 'default', 'notifications.kinds.exited': home,
+      'notifications.kinds.needsYou': 'default', 'notifications.kinds.done': proj, 'notifications.kinds.errored': 'default', 'notifications.kinds.exited': home, 'notifications.kinds.approval': 'default',
       'notifications.treeDoneSummary': 'default', 'notifications.quietHours': home,
       'limits.maxDepth': 'default', 'limits.maxChildren': proj, 'limits.stallMinutes': home, 'limits.maxMessagesPer10Min': 'default',
     });
@@ -87,7 +87,7 @@ describe('loadConfig', () => {
     expect(c).toMatchObject({ roles: { orchestrator: {}, worker: {} }, approvals: { close: 'never', merge: false }, worktrees: { isolation: 'none', branchPrefix: 'tl/' }, daemon: { resumeOnStart: true, resumeMaxAgeDays: 3 }, claude: { inheritMcpServers: true }, pi: { extensions: 'all' } });
     expect(c.worktrees.include).toBeUndefined();
     expect(c.gate).toBeUndefined();
-    expect(c.notifications).toEqual({ kinds: { needsYou: 'sound', errored: 'silent', done: 'banner', exited: 'silent' }, treeDoneSummary: true });
+    expect(c.notifications).toEqual({ kinds: { needsYou: 'sound', errored: 'silent', done: 'banner', exited: 'silent', approval: 'sound' }, treeDoneSummary: true });
   });
 
   it('uses shipped global defaults in a fresh home and tl config without creating files', () => {

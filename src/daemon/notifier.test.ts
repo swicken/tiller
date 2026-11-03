@@ -59,6 +59,7 @@ describe('notifyArgs', () => {
 describe('decide', () => {
   it('defaults to actionable attention and a banner level for tree completion', () => {
     expect((['needsYou', 'errored', 'done', 'exited'] as const).map((k) => decide(k, DEFAULTS, at('12:00')).level)).toEqual(['sound', 'silent', 'banner', 'silent']);
+    expect(decide('approval', DEFAULTS, at('12:00'))).toEqual({ level: 'sound', why: 'kinds.approval' });
   });
 
   it('follows the kinds map', () => {
@@ -71,6 +72,7 @@ describe('decide', () => {
     const q = { ...DEFAULTS, quietHours: '22:00-07:00' };
     for (const t of ['22:00', '23:59', '00:00', '06:59']) {
       expect(decide('needsYou', q, at(t))).toEqual({ level: 'banner', why: 'quietHours' });
+      expect(decide('approval', q, at(t))).toEqual({ level: 'banner', why: 'quietHours' });
       expect(decide('errored', q, at(t)).level).toBe('silent');
       expect(decide('done', q, at(t)).level).toBe('silent');
     }
@@ -116,6 +118,21 @@ describe('createNotifier', () => {
     const banner = setup(0, { native, cfg: { kinds: { ...DEFAULTS.kinds, needsYou: 'banner' } } });
     banner.notify(ev('needsYou'));
     expect(native.mock.calls[1][0].sound).toBe(false);
+  });
+
+  it('notifies an approval request with the first line of its text, honouring the level and DND, without a throttle', () => {
+    const s = setup(0, { nodes: [] });
+    s.notify.approval('\nagent wants to close x (n9)\nmore detail');
+    s.notify.approval('agent wants to merge y'); // same instant: approvals are not throttled
+    expect(s.calls).toHaveLength(2);
+    expect(s.calls[0]).toContain('agent wants to close x (n9)');
+    expect(s.calls[0]).toContain('Approval needed');
+    expect(s.calls[0]).toContain('default'); // the default level is sound
+    const silent = setup(0, { nodes: [], cfg: { kinds: { ...DEFAULTS.kinds, approval: 'silent' } } });
+    silent.notify.approval('x');
+    const dnd = setup(0, { nodes: [], dnd: { on: true } });
+    dnd.notify.approval('x');
+    expect([silent.calls, dnd.calls]).toEqual([[], []]);
   });
 
   it('never offers muted, watched, DND or silent notifications to native delivery', () => {
@@ -371,7 +388,7 @@ describe('createNotifier', () => {
   });
 
   it('preserves explicit per-node notification overrides when tree summaries are disabled', () => {
-    const s = setup(0, { cfg: { treeDoneSummary: false, kinds: { needsYou: 'sound', errored: 'sound', done: 'banner', exited: 'banner' } } });
+    const s = setup(0, { cfg: { treeDoneSummary: false, kinds: { needsYou: 'sound', errored: 'sound', done: 'banner', exited: 'banner', approval: 'sound' } } });
     for (const kind of ['errored', 'done', 'exited'] as const) s.notify(ev(kind));
     expect(s.calls).toHaveLength(3);
   });

@@ -523,6 +523,72 @@ describe('client tracking', () => {
 });
 
 
+describe('approval requests', () => {
+  /** A second socket with its own message log, so a test can hold two clients at once. */
+  const open = async () => {
+    const got: ServerMessage[] = [];
+    const sock = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+    sock.on('message', (raw) => got.push(JSON.parse(raw.toString())));
+    await new Promise((ok, fail) => { sock.once('open', ok); sock.once('error', fail); });
+    sock.send(JSON.stringify({ t: 'auth', token: adminToken() } satisfies ClientMessage));
+    await until(() => got.find((m) => m.t === 'snapshot'));
+    const asked = () => got.flatMap((m) => (m.t === 'confirm' ? [m] : []));
+    const answer = (confirmId: string, ok: boolean) => sock.send(JSON.stringify({ t: 'confirm', confirmId, ok } satisfies ClientMessage));
+    return { got, sock, asked, answer, done: () => got.filter((m) => m.t === 'confirmDone') };
+  };
+
+  it('sends pending requests to a client that connects later, in order; its answer resolves them and reaches every client', async () => {
+    const first = await open();
+    const notified: string[] = [];
+    server.onApproval = (text) => notified.push(text);
+    const a = server.confirm('one wants to close x');
+    const b = server.confirm('two wants to merge y');
+    expect(notified).toEqual(['one wants to close x', 'two wants to merge y']);
+    first.sock.terminate(); // the only client goes away, the requests stay pending
+    const late = await open();
+    await until(() => (late.asked().length === 2 ? true : undefined));
+    expect(late.asked().map((m) => m.text)).toEqual(['one wants to close x', 'two wants to merge y']);
+    late.answer(late.asked()[0].confirmId, true);
+    late.answer(late.asked()[1].confirmId, false);
+    expect(await Promise.all([a, b])).toEqual([true, false]);
+    await until(() => (late.done().length === 2 ? true : undefined));
+    // Answered requests are not offered to the next client.
+    const next = await open();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(next.asked()).toEqual([]);
+    late.sock.terminate(); next.sock.terminate();
+  });
+
+  it('does not offer an expired or aborted request, and a longer timeout outlives the default', async () => {
+    const first = await open();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const quick = server.confirm('short');
+    const long = server.confirm('long', undefined, 30 * 60_000);
+    const abort = new AbortController();
+    const aborted = server.confirm('aborted', abort.signal);
+    abort.abort();
+    expect(await aborted).toBe(false);
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(await quick).toBeUndefined();
+    vi.useRealTimers();
+    first.sock.terminate();
+    const late = await open();
+    await until(() => (late.asked().length ? true : undefined));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(late.asked().map((m) => m.text)).toEqual(['long']); // not 'short' (expired) or 'aborted'
+    late.answer(late.asked()[0].confirmId, true);
+    expect(await long).toBe(true);
+    late.sock.terminate();
+  });
+
+  it('resolves false at once with no authed client, and raises no notification', async () => {
+    const notified: string[] = [];
+    server.onApproval = (text) => notified.push(text);
+    expect(await server.confirm('nobody to see this')).toBe(false);
+    expect(notified).toEqual([]);
+  });
+});
+
 describe('approved native notification delivery', () => {
   const notification = { id: 'n-approved', title: 'Build', body: 'Finished', sound: false };
   const offer = () => until(() => seen.find((m) => m.t === 'nativeNotify')) as Promise<Extract<ServerMessage, { t: 'nativeNotify' }>>;

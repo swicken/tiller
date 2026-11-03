@@ -39,6 +39,7 @@ const notifier = createNotifier({
   onClick: (id) => `TL_HOME=${sq(manager.home)} PATH=${sq(path)} ${sq(tl)} select ${id}`,
   run: runDetached,
 });
+server.onApproval = notifier.approval;
 manager.on('notify', notifier);
 manager.on('node', notifier.observe);
 manager.on('removed', (id: string) => {
