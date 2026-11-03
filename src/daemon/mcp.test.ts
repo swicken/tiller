@@ -189,13 +189,17 @@ describe('mcp api', () => {
       three.decide(undefined); // the confirm timed out
       expect((await notice(3)).text).toContain('arrived in time; nothing was closed');
       expect(manager.view(k2)).toBeDefined();
-      // Closed by the human while the request waited: reported as such, not as closed by this request.
+      // A second request for a node already waiting for the human is refused at once, naming the pending one.
       const four = await pending(k2);
+      const dup = await api('close', { nodeIds: [k2] }, p, tok);
+      expect(dup.body.error).toBe(`close request ${four.requestId} for ${k2} is already waiting for the human`);
+      // Closed by the human while the request waited: the request is cancelled, its dialog dismissed, the caller told.
       expect((await api('close', { nodeIds: [k2] })).body.data).toMatchObject({ ok: true });
+      expect(signals.at(-1)?.aborted).toBe(true);
+      expect(await notice(4)).toMatchObject({ from: `tiller (close request ${four.requestId} cancelled)`, text: expect.stringContaining('closed by other means') });
       four.decide(true);
-      const text = (await notice(4)).text;
-      expect(text).toContain(`Already closed by someone else: ${k2}.`);
-      expect(text).not.toContain('Closed:');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(inbox(manager, p)).toHaveLength(4); // no approval notice follows
       // The caller closed while its request waits: the dialog is dismissed and nothing closes.
       const k3 = await kid();
       const five = await pending(k3);
@@ -234,6 +238,35 @@ describe('mcp api', () => {
       expect(manager.view(kid)).toBeDefined();
     } finally { answer = true; }
     await manager.close(kid, true, 'discard');
+    await manager.close(p, true);
+  });
+
+  it('a discard approved later succeeds when the worktree folder was removed meanwhile, and is not counted against the approval', async () => {
+    const repo = join(home, 'gone-repo'), path = join(repo, '.claude', 'worktrees', 'g');
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' }).trim();
+    mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'a.txt'), 'a');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'root');
+    git(repo, 'worktree', 'add', '-q', '-b', 'tl/g', path);
+    writeFileSync(join(path, 'one.txt'), '1');
+    const p = (await spawnT('gp')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    manager.registry.update(p, { kind: 'claude' });
+    inbox(manager, p);
+    const kid = (await spawnT('gk', p, tok, { cwd: path })).body.data.nodeId as string;
+    manager.registry.update(kid, { worktree: { repo, path, branch: 'tl/g', base: 'main', baseSha: git(repo, 'rev-parse', 'HEAD') } });
+    let decide!: (ok: boolean) => void;
+    answer = new Promise((r) => { decide = r; });
+    try {
+      expect((await api('close', { nodeIds: [kid], worktree: 'discard' }, p, tok)).body.data).toMatchObject({ pending: true });
+      rmSync(path, { recursive: true }); // the folder is removed before the human answers
+      decide(true);
+      await expect.poll(() => inbox(manager, p).map((x) => x.text)).toEqual([expect.stringContaining(`Closed: ${kid}.`)]);
+      expect(manager.view(kid)).toBeUndefined();
+      expect(git(repo, 'branch', '--list', 'tl/g')).toBe('');
+    } finally { answer = true; }
     await manager.close(p, true);
   });
 
