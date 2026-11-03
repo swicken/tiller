@@ -90,6 +90,8 @@ export interface Worktree {
   missing?: boolean;
   /** The branch tip and time of the last merge: a squashed branch counts as merged until it moves. */
   merged?: { tip: string; at: number };
+  /** Set once every close check has passed and deletion starts, with the close mode; a later close finishes the removal without re-checking. */
+  removing?: 'plain' | 'keep' | 'discard';
 }
 
 /** A worktree node's branch against its base, refreshed when its turn ends, after edits, on exit, merge and close. */

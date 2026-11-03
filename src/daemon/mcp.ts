@@ -194,13 +194,21 @@ type CloseResult = { closed: string[]; gone: string[]; notes: string[]; errors: 
  * notify_when notice. `run` closes the batch once approved. A caller removed meanwhile aborts `cancel`, which dismisses
  * the human's dialog and closes nothing.
  */
-function closeLater(c: Ctx, decision: Promise<boolean | undefined>, cancel: AbortController, list: string, run: () => Promise<CloseResult>): Out {
-  const requestId = randomBytes(4).toString('hex');
-  const caller = c.caller;
-  const removed = (id: string) => { if (id === caller) cancel.abort(); };
+function closeLater(c: Ctx, decision: Promise<boolean | undefined>, cancel: AbortController, p: { requestId: string; ids: string[]; release: () => void }, list: string, run: () => Promise<CloseResult>): Out {
+  const { requestId } = p, caller = c.caller;
+  const left = new Set(p.ids);
+  const stop = () => { c.manager.off('removed', removed); p.release(); };
+  const removed = (id: string) => {
+    if (id === caller) { cancel.abort(); stop(); return; }
+    if (!left.delete(id) || left.size) return;
+    // Every node of the request was closed by other means: dismiss the dialog and say so.
+    cancel.abort();
+    stop();
+    deliver(c.manager, DAEMON, caller, `The nodes of close request ${requestId} (${list}) were closed by other means; the request is cancelled.`, { fromLabel: `tiller (close request ${requestId} cancelled)`, replyTo: null }).catch(logError);
+  };
   c.manager.on('removed', removed);
   void decision.then(async (ok) => {
-    c.manager.off('removed', removed);
+    stop();
     if (cancel.signal.aborted) return;
     let body: string;
     if (ok) {
@@ -215,6 +223,16 @@ function closeLater(c: Ctx, decision: Promise<boolean | undefined>, cancel: Abor
     text: `Waiting for the human to approve closing ${list}. Carry on: the decision arrives as a message from tiller (close request ${requestId}).`,
     data: { ok: false, pending: true, requestId },
   };
+}
+
+/** The pending close request (id) waiting for the human, by node id, for each manager: one per node. */
+const pendingCloses = new WeakMap<NodeManager, Map<string, string>>();
+
+function refuseIfPending(m: NodeManager, ids: string[]): void {
+  for (const id of ids) {
+    const rid = pendingCloses.get(m)?.get(id);
+    if (rid) throw new Error(`close request ${rid} for ${id} is already waiting for the human`);
+  }
 }
 
 /** The value given as `name` or as its alias `alias`. Both with different values is an error, and so is neither. */
@@ -393,6 +411,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         if (v.parentId !== null) continue; // only the human gets here with a root: requireOwned refuses agents
         if (!a.force) throw new Error(`refusing to close an orchestrator; use tl kill --force ${v.id}`);
       }
+      if (c.caller !== HUMAN) refuseIfPending(c.manager, ids); // the human closing a node meanwhile is one of the other means
       // Refusals come before the confirm and before approvals.close: no setting turns a refused close into a close.
       const destroys: string[] = [];
       /** What each discard showed the human, so an approval that comes later discards no more than that. */
@@ -446,9 +465,15 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         // An answer already settled (no UI connected) replies at once; otherwise the caller's turn goes on and the
         // decision arrives as a notice, so a human away from the UI does not hold the turn.
         const cancel = new AbortController();
+        refuseIfPending(c.manager, ids); // again: another request may have been reserved while the checks above awaited
+        const requestId = randomBytes(4).toString('hex');
+        const pend = pendingCloses.get(c.manager) ?? pendingCloses.set(c.manager, new Map()).get(c.manager)!;
+        for (const id of ids) pend.set(id, requestId);
+        const release = () => { for (const id of ids) if (pend.get(id) === requestId) pend.delete(id); };
         const decision = c.confirm(text, cancel.signal);
         const now = await Promise.race([decision, new Promise<'pending'>((r) => setImmediate(r, 'pending'))]);
-        if (now === 'pending') return closeLater(c, decision, cancel, list, () => closeAll(true));
+        if (now === 'pending') return closeLater(c, decision, cancel, { requestId, ids, release }, list, () => closeAll(true));
+        release();
         if (!now) return { data: { ok: false, reason: 'denied' } };
       }
       await closeAll(false);

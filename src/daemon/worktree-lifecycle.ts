@@ -223,7 +223,8 @@ export async function closeWorktreeNode(m: NodeManager, id: string, title: strin
   rt.busy = 'closing';
   try {
     await gitSettled(rt);
-    const refusal = closeRefusal((await worktreeCheck(m, id))!, mode);
+    // A removal that already started passed these checks; what is left of the tree would only show as deletions.
+    const refusal = w.removing ? undefined : closeRefusal((await worktreeCheck(m, id))!, mode);
     if (refusal) throw new Error(refusal);
     const setup = rt.setup;
     setup?.abort.abort();
@@ -234,11 +235,14 @@ export async function closeWorktreeNode(m: NodeManager, id: string, title: strin
     try {
       note = await removeWorktree(m, id, title, w, mode);
     } catch (err) {
-      m.setStatus(id, { ...rt.status!, exited: true, activity: (err as Error).message, changedAt: Date.now() }, false);
+      const msg = (err as Error).message;
+      const started = !!m.registry.get(id)?.worktree?.removing;
+      m.setStatus(id, { ...rt.status!, state: 'done', errored: true, exited: true, activity: started ? `worktree removal failed: ${msg}; close again to finish` : msg, changedAt: Date.now() }, false);
       throw err;
     }
     // A plain close got here only with the branch merged (closeRefusal and removeWorktree check it); keep notes a kept branch.
-    m.closed(id, note, note ? { branchFate: 'kept' } : mode === 'discard' ? { branchFate: 'discarded' } : { branchFate: 'merged', base: w.base });
+    const how = w.removing ?? mode;
+    m.closed(id, note, note ? { branchFate: 'kept' } : how === 'discard' ? { branchFate: 'discarded' } : { branchFate: 'merged', base: w.base });
     return note;
   } finally {
     rt.busy = undefined;
@@ -250,13 +254,29 @@ export async function worktreeCheck(m: NodeManager, id: string): Promise<Worktre
   const w = m.registry.get(id)?.worktree;
   if (!w) return undefined;
   const sharing = m.registry.list().filter((n) => n.id !== id && m.session(n.id) && inside(n.cwd, w.path)).map((n) => n.id);
-  if (!existsSync(w.path)) return { dirty: [], unmerged: [], sharing }; // missing: close keeps an unmerged branch, so nothing is lost
+  // Missing: close keeps an unmerged branch, so nothing is lost. Removing: its own deletions are not changes to count.
+  if (!existsSync(w.path) || w.removing) return { dirty: [], unmerged: [], sharing };
   const [dirty, unmerged] = await Promise.all([wt.dirtyFiles(w.path), wt.unmergedCommits(w.repo, w.branch, w.base, w.baseSha)]);
   // A squash merge leaves the branch's own commits outside base; it still counts as merged until the branch moves.
   return { dirty, unmerged: unmerged.length && (await mergedAt(w)) ? [] : unmerged, sharing };
 }
 
+/**
+ * Finish a removal the checks already allowed: take what is left of the tree away (whole or half-deleted, or already
+ * gone), then settle the branch as the close mode decided: kept for keep (its WIP commit came first), else deleted.
+ */
+async function finishRemoval(w: Worktree & { removing: 'plain' | 'keep' | 'discard' }): Promise<string | undefined> {
+  await wt.discard(w.repo, w.path);
+  if (w.removing === 'keep') return `kept branch ${w.branch}`;
+  if (await wt.branchSha(w.repo, w.branch)) await wt.deleteBranch(w.repo, w.branch); // merged (checked before) or discarded
+  return undefined;
+}
+
 async function removeWorktree(m: NodeManager, id: string, title: string, w: Worktree, mode?: 'keep' | 'discard'): Promise<string | undefined> {
+  if (w.removing) {
+    await wt.unlockForRemoval(w.repo, w.path, id);
+    return finishRemoval({ ...w, removing: w.removing });
+  }
   if (!existsSync(w.path)) {
     await wt.prune(w.repo);
     if (!(await wt.branchSha(w.repo, w.branch))) return undefined;
@@ -275,10 +295,10 @@ async function removeWorktree(m: NodeManager, id: string, title: string, w: Work
   }
   await wt.unlockForRemoval(w.repo, w.path, id);
   await teardown(m, id, w);
-  await wt.remove(w.repo, w.path, mode === 'discard');
-  if (mode === 'keep') return `kept branch ${w.branch}`;
-  await wt.deleteBranch(w.repo, w.branch); // merged (checked above) or discarded
-  return undefined;
+  const removing = mode ?? 'plain';
+  m.registry.update(id, { worktree: { ...w, removing } });
+  m.registry.flush(); // deletion starts now: a crash or failure from here on is finished by the next close
+  return finishRemoval({ ...w, removing });
 }
 
 /** See NodeManager.worktrees. */
@@ -295,6 +315,12 @@ export async function worktrees(m: NodeManager, opts: { cwd?: string; clean?: 's
 
 async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 'safe' | 'force' | undefined, r: WorktreeReport): Promise<void> {
   await wt.prune(repo);
+  if (clean === 'startup') {
+    await wt.sweepTrash(repo); // folders a crash left half-way through their deletion
+    for (const n of m.registry.list()) { // removals a crash or failure interrupted: finish them
+      if (n.worktree?.repo === repo && n.worktree.removing) await m.close(n.id, true).catch(logError);
+    }
+  }
   const entries = await wt.listWorktrees(repo);
   const live = (path: string) => m.registry.list().some((n) => m.session(n.id) && inside(n.cwd, path));
   const dir = canonical(join(repo, wt.WORKTREES_DIR)) + sep;
