@@ -24,7 +24,7 @@ const GIT_DEBOUNCE_MS = 15_000;
 const SETUP_TIMEOUT_MS = 10 * 60_000;
 
 /** What stands between a node's worktree and its removal. */
-export interface WorktreeCheck { dirty: string[]; unmerged: string[]; sharing: string[] }
+export interface WorktreeCheck { dirty: string[]; unmerged: string[]; sharing: string[]; /** The tree has no .git file, so its changes cannot be read: only a discard may remove it. */ unreadable?: true }
 
 /**
  * Why closing a worktree node must not go ahead, or undefined. Another live node working inside the tree always
@@ -33,6 +33,7 @@ export interface WorktreeCheck { dirty: string[]; unmerged: string[]; sharing: s
 export function closeRefusal(c: WorktreeCheck, mode?: 'keep' | 'discard'): string | undefined {
   const unsafe = !mode && (c.dirty.length > 0 || c.unmerged.length > 0);
   const sharing = c.sharing.length ? `in use by ${c.sharing.join(', ')}` : '';
+  if (c.unreadable && mode !== 'discard') return `worktree kept: its .git is missing, so its changes cannot be checked; close with discard${sharing ? `; ${sharing}` : ''}`;
   if (!unsafe) return sharing ? `worktree ${sharing}; close those nodes first` : undefined;
   const msg = `worktree kept: ${count(c.dirty.length, 'dirty file')}, ${count(c.unmerged.length, 'unmerged commit')}; close with keep or discard`;
   return sharing ? `${msg}; ${sharing}` : msg;
@@ -256,6 +257,7 @@ export async function worktreeCheck(m: NodeManager, id: string): Promise<Worktre
   const sharing = m.registry.list().filter((n) => n.id !== id && m.session(n.id) && inside(n.cwd, w.path)).map((n) => n.id);
   // Missing: close keeps an unmerged branch, so nothing is lost. Removing: its own deletions are not changes to count.
   if (!existsSync(w.path) || w.removing) return { dirty: [], unmerged: [], sharing };
+  if (!wt.hasGitFile(w.path)) return { dirty: [], unmerged: [], sharing, unreadable: true };
   const [dirty, unmerged] = await Promise.all([wt.dirtyFiles(w.path), wt.unmergedCommits(w.repo, w.branch, w.base, w.baseSha)]);
   // A squash merge leaves the branch's own commits outside base; it still counts as merged until the branch moves.
   return { dirty, unmerged: unmerged.length && (await mergedAt(w)) ? [] : unmerged, sharing };
@@ -295,6 +297,10 @@ async function removeWorktree(m: NodeManager, id: string, title: string, w: Work
   }
   await wt.unlockForRemoval(w.repo, w.path, id);
   await teardown(m, id, w);
+  if (mode !== 'discard') { // git's own last check: teardown or a straggling process may have written files
+    const c = (await worktreeCheck(m, id))!;
+    if (c.unreadable || c.dirty.length || (!mode && c.unmerged.length)) throw new Error(`worktree kept: changed during teardown (${c.unreadable ? 'its .git is missing' : `${c.dirty.length} uncommitted file(s), ${c.unmerged.length} unmerged commit(s)`})`);
+  }
   const removing = mode ?? 'plain';
   m.registry.update(id, { worktree: { ...w, removing } });
   m.registry.flush(); // deletion starts now: a crash or failure from here on is finished by the next close
@@ -327,23 +333,23 @@ async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 's
   for (const e of entries.filter((x) => canonical(x.path).startsWith(dir))) {
     const marker = await wt.readMarker(e.path);
     if (!marker || marker.home !== m.home || m.registry.get(marker.nodeId)?.worktree) continue; // not ours, or a node's
-    const dirty = await wt.dirtyFiles(e.path);
-    // A detached orphan has no branch to compare; only force removes it.
-    const unmerged = e.branch ? await wt.unmergedCommits(repo, e.branch, marker.base, marker.baseSha) : ['(detached HEAD)'];
-    const safe = !dirty.length && !!e.branch && (clean === 'startup' ? !(await wt.hasCommits(repo, e.branch, marker.baseSha)) : !unmerged.length);
-    const orphan = { nodeId: marker.nodeId, repo, path: e.path, branch: e.branch, base: marker.base, dirty, unmerged };
-    if (clean && (clean === 'force' || safe) && !live(e.path)) {
-      try {
+    const orphan: WorktreeReport['orphans'][number] = { nodeId: marker.nodeId, repo, path: e.path, branch: e.branch, base: marker.base, dirty: [], unmerged: [] };
+    try { // one unreadable orphan (no .git file) must not stop the rest
+      const dirty = await wt.dirtyFiles(e.path);
+      // A detached orphan has no branch to compare; only force removes it.
+      const unmerged = e.branch ? await wt.unmergedCommits(repo, e.branch, marker.base, marker.baseSha) : ['(detached HEAD)'];
+      Object.assign(orphan, { dirty, unmerged });
+      const safe = !dirty.length && !!e.branch && (clean === 'startup' ? !(await wt.hasCommits(repo, e.branch, marker.baseSha)) : !unmerged.length);
+      if (clean && (clean === 'force' || safe) && !live(e.path)) {
         await wt.unlockForRemoval(repo, e.path, marker.nodeId);
         await teardown(m, marker.nodeId, { repo, path: e.path, base: marker.base });
-        await wt.remove(repo, e.path, clean === 'force');
+        await wt.discard(repo, e.path);
         if (e.branch) await wt.deleteBranch(repo, e.branch);
         r.removed.push({ what: `worktree ${e.path}${e.branch ? ` and branch ${e.branch}` : ''}`, commits: unmerged, files: dirty });
         continue;
-      } catch (err) {
-        r.orphans.push({ ...orphan, error: (err as Error).message });
-        continue;
       }
+    } catch (err) {
+      orphan.error = (err as Error).message;
     }
     r.orphans.push(orphan);
   }

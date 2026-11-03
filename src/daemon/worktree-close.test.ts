@@ -93,6 +93,19 @@ describe('closing a worktree node', () => {
     expect(readFileOf(join(repo, 'a.txt'))).toBe('changed in the main checkout'); // the main checkout is untouched
   });
 
+  it('refuses plain and keep on a tree without .git, but a discard removes it with no removing flag', async () => {
+    const { id, w } = await node();
+    rmSync(join(w.path, '.git'));
+    expect(await m.worktreeCheck(id)).toMatchObject({ unreadable: true });
+    await expect(m.close(id, true)).rejects.toThrow(/its \.git is missing.*close with discard/);
+    await expect(m.close(id, true, 'keep')).rejects.toThrow(/close with discard/);
+    expect(existsSync(w.path)).toBe(true);
+    await m.close(id, true, 'discard');
+    expect(m.view(id)).toBeUndefined();
+    expect(existsSync(w.path)).toBe(false);
+    expect(git(repo, 'branch', '--list', w.branch)).toBe('');
+  });
+
   it('shows a failed removal as exited and errored, and the next close finishes it', async () => {
     const { id, w } = await node();
     git(repo, 'worktree', 'lock', w.path, '--reason', 'held by someone else'); // not Claude's lock: removal refuses

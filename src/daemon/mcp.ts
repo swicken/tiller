@@ -208,15 +208,15 @@ function closeLater(c: Ctx, decision: Promise<boolean | undefined>, cancel: Abor
   };
   c.manager.on('removed', removed);
   void decision.then(async (ok) => {
-    stop();
+    c.manager.off('removed', removed);
     if (cancel.signal.aborted) return;
     let body: string;
     if (ok) {
-      const r = await run();
+      const r = await run().finally(p.release); // the node stays reserved until its close is over
       body = [`The human approved closing ${list}.`, r.closed.length && `Closed: ${r.closed.join(', ')}.`, r.gone.length && `Already closed by someone else: ${r.gone.join(', ')}.`,
         ...r.notes, ...r.errors.map((e) => `Not closed: ${e}`)].filter(Boolean).join('\n');
-    } else if (ok === false) body = `The human declined closing ${list}; nothing was closed.`;
-    else body = `No decision on closing ${list} arrived in time; nothing was closed. Call close again to ask again.`;
+    } else if (ok === false) { p.release(); body = `The human declined closing ${list}; nothing was closed.`; }
+    else { p.release(); body = `No decision on closing ${list} arrived in time; nothing was closed. Call close again to ask again.`; }
     await deliver(c.manager, DAEMON, caller, body, { fromLabel: `tiller (close request ${requestId} ${ok ? 'approved' : ok === false ? 'denied' : 'expired'})`, replyTo: null });
   }).catch(logError);
   return {
