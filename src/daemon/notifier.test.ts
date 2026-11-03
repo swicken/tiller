@@ -128,11 +128,15 @@ describe('createNotifier', () => {
     expect(s.calls[0]).toContain('agent wants to close x (n9)');
     expect(s.calls[0]).toContain('Approval needed');
     expect(s.calls[0]).toContain('default'); // the default level is sound
+    expect(s.calls.map((a) => a[a.indexOf('-group') + 1])).toEqual(['approval-1', 'approval-2']); // separate banners
+    expect(s.calls[0].at(-1)).toMatch(/^approval-/); // onClick gets the approval id, which the daemon maps to a no-op
+    const watched = setup(1, { nodes: [] });
+    watched.notify.approval('x'); // watchers() counts a focused window for an approval id; here the stub says one
     const silent = setup(0, { nodes: [], cfg: { kinds: { ...DEFAULTS.kinds, approval: 'silent' } } });
     silent.notify.approval('x');
     const dnd = setup(0, { nodes: [], dnd: { on: true } });
     dnd.notify.approval('x');
-    expect([silent.calls, dnd.calls]).toEqual([[], []]);
+    expect([silent.calls, dnd.calls, watched.calls]).toEqual([[], [], []]);
   });
 
   it('never offers muted, watched, DND or silent notifications to native delivery', () => {

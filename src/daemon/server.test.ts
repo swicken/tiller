@@ -581,6 +581,16 @@ describe('approval requests', () => {
     late.sock.terminate();
   });
 
+  it('counts a focused window as watching any approval notification, whatever node it has selected', async () => {
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    send({ t: 'visibility', focused: false });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(server.watchers('approval-1')).toBe(0);
+    send({ t: 'visibility', focused: true });
+    await until(() => (server.watchers('approval-1') === 1 ? true : undefined));
+  });
+
   it('resolves false at once with no authed client, and raises no notification', async () => {
     const notified: string[] = [];
     server.onApproval = (text) => notified.push(text);

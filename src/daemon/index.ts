@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { APPROVAL_ID } from '../shared/protocol.js';
 import { treeOrder } from '../shared/tree.js';
 import { loadConfig } from './config.js';
 import { daemonPort, PORT_FILE, REPO_FILE } from './home.js';
@@ -36,7 +37,7 @@ const notifier = createNotifier({
   terminalNotifier: process.env.TL_TERMINAL_NOTIFIER ?? findBin('terminal-notifier', `${path}:/opt/homebrew/bin:/usr/local/bin`),
   terminalBundle: process.env.TL_TERMINAL_BUNDLE ?? terminalBundleFor(process.env.TERM_PROGRAM),
   // A click runs this under sh with a bare PATH, so hand it the daemon's home and PATH.
-  onClick: (id) => `TL_HOME=${sq(manager.home)} PATH=${sq(path)} ${sq(tl)} select ${id}`,
+  onClick: (id) => id.startsWith(APPROVAL_ID) ? 'true' : `TL_HOME=${sq(manager.home)} PATH=${sq(path)} ${sq(tl)} select ${id}`,
   run: runDetached,
 });
 server.onApproval = notifier.approval;

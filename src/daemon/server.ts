@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
-import { HARNESSES, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
+import { APPROVAL_ID, HARNESSES, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
 import { loadConfig } from './config.js';
 import { DEFAULT_PORT } from './home.js';
 import type { NodeManager, NotifyEvent } from './manager.js';
@@ -425,7 +425,8 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
         daemon.onApproval?.(text);
       });
     },
-    watchers: (id) => [...clients].filter((c) => c.authed && c.focused && c.selected === id).length,
+    // An approval request is on screen in every focused window, whatever node it has selected.
+    watchers: (id) => [...clients].filter((c) => c.authed && c.focused && (id.startsWith(APPROVAL_ID) || c.selected === id)).length,
     appConnected,
     notifyNative(notification) {
       const client = [...clients].find((c) => c.authed && c.kind === 'app' && c.nativeReady && c.ws.readyState === WebSocket.OPEN);

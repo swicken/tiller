@@ -2,14 +2,12 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
-import { dndActive, finished, isAgentKind, type Dnd, type NativeNotification, type NodeView } from '../shared/protocol.js';
+import { APPROVAL_ID, dndActive, finished, isAgentKind, type Dnd, type NativeNotification, type NodeView } from '../shared/protocol.js';
 import type { Notifications, NotifyLevel } from './config.js';
 import type { NotifyEvent } from './manager.js';
 
 const THROTTLE_MS = 5000;
 const APP_BUNDLE = 'dev.tiller.app';
-/** Stands in for a node id on an approval notification; the UI ignores a click on an id it has no node for. */
-const APPROVAL_ID = 'approval';
 
 /** A node event, or an agent's request for the human's approval. */
 export type Kind = NotifyEvent['kind'] | 'approval';
@@ -177,8 +175,9 @@ export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
     }
     post(n.id, n.kind, n.kind, content(node, n.kind, root.title), now);
   };
-  /** An approval request is not about one node: it has no mute, watcher or throttle, and the project config is the home one. */
-  const approval = (text: string) => post(APPROVAL_ID, 'approval', 'approval', { title: 'Approval needed', body: firstLine(text) }, (d.now ?? Date.now)());
+  /** An approval request is not about one node: it has no mute or throttle, is skipped while a focused window shows the modal, has its own banner group, and the project config is the home one. */
+  let approvals = 0;
+  const approval = (text: string) => post(`${APPROVAL_ID}-${++approvals}`, 'approval', 'approval', { title: 'Approval needed', body: firstLine(text) }, (d.now ?? Date.now)());
   const recheck = (node: NodeView) => summarize(node.id, (d.now ?? Date.now)());
   // Working, pending, restart and gate transitions do not emit notification events.
   const observe = (node: NodeView) => {
