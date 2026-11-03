@@ -168,3 +168,11 @@ it('keeps session tabs in the daemon\'s saved order, puts new sessions last and 
   expect(getState().session).toBe('c');
 });
 
+
+it('a snapshot drops the confirms queued before it, so a request answered while disconnected is not shown again', () => {
+  applyServer({ t: 'confirm', confirmId: 'old', text: 'answered elsewhere' });
+  applyServer({ t: 'snapshot', nodes: [mk('r', null, 1)] });
+  applyServer({ t: 'confirm', confirmId: 'live', text: 'still pending' }); // the server replays live ones after the snapshot
+  applyServer({ t: 'confirm', confirmId: 'live', text: 'still pending' });
+  expect(getState().confirms).toEqual([{ confirmId: 'live', text: 'still pending' }]);
+});

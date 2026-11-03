@@ -289,6 +289,9 @@ export interface RateLimit { kind: string; percentUsed: number; resetsAt?: strin
 /** Legacy latest Claude account report, retained for CLI consumers. */
 export interface Usage { rateLimits: RateLimit[]; nodeId: string; at: number; /** Tiller Claude account label, stamped by the daemon. */ account?: string }
 
+/** Prefix of the id on a notification for an agent's approval request, which is not about any one node. */
+export const APPROVAL_ID = 'approval';
+
 /** Prepared by the daemon only after notification suppression, grouping and sound policy. */
 export interface NativeNotification { id: string; title: string; subtitle?: string; body: string; sound: boolean }
 /** Usage discovery is independent of live nodes. null means not verified, not absent. */

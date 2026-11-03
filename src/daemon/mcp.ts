@@ -31,7 +31,7 @@ const HISTORY_LINES = 50;
 const MCP_DIFF_CHARS = 100_000;
 
 /** dnd sets do not disturb when `on` is given, and returns it. */
-interface Ctx { updates?: Updater; manager: NodeManager; confirm: (text: string, signal?: AbortSignal) => Promise<boolean | undefined>; focus: (from: string, id: string) => void; dnd: (on?: boolean, minutes?: number) => Dnd; caller: string; mcp?: boolean }
+interface Ctx { updates?: Updater; manager: NodeManager; confirm: (text: string, signal?: AbortSignal, timeoutMs?: number) => Promise<boolean | undefined>; focus: (from: string, id: string) => void; dnd: (on?: boolean, minutes?: number) => Dnd; caller: string; mcp?: boolean }
 interface Out { text?: string; data?: unknown }
 
 /** How long report_outcome waits for a completion gate before replying that it is still running. */
@@ -470,7 +470,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
         const pend = pendingCloses.get(c.manager) ?? pendingCloses.set(c.manager, new Map()).get(c.manager)!;
         for (const id of ids) pend.set(id, requestId);
         const release = () => { for (const id of ids) if (pend.get(id) === requestId) pend.delete(id); };
-        const decision = c.confirm(text, cancel.signal);
+        const decision = c.confirm(text, cancel.signal, 30 * 60_000);
         const now = await Promise.race([decision, new Promise<'pending'>((r) => setImmediate(r, 'pending'))]);
         if (now === 'pending') return closeLater(c, decision, cancel, { requestId, ids, release }, list, () => closeAll(true));
         release();
