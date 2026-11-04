@@ -33,7 +33,9 @@ describe('session directories with a fake claude', () => {
     expect(JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'))).toMatchObject({ rootId: root.id, title: 'root', cwd: proj });
     await expect.poll(() => read(nodeFile(worker.id, 'env'))).toBe(`${dir}\n`);
     await expect.poll(() => read(nodeFile(root.id, 'env'))).toBe(`${dir}\n`);
-    expect(read(nodeFile(worker.id, 'argv'))).toContain(`Notes that must outlive your context go in $TL_SESSION_DIR (${dir}); keep handoff.md there`);
+    expect(read(nodeFile(root.id, 'argv'))).toContain(`Notes that must outlive your context go in $TL_SESSION_DIR (${dir}); keep handoff.md there`);
+    expect(read(nodeFile(worker.id, 'argv'))).toContain(`keep handoff-${worker.id}.md there`);
+    expect(read(nodeFile(worker.id, 'argv'))).toContain('keep it under 16 KB');
   });
 
   it('restarts with the given prompt, else the handoff pointer when handoff.md exists, else no prompt', async () => {
@@ -54,14 +56,56 @@ describe('session directories with a fake claude', () => {
     const dir = sessionDir(m.home, id);
     writeFileSync(join(dir, 'handoff.md'), '# state\n');
     m.restart(id);
-    expect(firstPrompt(await lastArgs())).toBe(`Read ${join(dir, 'handoff.md')} first; it is your own handoff from before this restart.`);
+    const pointer = firstPrompt(await lastArgs());
+    expect(pointer).toContain(`You were restarted: read ${join(dir, 'handoff.md')}, your handoff note, then rewrite it in place`);
+    expect(pointer).toContain('It is 0.0 KB; keep it under 16 KB.');
 
-    writeFileSync(join(dir, 'handoff.md'), 'x'.repeat(33 * 1024));
+    writeFileSync(join(dir, 'handoff.md'), 'x'.repeat(17 * 1024));
     m.restart(id);
-    expect(firstPrompt(await lastArgs())).toContain('It is over 32 KB: rewrite it as the current state only');
+    expect(firstPrompt(await lastArgs())).toContain('It is 17.0 KB, over the 16 KB budget: bring it under.');
 
     m.restart(id, 'carry on with step 3');
     expect(firstPrompt(await lastArgs())).toBe('carry on with step 3');
+  });
+
+  it('points a child at its own handoff-<id>.md, not the root\'s', async () => {
+    const { m, proj, nodeFile } = setup();
+    const root = await m.spawn({ kind: 'claude', title: 'root', cwd: proj });
+    const worker = await m.spawn({ kind: 'claude', title: 'w', cwd: proj, parentId: root.id });
+    const dir = sessionDir(m.home, root.id);
+    writeFileSync(join(dir, 'handoff.md'), 'root note');
+    await expect.poll(() => read(nodeFile(worker.id, 'argv'))).not.toBe('');
+    m.restart(worker.id);
+    await expect.poll(() => read(nodeFile(worker.id, 'argv'))).not.toBe('');
+    expect(read(nodeFile(worker.id, 'argv'))).not.toContain('You were restarted'); // the worker has no note of its own
+    rmSync(nodeFile(worker.id, 'argv'));
+    writeFileSync(join(dir, `handoff-${worker.id}.md`), 'worker note');
+    m.restart(worker.id);
+    await expect.poll(() => read(nodeFile(worker.id, 'argv'))).toContain(`You were restarted: read ${join(dir, `handoff-${worker.id}.md`)}`);
+  });
+
+  describe('compaction', () => {
+    const sent = async (m: NodeManager, id: string) => { await flushEvents(); return readEvents(sessionDir(m.home, m.rootIdOf(id))).filter((e) => e.type === 'send' && e.from === 'tiller'); };
+    const start = (m: NodeManager, id: string, source: string) => m.applyHook(id, { hook_event_name: 'SessionStart', source });
+
+    it('sends the node a pointer at its note, only for a compaction SessionStart', async () => {
+      const { m, proj } = setup();
+      const { id } = await m.spawn({ kind: 'claude', title: 'root', cwd: proj });
+      writeFileSync(join(sessionDir(m.home, id), 'handoff.md'), '# state\n');
+      for (const source of ['startup', 'resume', 'clear']) start(m, id, source);
+      expect(await sent(m, id)).toEqual([]);
+      start(m, id, 'compact');
+      await expect.poll(() => sent(m, id)).toHaveLength(1);
+      expect(String((await sent(m, id))[0]!.text)).toContain(`Your context was just compacted: read ${join(sessionDir(m.home, id), 'handoff.md')}`);
+    });
+
+    it('sends nothing when the node has no note', async () => {
+      const { m, proj } = setup();
+      const { id } = await m.spawn({ kind: 'claude', title: 'root', cwd: proj });
+      start(m, id, 'compact');
+      await new Promise((r) => setTimeout(r, 200));
+      expect(await sent(m, id)).toEqual([]);
+    });
   });
 
   it('appends events in order and records closedAt when the root closes', async () => {

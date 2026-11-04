@@ -51,7 +51,7 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
                                                       with no argument, show whether it is on
   tl prune                                            remove every exited node that has no live descendant
   tl restart <id> [--prompt T]                        relaunch a node with a fresh session (clears its context; children are kept);
-                                                      T is its first prompt, else it is pointed at the tree's handoff.md if any
+                                                      T is its first prompt, else it is pointed at its own handoff note if any
   tl kill [--force] [--keep-branch|--discard] <id...> | close <id...>  close and delete nodes (an orchestrator needs --force);
                                                       a node's worktree must be clean and merged unless --keep-branch
                                                       (commit as WIP, keep the branch) or --discard (delete both)
