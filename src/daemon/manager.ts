@@ -29,7 +29,7 @@ import { buildChildEnv, PtySession } from './pty.js';
 import { count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
 import { addWorktree, closeWorktreeNode, dropQueuedMerges, gitSettled, mergeWorktree, readClaudeJson, refreshGit, refreshGitSoon, refreshMovedTips, setMissing, setupThenLaunch, trustedForWorktree, trustPolicy, worktreeCheck, worktreeCommands, worktreeEnv, worktrees, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
-import { appendEvent, buildDigest, ensureSession, flushEvents, handoffPrompt, listSessions, markClosed, readEvents, sessionDir, sweepSessions } from './sessions.js';
+import { appendEvent, buildDigest, ensureSession, flushEvents, handoffFileName, handoffPrompt, listSessions, markClosed, readEvents, sessionDir, sweepSessions, type HandoffRead } from './sessions.js';
 import { archivedOf, archiveNode, findArchived, type BranchFate } from './archive.js';
 import { adoptSessionHistory, nodeTranscript, recordedSessions, transcriptFor } from './transcript.js';
 import { active, initialState, interruptKeyPressed, interruptTimeout, ptyExited, reduce, stall, sweep, turnComplete, type HookEvent } from './status.js';
@@ -319,6 +319,11 @@ export class NodeManager extends EventEmitter {
   /** The tree's session directory, keyed by its root id. */
   sessionDirOf(id: string): string {
     return sessionDir(this.home, this.rootIdOf(id));
+  }
+
+  /** The pointer at the node's own handoff note, worded for why it is being read; undefined when it has no note yet. */
+  private handoffPointer(id: string, read: HandoffRead): string | undefined {
+    return handoffPrompt(join(this.sessionDirOf(id), handoffFileName(id, this.rootIdOf(id))), read);
   }
 
   /**
@@ -628,7 +633,7 @@ export class NodeManager extends EventEmitter {
     try {
       this.writeFiles(id);
       this.emit('data', id, '\x1bc'); // reset attached screens before the new process draws
-      const first = isAgentKind(rec.kind) ? prompt || handoffPrompt(this.sessionDirOf(id)) : undefined;
+      const first = isAgentKind(rec.kind) ? prompt || this.handoffPointer(id, 'restart') : undefined;
       if (rec.worktree && rt.needsSetup) setupThenLaunch(this, id, rec.worktree, worktreeCommands(this, rec.worktree.repo, 'setup'), prompt || rt.needsSetup.prompt);
       else this.launch(id, first, false);
       this.logEvent(id, 'restart', { sessionId, ...(first ? { prompt: first } : {}) });
@@ -706,7 +711,7 @@ export class NodeManager extends EventEmitter {
       this.writeFiles(id);
       this.emit('data', id, '\x1bc');
       this.logEvent(id, 'change_harness', { from, harness, sessionId });
-      this.launch(id, prompt || handoffPrompt(this.sessionDirOf(id)), false);
+      this.launch(id, prompt || this.handoffPointer(id, 'harness change'), false);
       return { ok: true };
     } catch (err) {
       const error = (err as Error).message;
@@ -882,6 +887,10 @@ export class NodeManager extends EventEmitter {
     const next = reduce(prev, event, now);
     if (next.state !== prev.state) this.registry.update(nodeId, { lastActiveAt: now });
     if (event.hook_event_name === 'SessionStart') {
+      if (event.source === 'compact') { // Claude fires SessionStart again after a compaction; Pi and Codex report it the same way
+        const pointer = this.handoffPointer(nodeId, 'compaction');
+        if (pointer) deliver(this, DAEMON, nodeId, pointer, { fromLabel: 'tiller (context compacted)', replyTo: null }).catch(logError);
+      }
       const sessionId = typeof event.session_id === 'string' ? event.session_id : undefined;
       let transcriptPath = typeof event.transcript_path === 'string' ? event.transcript_path : undefined;
       // claude --resume runs from the main checkout and fires SessionStart before it re-enters the worktree, so it reports

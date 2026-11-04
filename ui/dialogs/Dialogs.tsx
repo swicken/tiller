@@ -185,7 +185,7 @@ function RestartDialog({ id }: { id: string }) {
       <form className="form" onSubmit={submit}>
         <p>Its context is cleared; children are kept.</p>
         {node.status.exited && <p>Close removes this node from the sidebar without restarting it; children are kept.</p>}
-        {isAgentKind(node.kind) && <label>First prompt<textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional: by default it is pointed at its handoff.md, if there is one" /></label>}
+        {isAgentKind(node.kind) && <label>First prompt<textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional: by default it is pointed at its own handoff note, if there is one" /></label>}
         <div className="btns">
           <button type="button" className="btn" autoFocus onClick={close}>Cancel</button>
           {remove && <button type="button" className="btn danger" onClick={() => { close(); remove.run(); }}>Close</button>}
@@ -221,7 +221,7 @@ function ChangeHarnessDialog({ id }: { id: string }) {
           {HARNESSES.map((h) => <option key={h} value={h}>{h}{h === current ? ' (current)' : ''}</option>)}
         </Select></label>
         <p id="harness-defaults">Model, effort, preset and Claude permission overrides are cleared. The selected harness uses its task profile defaults and configured permission and approval settings.</p>
-        <label>First prompt<textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional: by default it is pointed at its handoff.md, if there is one" /></label>
+        <label>First prompt<textarea rows={3} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Optional: by default it is pointed at its own handoff note, if there is one" /></label>
         {unavailable && <p role="status">{!connected ? 'Reconnect before changing harness.' : 'Wait for the current lifecycle operation to finish.'}</p>}
         <div className="btns">
           <button type="button" className="btn" autoFocus onClick={close}>Cancel</button>
