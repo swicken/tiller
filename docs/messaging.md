@@ -1,6 +1,6 @@
 # Messaging between nodes
 
-Nodes talk through the daemon. An agent calls the MCP tool `send` (the human uses `tl send <id> "text"`), and the daemon delivers the text to the target as a prompt. Scope is the sender's lineage: its parent and other ancestors, its siblings and its descendants. Agent nodes (Claude, Pi and Codex) receive messages; a terminal node takes raw keystrokes through `write`, which the human approves each time.
+Nodes talk through the daemon. An agent calls the MCP tool `send` (the human uses `tl send <id> "text"`), and the daemon delivers the text to the target as a prompt. Scope is the sender's lineage: its parent and other ancestors, its siblings and its descendants. Agent nodes (Claude, Pi and Codex) receive messages; a terminal node takes raw keystrokes through `write`, which the human approves each time. The human's shell in an agent node's Terminal tab is out of every agent's reach: `read` and `write` refuse its stream id, and an agent can only offer a command for it with `suggest_command`, which the human inserts or dismisses (see [Agent and Terminal tabs](frontends.md#agent-and-terminal-tabs)).
 
 ## The envelope
 

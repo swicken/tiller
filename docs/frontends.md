@@ -31,6 +31,12 @@ To switch an existing agent between Claude Code, Codex and Pi, open **More actio
 
 By default, notifications appear when an agent needs your input or approval and when all agents in a tree finish. Individual completions and routine errors stay in the UI. Settings let you adjust notifications, quiet hours and shortcuts; node muting and do not disturb are also available. See [OS notifications](#os-notifications).
 
+### Agent and Terminal tabs
+
+An agent node's pane has an **Agent** tab, its agent's own terminal, and a **Terminal** tab, a plain login shell (`$SHELL -l`) for running quick commands yourself without spending the agent's tokens or context. The shell starts the first time you open the tab, in the node's directory (a worktree node's worktree, not the main checkout). It runs as you: its environment has none of the node's identity (`TL_NODE_ID`, `TL_TOKEN_FILE` and the rest), so `tl` in it acts as the human. Switching tabs or nodes leaves it running; closing the node kills it, and so does a daemon stop, `tl reload` or `tl update` (opening the tab again starts a new one). If you `exit` it, reopening the tab starts a new one. The shell never changes the node's status or notifications, and an exited agent still has a working Terminal tab. A terminal node keeps its single Terminal tab.
+
+Agents cannot read or type into this shell, but they can suggest a command for it with the `suggest_command` tool. A pending suggestion shows as a `cmd` badge on the node's row (and "suggested command" on a collapsed parent), a dot on its Terminal tab, and a strip above the shell: `Agent suggests: <command>` with **Insert** and **Dismiss**, the agent's reason as the tooltip. Insert types the command at the shell's prompt without pressing Enter, so you can read or edit it first; it is available once the shell has printed its prompt. Insert types into whatever has the shell's foreground at that moment (vim, a REPL, an ssh session), not necessarily a prompt, so check the tab first. Each node holds one suggestion: a newer one replaces it, and Insert, Dismiss, closing the node or a daemon restart clears it.
+
 ## Inside a node: the band and slash commands
 
 The tiller mod draws a one-line band above Claude's prompt: in a child, `↑ parent` and `⌂ root` buttons, which switch an attached client to that node, and the child that needs you, if any. It also shows in-session toasts when a child needs you, finishes or errors. The mod draws none of this while the app or a browser is attached, because their sidebars already show it.
