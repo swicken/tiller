@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { dndActive, harnessFor, isAgentKind, type NodeView } from '../src/shared/protocol';
+import { dndActive, harnessFor, isAgentKind, shellStreamId, type NodeView } from '../src/shared/protocol';
 import { StateDot } from './controls/Bits';
 import { cwdBase } from './format';
 import { Modal } from './controls/Modal';
 import { ancestry } from './sidebar/sessions';
-import { activityUnread, openDialog, selectNode, setActivityOpen, toggleHistory, useStore, type Dialog } from './store';
+import { activityUnread, openDialog, selectNode, setActivityOpen, showPane, toggleHistory, useStore, type Dialog } from './store';
+import { getTerm } from './terminals';
 import { toggleDnd, useNow } from './hooks';
 import { send } from './conn';
 import { statusKind } from './sidebar/tree';
@@ -35,6 +36,11 @@ export function Palette() {
     { key: 'cmd:updates', title: 'Manage updates…', sub: 'available releases and installation', run: () => replace({ kind: 'update' }) },
     { key: 'cmd:check-updates', title: 'Check for updates', sub: 'check releases and open update management', run: () => { send({ t: 'updateCheck' }); replace({ kind: 'update' }); } },
     { key: 'cmd:history', title: historyOpen ? 'Hide history' : 'History', sub: 'closed nodes: read, follow up or fork', run: () => { toggleHistory(); close(); } },
+    // Pane switches, so the keyboard alone reaches a node's shell. Focus after the palette has closed and handed focus back.
+    ...(cur && isAgentKind(cur.kind) ? [
+      { key: 'cmd:shell', title: `Terminal: ${cur.title}`, sub: `your shell in ${cwdBase(cur.cwd)}${cur.suggestion ? ' · suggested command waiting' : ''}`, run: () => { showPane('shell'); close(); requestAnimationFrame(() => getTerm(shellStreamId(cur.id))?.term.focus()); } },
+      { key: 'cmd:agent', title: `Agent: ${cur.title}`, sub: "the agent's terminal", run: () => { showPane('agent'); close(); requestAnimationFrame(() => getTerm(cur.id)?.term.focus()); } },
+    ] : []),
     ...(cur && isAgentKind(cur.kind) && harnessFor(cur) === 'claude' ? [{ key: 'cmd:fork', title: `Fork ${cur.title}…`, sub: 'new node from its conversation', run: () => openDialog({ kind: 'fork', from: cur.id, title: cur.title, cwd: cur.cwd, parentId: cur.parentId }) }] : []),
   ].filter((c) => `${c.title} ${c.sub}`.toLowerCase().includes(needle));
   const hits: Array<{ key: string; title: string; sub: string; n?: NodeView; run: () => void }> = [...nodeHits, ...cmds];
