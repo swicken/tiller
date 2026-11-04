@@ -626,6 +626,9 @@ describe('mcp api', () => {
       expect(bad.status, JSON.stringify(command)).toBe(400);
     }
     expect((await api('suggest_command', { command: 'ls', why: 'two\nlines' }, id, tok)).status).toBe(400);
+    // An empty why is no reason, not an error the agent has to puzzle over.
+    expect((await api('suggest_command', { command: 'npm test', why: '' }, id, tok)).status).toBe(200);
+    expect(manager.view(id)!.suggestion).toEqual({ command: 'npm test', at: expect.any(Number) });
     expect(manager.view(id)!.suggestion?.command).toBe('npm test'); // refusals leave the last good one
     expect((await api('suggest_command', { command: 'ls' })).body.error).toMatch(/only for agent nodes/); // the human has no agent to suggest for
   });

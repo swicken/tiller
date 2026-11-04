@@ -28,7 +28,7 @@ const MAX_WRITE_CHARS = 2000;
  * One line of printable text: no control characters (a newline or carriage return would run it, an escape sequence
  * could rewrite the line) and no invisible format characters (bidi overrides could show the human another command).
  */
-const PRINTABLE_LINE = /^[^\p{Cc}\p{Cf}\u2028\u2029]+$/u;
+const PRINTABLE_LINE = /^[^\p{Cc}\p{Cf}\u2028\u2029]*$/u; // empty passes: command has min(1), and an empty why means none
 const IDEMPOTENCY_MS = 24 * 3600_000;
 const TRANSCRIPT_CAP = 200_000;
 const HISTORY_LINES = 50;
