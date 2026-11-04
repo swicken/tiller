@@ -28,7 +28,8 @@ export function getTerm(id: string): Term | undefined {
   return terms.get(id);
 }
 
-export function createTerm(id: string, el: HTMLElement): Term {
+/** `keys` sees each key event first, as xterm's custom key handler does: return false to keep the key from the terminal. */
+export function createTerm(id: string, el: HTMLElement, keys?: (e: KeyboardEvent) => boolean): Term {
   // xterm 6 renders with the DOM renderer unless an addon is loaded, which keeps WKWebView happy.
   const term = new Terminal({
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
@@ -47,7 +48,7 @@ export function createTerm(id: string, el: HTMLElement): Term {
       },
     },
   });
-  term.attachCustomKeyEventHandler((e) => shiftEnterKey(e, isAgentNode(id), (data) => term.input(data)));
+  term.attachCustomKeyEventHandler((e) => (keys?.(e) ?? true) && shiftEnterKey(e, isAgentNode(id), (data) => term.input(data)));
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(el);
@@ -67,6 +68,18 @@ export function shiftEnterKey(e: KeyboardEvent, agent: boolean, input: (data: st
   if (e.isComposing || e.keyCode === 229) return true; // IME composition owns Enter
   if (e.type === 'keydown') { e.preventDefault(); input('\n'); }
   return false; // also swallow the keypress/keyup so xterm sends no CR
+}
+
+/**
+ * Cmd+Enter inserts and Cmd+Backspace dismisses a waiting suggested command from the shell, so the keyboard alone is
+ * enough. While a suggestion waits, those keys never reach the shell, so Cmd+Enter cannot also send Enter and run the line.
+ */
+export function suggestionKey(e: KeyboardEvent, pending: boolean, act: (action: 'insert' | 'dismiss') => void): boolean {
+  if (!pending || !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return true;
+  const action = e.key === 'Enter' ? 'insert' : e.key === 'Backspace' ? 'dismiss' : undefined;
+  if (!action) return true;
+  if (e.type === 'keydown') { e.preventDefault(); act(action); }
+  return false; // also swallow the keypress/keyup
 }
 
 export function disposeTerm(id: string) {

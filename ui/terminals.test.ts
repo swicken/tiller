@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
-import { createTerm, disposeTerm, shiftEnterKey } from './terminals';
+import { createTerm, disposeTerm, shiftEnterKey, suggestionKey } from './terminals';
 import { openExternalUrl } from './controls/externalLink';
 import { toast } from './store';
 
@@ -131,4 +131,26 @@ it('routes Shift+Enter by the node kind at key time', () => {
     expect(term.input.mock.calls).toEqual(id === 'shell' ? [] : [['\n']]);
     disposeTerm(id);
   }
+});
+
+it('inserts on Cmd+Enter and dismisses on Cmd+Backspace while a suggestion waits, keeping both keys from the shell', () => {
+  const act = vi.fn();
+  const down = key({ metaKey: true });
+  expect(suggestionKey(down, true, act)).toBe(false); // false: xterm must not also send Enter, which would run the line
+  expect(down.preventDefault).toHaveBeenCalledOnce();
+  expect(suggestionKey(key({ type: 'keyup', metaKey: true }), true, act)).toBe(false);
+  expect(suggestionKey(key({ key: 'Backspace', metaKey: true }), true, act)).toBe(false);
+  expect(act.mock.calls).toEqual([['insert'], ['dismiss']]);
+});
+
+it.each([
+  ['Cmd+Enter with no suggestion', key({ metaKey: true }), false],
+  ['plain Enter', key({}), true],
+  ['Cmd+Shift+Enter', key({ metaKey: true, shiftKey: true }), true],
+  ['Ctrl+Backspace', key({ key: 'Backspace', ctrlKey: true }), true],
+  ['Cmd+K', key({ key: 'k', metaKey: true }), true],
+])('leaves %s to the shell', (_name, e, pending) => {
+  const act = vi.fn();
+  expect(suggestionKey(e, pending, act)).toBe(true);
+  expect(act).not.toHaveBeenCalled();
 });

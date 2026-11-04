@@ -16,11 +16,11 @@ vi.mock('react', async (original) => ({
   useEffect: (fn: () => (() => void) | void) => fixture.effects.push(fn),
   useRef: () => ({ current: {} }),
 }));
-vi.mock('./store', () => ({ useStore: (select: (s: unknown) => unknown) => select(fixture.state) }));
+vi.mock('./store', () => ({ useStore: (select: (s: unknown) => unknown) => select(fixture.state), getState: () => fixture.state }));
 vi.mock('./conn', () => ({ send: vi.fn() }));
 vi.mock('./terminals', () => ({
   createTerm: () => ({ term: { onData: fixture.onData, onBinary: fixture.onBinary } }),
-  disposeTerm: vi.fn(), getTerm: vi.fn(),
+  disposeTerm: vi.fn(), getTerm: vi.fn(), suggestionKey: vi.fn(),
 }));
 
 afterEach(() => { fixture.effects.length = 0; vi.clearAllMocks(); vi.unstubAllGlobals(); });
@@ -94,7 +94,12 @@ it('offers a suggested command over the shell, with Insert disabled until the sh
   [, strip] = render({ opened: ['a'], selected: 'a', nodes: { a: { ...node, shellReady: true } }, connected: true, shellOpen: true }).props.children;
   [insert] = buttons(run(strip!));
   expect(insert.props.disabled).toBe(false);
+  const term = { focus: vi.fn() };
+  vi.mocked(getTerm).mockReturnValue({ term } as never);
   insert.props.onClick();
   // The daemon types its own validated copy; the UI never sends the command text.
   expect(send).toHaveBeenLastCalledWith({ t: 'suggestion', id: 'a', action: 'insert' });
+  // The button took focus; give it back to the shell so the human can press Enter to run the command.
+  expect(getTerm).toHaveBeenLastCalledWith('a:shell');
+  expect(term.focus).toHaveBeenCalledOnce();
 });

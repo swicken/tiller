@@ -1,9 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { isAgentKind, shellNodeId, shellStreamId, type NodeView } from '../src/shared/protocol';
 import { send } from './conn';
-import { useStore } from './store';
-import { createTerm, disposeTerm, getTerm } from './terminals';
+import { getState, useStore } from './store';
+import { createTerm, disposeTerm, getTerm, suggestionKey } from './terminals';
 import '@xterm/xterm/css/xterm.css';
+
+/** Insert or dismiss a node's suggested command, then hand the keyboard back to its shell so Enter runs it. */
+function actOnSuggestion(nodeId: string, action: 'insert' | 'dismiss'): void {
+  const n = getState().nodes[nodeId];
+  if (!n?.suggestion || (action === 'insert' && !n.shellReady)) return;
+  send({ t: 'suggestion', id: nodeId, action });
+  getTerm(shellStreamId(nodeId))?.term.focus();
+}
 
 /** A node's own PTY, or with a shell stream id (shellStreamId) the human's shell beside an agent node. */
 function TermView({ id, visible, exited, strip }: { id: string; visible: boolean; exited: boolean; strip?: boolean }) {
@@ -11,7 +19,9 @@ function TermView({ id, visible, exited, strip }: { id: string; visible: boolean
   const connected = useStore((s) => s.connected);
 
   useEffect(() => {
-    const { term } = createTerm(id, el.current!);
+    const shellOf = shellNodeId(id);
+    const keys = shellOf ? (e: KeyboardEvent) => suggestionKey(e, !!getState().nodes[shellOf]?.suggestion, (action) => actOnSuggestion(shellOf, action)) : undefined;
+    const { term } = createTerm(id, el.current!, keys);
     const sub = term.onData((data) => send({ t: 'input', id, data }));
     // Legacy mouse reports contain raw bytes, including after a serialized screen attach.
     const binarySub = term.onBinary((data) => send({ t: 'input', id, data, binary: true }));
@@ -54,13 +64,14 @@ function TermView({ id, visible, exited, strip }: { id: string; visible: boolean
 /** The agent's suggested command over its shell. The daemon types it on Insert, so the text sent is always the validated one. */
 function SuggestionStrip({ node }: { node: NodeView }) {
   const { command, why } = node.suggestion!;
-  const act = (action: 'insert' | 'dismiss') => send({ t: 'suggestion', id: node.id, action });
+  const act = (action: 'insert' | 'dismiss') => actOnSuggestion(node.id, action);
   return (
     <div className="suggest-strip" title={why}>
       <span className="dim">Agent suggests:</span>
       <code title={why ? `${command}\n${why}` : command}>{command}</code>
-      <button className="btn" disabled={!node.shellReady} title={node.shellReady ? 'Type it at the prompt without running it' : 'Waiting for the shell prompt'} onClick={() => act('insert')}>Insert</button>
-      <button className="btn" onClick={() => act('dismiss')}>Dismiss</button>
+      <button className="btn" disabled={!node.shellReady} title={node.shellReady ? 'Type it at the prompt without running it (⌘↵)' : 'Waiting for the shell prompt'} aria-keyshortcuts="Meta+Enter" onClick={() => act('insert')}>Insert</button>
+      <button className="btn" title="Dismiss (⌘⌫)" aria-keyshortcuts="Meta+Backspace" onClick={() => act('dismiss')}>Dismiss</button>
+      <span>⌘↵ insert · ⌘⌫ dismiss</span>
     </div>
   );
 }
