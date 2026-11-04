@@ -191,6 +191,7 @@ export const selectSession = (rootId: string) => update((s) => (s.session === ro
 export function applyServer(m: ServerMessage) {
   switch (m.t) {
     case 'snapshot':
+      // The server replays the requests still pending right after it; one answered meanwhile must not linger.
       return update((s) => {
         const nodes = Object.fromEntries(m.nodes.map((n) => [n.id, n]));
         let order = s.order.filter((id) => nodes[id]);
@@ -200,7 +201,7 @@ export function applyServer(m: ServerMessage) {
         order = arrange(nodes, order, sessionOrder);
         const base = { ...s, order, opened: s.opened.filter((id) => nodes[id]) };
         const sel = s.selected && nodes[s.selected] ? s.selected : pickInitial(nodes, order, s.selected ? undefined : wantedNode);
-        return { order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
+        return { confirms: [], order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
       });
     case 'update':
       if (m.update.failed && m.update.failed !== state.update?.failed) toast(m.update.failed, undefined, 'bad');
@@ -241,7 +242,7 @@ export function applyServer(m: ServerMessage) {
     case 'focus':
       return update((s) => ((m.from === 'human' || s.selected === m.from) && s.nodes[m.id] ? choose(s, s.nodes, m.id) : {}));
     case 'confirm':
-      return update((s) => ({ confirms: [...s.confirms, { confirmId: m.confirmId, text: m.text }] }));
+      return update((s) => (s.confirms.some((c) => c.confirmId === m.confirmId) ? {} : { confirms: [...s.confirms, { confirmId: m.confirmId, text: m.text }] }));
     case 'confirmDone':
       return dropConfirm(m.confirmId);
     case 'diff': {

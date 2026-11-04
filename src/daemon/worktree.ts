@@ -2,14 +2,14 @@
 // Every git call goes through execFile with an argument array and a timeout. Only the setup and teardown commands from
 // the config run through a shell (runCommands), by design.
 import { execFile, execFileSync, spawn } from 'node:child_process';
-import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { closeSync, existsSync, openSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import type { Diff, DiffFile, Worktree } from '../shared/protocol.js';
 import type { MergeStyle } from './config.js';
-import { canonical, pidAlive } from './util.js';
+import { canonical, logError, pidAlive } from './util.js';
 
 const run = promisify(execFile);
 const GIT_TIMEOUT_MS = 30_000;
@@ -103,8 +103,41 @@ export async function pickBase(cwd: string, head: { base: string; baseSha: strin
 export const add = (repo: string, path: string, branch: string, baseSha: string) =>
   git(repo, ['worktree', 'add', '-q', '-b', branch, path, baseSha], SLOW_TIMEOUT_MS);
 
+/** git deletes the tree before its admin entry, so a timeout leaves a half-deleted tree: allow a large one the long limit. */
 export const remove = (repo: string, path: string, force: boolean) =>
-  git(repo, ['worktree', 'remove', ...(force ? ['--force'] : []), path]);
+  git(repo, ['worktree', 'remove', ...(force ? ['--force'] : []), path], SLOW_TIMEOUT_MS);
+
+/** Folders being deleted, renamed within .claude/worktrees; startup deletes any a crash left. */
+const TRASH_PREFIX = '.removing-';
+
+/**
+ * Take a worktree's folder away: rename it aside (instant however large, and never half-deleted), prune git's entry, then
+ * delete the moved folder in the background. Whatever is left of a damaged tree goes the same way. Only a folder directly
+ * inside <repo>/.claude/worktrees is touched; any other path falls back to `git worktree remove --force`.
+ */
+export async function discard(repo: string, path: string): Promise<void> {
+  const dir = join(repo, WORKTREES_DIR);
+  if (existsSync(path)) {
+    if (dirname(path) !== dir) await remove(repo, path, true);
+    else {
+      const trash = join(dir, `${TRASH_PREFIX}${basename(path)}-${Date.now()}`);
+      await rename(path, trash);
+      rm(trash, { recursive: true, force: true }).catch(logError);
+    }
+  }
+  await prune(repo);
+}
+
+/** Delete the folders a crash left half-way through `discard`. */
+export async function sweepTrash(repo: string): Promise<void> {
+  const dir = join(repo, WORKTREES_DIR);
+  for (const name of await readdir(dir).catch(() => [])) {
+    if (name.startsWith(TRASH_PREFIX)) await rm(join(dir, name), { recursive: true, force: true }).catch(logError);
+  }
+}
+
+/** Whether `path` is a worktree's own folder: git run in one whose .git file is gone would walk up to the main checkout. */
+export const hasGitFile = (path: string) => existsSync(join(path, '.git'));
 
 export const prune = (repo: string) => git(repo, ['worktree', 'prune']);
 
@@ -143,6 +176,7 @@ export async function listWorktrees(repo: string): Promise<WorktreeEntry[]> {
 
 /** Uncommitted changes as `git status --porcelain` lines: modified, staged and untracked files, not ignored ones. */
 export async function dirtyFiles(path: string): Promise<string[]> {
+  if (!hasGitFile(path)) throw new Error(`${path} is not a git work tree (its .git is missing)`);
   return (await git(path, ['status', '--porcelain'])).split('\n').filter(Boolean);
 }
 
@@ -197,7 +231,7 @@ async function worktreePaths(path: string): Promise<{ index: string; objects: st
  */
 async function nodeDiff(w: Worktree, runs: string[][]): Promise<{ out: string[]; dirty: number }> {
   const common = ['diff', '--no-color', '--no-ext-diff', '-M'];
-  if (!existsSync(w.path)) return { out: await Promise.all(runs.map((args) => git(w.repo, [...common, ...args, `${w.baseSha}...${w.branch}`]))), dirty: 0 };
+  if (!hasGitFile(w.path)) return { out: await Promise.all(runs.map((args) => git(w.repo, [...common, ...args, `${w.baseSha}...${w.branch}`]))), dirty: 0 };
   const dir = await mkdtemp(join(tmpdir(), 'tl-diff-'));
   try {
     const [paths, mergeBase] = await Promise.all([worktreePaths(w.path), git(w.path, ['merge-base', w.baseSha, 'HEAD']).then((s) => s.trim())]);
