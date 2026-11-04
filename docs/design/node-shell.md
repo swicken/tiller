@@ -1,6 +1,6 @@
 # A shell tab for each agent node
 
-Status: spec, 2026-11-04. Not implemented. Includes suggested commands.
+Status: implemented, 2026-11-04. Includes suggested commands.
 
 ## Goal
 

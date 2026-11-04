@@ -15,7 +15,7 @@ it.each([true, false])('preserves tree focus while retaining non-tree terminal a
   const closest = vi.fn(() => inTree ? {} : null);
   vi.stubGlobal('document', { activeElement: { closest } });
   const pane = TerminalPane();
-  const view = pane.props.children[0] as ReactElement<{ id: string; visible: boolean; exited: boolean }>;
+  const view = pane.props.children[0][0] as ReactElement<{ id: string; visible: boolean; exited: boolean }>;
   (view.type as (props: typeof view.props) => ReactElement)(view.props);
   fixture.effects[1](); // The real visible-terminal attach effect.
   expect(fixture.reset).toHaveBeenCalledOnce();

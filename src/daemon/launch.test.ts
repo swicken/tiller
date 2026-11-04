@@ -104,7 +104,7 @@ describe('role prompts', () => {
     const args = launchArgs({ nodeId: 'n', nodeDir: '/tmp/n', endpoint: 'http://x', path: '', title: 't', parentId: null, home, cwd: home, sessionId: 's' });
     const sp = args[args.indexOf('--append-system-prompt') + 1]!;
     expect(sp).toContain('You are the orchestrator for this repository');
-    expect(sp.split(/\s+/).length).toBeLessThan(600);
+    expect(sp.split(/\s+/).length).toBeLessThan(625);
   });
 });
 

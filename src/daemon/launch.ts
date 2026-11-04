@@ -104,7 +104,7 @@ function worktreeText(o: { worktree?: Worktree; sharesWorktreeOf?: string }): st
 export function systemPrompt(o: { nodeId: string; title: string; parentId: string | null; home: string; cwd: string; harness?: Harness; role?: Role; profile?: Profile; worktree?: Worktree; sharesWorktreeOf?: string; sessionDir?: string; preset?: Preset }): string {
   const preamble = `You are tiller node ${o.nodeId}, titled "${o.title}". Your parent node is ${o.parentId ?? 'none'}.
 
-The tiller MCP tools spawn and control other nodes. Spawning never moves the user's view. When you want the human to run a command themselves, call suggest_command rather than asking them to copy it.
+The tiller MCP tools spawn and control other nodes. Spawning never moves the user's view. For a command the human should run themselves, call suggest_command.
 
 Other nodes and the tiller daemon send you messages, which arrive as prompts submitted by the tiller plugin, framed like this:
 --- TL MESSAGE <nonce> ---
