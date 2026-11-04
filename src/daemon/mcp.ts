@@ -24,6 +24,11 @@ import { DAEMON, deliver, closeWatched, dropNotices, HUMAN, inScope, isDescendan
 import { logError, PREVIEW_CHARS, readBody, safeEqual } from './util.js';
 
 const MAX_WRITE_CHARS = 2000;
+/**
+ * One line of printable text: no control characters (a newline or carriage return would run it, an escape sequence
+ * could rewrite the line) and no invisible format characters (bidi overrides could show the human another command).
+ */
+const PRINTABLE_LINE = /^[^\p{Cc}\p{Cf}\u2028\u2029]+$/u;
 const IDEMPOTENCY_MS = 24 * 3600_000;
 const TRANSCRIPT_CAP = 200_000;
 const HISTORY_LINES = 50;
@@ -633,6 +638,20 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       requireOwned(c, id, true);
       c.manager.rename(id, a.title);
       return { data: { ok: true } };
+    }),
+
+  suggest_command: tool(
+    'Suggest a command',
+    `Put a shell command in front of the human in your node's Terminal tab, for them to run themselves. Use it when the human should run the command rather than you: they asked to run it, it needs their credentials or judgment, or running it through you would waste tokens. Not for commands you should run with your own tools. \`command\` is one line of printable text (no newlines, tabs or control characters), up to 2000 characters; \`why\` (up to 200) is shown as its tooltip. The human may insert it at their shell's prompt (without running it), edit it or dismiss it; a later call replaces it. You never see whether they ran it or its output.`,
+    {
+      command: z.string().min(1).max(MAX_WRITE_CHARS).regex(PRINTABLE_LINE, 'must be one line of printable characters: no newlines, tabs, control characters or escape sequences'),
+      why: z.string().max(200).regex(PRINTABLE_LINE, 'must be one line of printable characters').optional(),
+    },
+    async (c, a) => {
+      if (c.caller === HUMAN) throw new Error('suggest_command is only for agent nodes');
+      if (c.manager.registry.get(c.caller)?.kind === 'terminal') throw new Error('refused: a terminal node has no Terminal tab to suggest into');
+      c.manager.suggest(c.caller, a.command, a.why);
+      return { text: 'Suggested in the human\'s Terminal tab. They may run it, edit it or ignore it, and you will not see the output.', data: { ok: true } };
     }),
 
   report_outcome: tool(
