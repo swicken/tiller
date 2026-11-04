@@ -77,7 +77,7 @@ Open the node's **More actions → Change harness…** menu, including on a root
 agent. Select Claude, Codex or Pi and confirm. The current process stops before the replacement
 launches. The new harness starts a fresh native conversation, even when that node used the same
 harness in an earlier session. An optional first prompt can point it at the work to continue;
-otherwise Tiller points it at the tree's `handoff.md` when available.
+otherwise Tiller points it at its own handoff note (see [Sessions](sessions.md)) when there is one.
 
 The node keeps its identity, title, parent, children, working directory and worktree. Earlier
 transcripts remain readable in the Transcript session picker, labeled with their harness.

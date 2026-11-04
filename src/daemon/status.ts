@@ -122,6 +122,7 @@ function step(prev: NodeStatus, event: HookEvent, now: number): NodeStatus {
       return done(prev, now, { doneSource: 'stop', errored: true, lastAssistantMessage: str(event.last_assistant_message) ?? prev.lastAssistantMessage });
 
     case 'SessionStart': // the manager records its session_id and transcript_path on the node's record
+      if (event.source === 'compact') return prev; // the same session carries on, mid-turn or not
     case 'SessionEnd':
       return next(prev, { state: 'unknown', activity: undefined }, now);
 

@@ -18,15 +18,29 @@ export interface SessionMeta { rootId: string; title: string; cwd: string; creat
 export const sessionDir = (home: string, rootId: string): string => join(home, SESSIONS_DIR, rootId);
 const eventsFile = (dir: string): string => join(dir, EVENTS);
 
-/** Past this, the restart pointer also asks for the handoff note to be condensed. */
-const HANDOFF_LONG_BYTES = 32 * 1024;
+/** The size a handoff note is kept under: about 4,000 tokens, or 200 lines. Bigger notes cost every reader and get followed less well. */
+export const HANDOFF_BUDGET_BYTES = 16 * 1024;
 
-/** The first prompt after a restart that names none: a pointer at the handoff note, when there is one. */
-export function handoffPrompt(dir: string): string | undefined {
-  const file = join(dir, HANDOFF);
+/** A node's handoff note: the root keeps handoff.md, every other node handoff-<id>.md, all in the tree's directory. */
+export const handoffFileName = (nodeId: string, rootId: string): string => (nodeId === rootId ? HANDOFF : `handoff-${nodeId}.md`);
+
+export type HandoffRead = 'restart' | 'harness change' | 'compaction';
+const HANDOFF_LEAD: Record<HandoffRead, string> = {
+  restart: 'You were restarted: read',
+  'harness change': 'Your harness was changed: read',
+  compaction: 'Your context was just compacted: read',
+};
+
+/**
+ * The pointer a node gets after a restart, a harness change or a compaction: read its note, then rewrite it for the next
+ * reader. Undefined when there is no note yet.
+ */
+export function handoffPrompt(file: string, read: HandoffRead): string | undefined {
   if (!existsSync(file)) return undefined;
-  const long = statSync(file).size > HANDOFF_LONG_BYTES;
-  return `Read ${file} first; it is your own handoff from before this restart.${long ? ' It is over 32 KB: rewrite it as the current state only, moving history to a separate log file.' : ''}`;
+  const size = statSync(file).size;
+  const kb = `${(size / 1024).toFixed(1)} KB`;
+  return `${HANDOFF_LEAD[read]} ${file}, your handoff note, then rewrite it in place for your next reader: keep the current state, open tasks, decisions and constraints still in force, and pointers (paths, branches, PR and node ids) rather than copied content; drop what is finished or no longer true, and move history worth keeping to a log file in the same directory. `
+    + (size > HANDOFF_BUDGET_BYTES ? `It is ${kb}, over the ${HANDOFF_BUDGET_BYTES / 1024} KB budget: bring it under.` : `It is ${kb}; keep it under ${HANDOFF_BUDGET_BYTES / 1024} KB.`);
 }
 
 /** Create the directory (0700) and its meta.json if missing. Cheap enough to call on every launch. */
