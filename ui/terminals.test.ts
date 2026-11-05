@@ -143,6 +143,21 @@ it('inserts on Cmd+Enter and dismisses on Cmd+Backspace while a suggestion waits
   expect(act.mock.calls).toEqual([['insert'], ['dismiss']]);
 });
 
+it('keeps a held Cmd+Enter from the shell after its insert clears the suggestion, so auto-repeat cannot send CR and run it', () => {
+  const act = vi.fn();
+  expect(suggestionKey(key({ metaKey: true }), true, act)).toBe(false);
+  // The daemon has cleared the suggestion: pending is false from here on, yet the key is still held down.
+  const repeat = key({ metaKey: true, repeat: true });
+  expect(suggestionKey(repeat, false, act)).toBe(false);
+  expect(repeat.preventDefault).toHaveBeenCalledOnce();
+  expect(suggestionKey(key({ type: 'keypress', metaKey: true }), false, act)).toBe(false);
+  expect(suggestionKey(key({ type: 'keyup', metaKey: true }), false, act)).toBe(false);
+  expect(act.mock.calls).toEqual([['insert']]); // acted once, never again for the repeats
+  // Released: the next Enter is the shell's again.
+  expect(suggestionKey(key({}), false, act)).toBe(true);
+  expect(suggestionKey(key({ metaKey: true }), false, act)).toBe(true);
+});
+
 it.each([
   ['Cmd+Enter with no suggestion', key({ metaKey: true }), false],
   ['plain Enter', key({}), true],

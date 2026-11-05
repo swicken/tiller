@@ -75,12 +75,21 @@ export function shiftEnterKey(e: KeyboardEvent, agent: boolean, input: (data: st
  * enough. While a suggestion waits, those keys never reach the shell, so Cmd+Enter cannot also send Enter and run the line.
  */
 export function suggestionKey(e: KeyboardEvent, pending: boolean, act: (action: 'insert' | 'dismiss') => void): boolean {
+  // The suggestion clears as soon as the first keydown acts, so a held key's auto-repeats must not reach the shell either:
+  // a repeated Cmd+Enter would send CR and run the inserted line. A fresh press always starts over.
+  if (held === e.key && (e.type !== 'keydown' || e.repeat)) {
+    if (e.type === 'keyup') held = undefined;
+    if (e.type === 'keydown') e.preventDefault();
+    return false;
+  }
   if (!pending || !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return true;
   const action = e.key === 'Enter' ? 'insert' : e.key === 'Backspace' ? 'dismiss' : undefined;
   if (!action) return true;
-  if (e.type === 'keydown') { e.preventDefault(); act(action); }
+  if (e.type === 'keydown') { e.preventDefault(); held = e.key; act(action); }
   return false; // also swallow the keypress/keyup
 }
+// ponytail: one held key for all terminals, since only the focused one gets keys.
+let held: string | undefined;
 
 export function disposeTerm(id: string) {
   terms.get(id)?.term.dispose();
