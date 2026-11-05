@@ -108,6 +108,13 @@ it('refuses a shell until a worktree node\'s worktree exists, so it never starts
   expect(manager.shells.session(creating)).toBeDefined();
 });
 
+it('refuses a shell while its node is closing, so none starts in a tree being deleted', async () => {
+  const id = node(manager);
+  manager.runtimes.get(id)!.busy = 'closing'; // closeWorktreeNode killed the shell and is removing the tree
+  await expect(manager.shells.attach(id, 80, 24)).rejects.toThrow(/is closing/);
+  expect(manager.shells.session(id)).toBeUndefined();
+});
+
 it('kills the shell when its node closes', async () => {
   const id = node(manager);
   send({ t: 'attach', id: shellStreamId(id), cols: 80, rows: 24 });

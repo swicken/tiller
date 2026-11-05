@@ -174,6 +174,21 @@ describe('a worktree and the human shells in it', () => {
     expect(exitedAtRemoval).toBe(true);
     expect(existsSync(path)).toBe(false);
   });
+
+  it('shows the Terminal tab as exited when a close killed its shell and then failed, so input does not vanish into a dead tab', async () => {
+    const name = `w${++seq}`, path = join(repo, '.claude', 'worktrees', name), branch = `tl/${name}`;
+    git(repo, 'worktree', 'add', '-q', '-b', branch, path);
+    const id = agent(path, { repo, path, branch, base: 'main', baseSha: git(repo, 'rev-parse', 'HEAD') });
+    await m.shells.attach(id, 80, 24);
+    await expect.poll(() => m.view(id)?.shellReady).toBe(true);
+    const data: string[] = [];
+    m.on('data', (stream: string, d: string) => { if (stream === `${id}:shell`) data.push(d); });
+    git(repo, 'worktree', 'lock', path, '--reason', 'held by someone else'); // removal fails after the shell is killed
+    await expect(m.close(id, true)).rejects.toThrow(/locked/);
+    expect(m.view(id)).toBeDefined();
+    expect(m.view(id)!.shellReady).toBeUndefined();
+    expect(data.join('')).toContain('shell exited');
+  });
 });
 
 const readFileOf = (p: string) => execFileSync('cat', [p], { encoding: 'utf8' });
