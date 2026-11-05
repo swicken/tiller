@@ -123,14 +123,15 @@ it('keeps a suggestion made before the shell exists until the human acts on it, 
   const id = node(manager);
   manager.suggest(id, 'git pull', 'fetch the new base');
   // Insert with no shell yet is refused, and the suggestion stays.
-  send({ t: 'suggestion', id, action: 'insert' });
+  const { at } = manager.view(id)!.suggestion!;
+  send({ t: 'suggestion', id, action: 'insert', at });
   await until(() => seen.find((m) => m.t === 'error' && m.id === id && /not ready/.test(m.message)));
   expect(manager.view(id)!.suggestion).toMatchObject({ command: 'git pull', why: 'fetch the new base' });
   send({ t: 'attach', id: shellStreamId(id), cols: 80, rows: 24 });
   const s = await until(() => manager.shells.session(id));
   expect(manager.view(id)!.suggestion?.command).toBe('git pull');
   const write = vi.spyOn(s, 'write');
-  send({ t: 'suggestion', id, action: 'dismiss' });
+  send({ t: 'suggestion', id, action: 'dismiss', at });
   await until(() => seen.find((m) => m.t === 'node' && m.node.id === id && !m.node.suggestion));
   expect(manager.view(id)!.suggestion).toBeUndefined();
   expect(write).not.toHaveBeenCalled();
@@ -147,16 +148,36 @@ it('inserts only once the shell has printed something, then types exactly the co
     m.suggest(id, 'npm test -- --run');
     await m.shells.attach(id, 80, 24);
     const s = m.shells.session(id)!;
-    expect(() => m.answerSuggestion(id, 'insert')).toThrow(/not ready/); // typed-ahead text could be swallowed
+    const { at } = m.view(id)!.suggestion!;
+    expect(() => m.answerSuggestion(id, 'insert', at)).toThrow(/not ready/); // typed-ahead text could be swallowed
     expect(m.view(id)!.suggestion?.command).toBe('npm test -- --run');
     m.shells.input(id, '\r');
     await until(() => m.view(id)?.shellReady);
     const write = vi.spyOn(s, 'write');
-    m.answerSuggestion(id, 'insert');
+    m.answerSuggestion(id, 'insert', at);
     // No trailing newline: the human decides whether to run it.
     expect(write).toHaveBeenCalledExactlyOnceWith('npm test -- --run');
     expect(m.view(id)!.suggestion).toBeUndefined();
   } finally {
     await m.shutdown();
   }
+});
+
+it('refuses an insert or dismiss aimed at a suggestion the agent has since replaced, so the human never acts on one unseen', async () => {
+  const id = node(manager);
+  await manager.shells.attach(id, 80, 24);
+  await until(() => manager.view(id)?.shellReady);
+  const write = vi.spyOn(manager.shells.session(id)!, 'write');
+  manager.suggest(id, 'git status');
+  const seenAt = manager.view(id)!.suggestion!.at;
+  manager.suggest(id, 'rm -rf build'); // in the same millisecond, usually: the revision must still differ
+  const { at } = manager.view(id)!.suggestion!;
+  expect(at).toBeGreaterThan(seenAt);
+  expect(() => manager.answerSuggestion(id, 'insert', seenAt)).toThrow(/changed/);
+  expect(() => manager.answerSuggestion(id, 'dismiss', seenAt)).toThrow(/changed/);
+  expect(write).not.toHaveBeenCalled();
+  expect(manager.view(id)!.suggestion?.command).toBe('rm -rf build'); // still waiting for the human to see it
+  manager.answerSuggestion(id, 'insert', at);
+  expect(write).toHaveBeenCalledExactlyOnceWith('rm -rf build');
+  expect(manager.view(id)!.suggestion).toBeUndefined();
 });

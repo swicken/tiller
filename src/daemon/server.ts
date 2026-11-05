@@ -76,7 +76,7 @@ const clientMessage = z.discriminatedUnion('t', [
   z.object({ t: z.literal('followup'), id, prompt: z.string().min(1), title: z.string().min(1).optional() }),
   z.object({ t: z.literal('send'), id, text: z.string().min(1), mode: z.enum(['queue', 'now']).optional() }),
   z.object({ t: z.literal('mute'), id, muted: z.boolean() }),
-  z.object({ t: z.literal('suggestion'), id, action: z.enum(['insert', 'dismiss']) }),
+  z.object({ t: z.literal('suggestion'), id, action: z.enum(['insert', 'dismiss']), at: z.number() }),
   z.object({ t: z.literal('sessionOrder'), ids: z.array(id).max(10_000) }),
   z.object({ t: z.literal('dnd'), on: z.boolean(), minutes: z.number().positive().max(7 * 24 * 60).optional() }),
 ]) satisfies z.ZodType<ClientMessage>;
@@ -258,7 +258,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
         else manager.shells.resize(shellOf, m.cols, m.rows);
         return;
       }
-      case 'suggestion': manager.answerSuggestion(m.id, m.action); return;
+      case 'suggestion': manager.answerSuggestion(m.id, m.action, m.at); return;
       case 'visibility': {
         const wasAway = !anyFocused();
         const regained = m.focused && !c.focused;

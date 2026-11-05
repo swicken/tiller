@@ -201,6 +201,8 @@ export class NodeManager extends EventEmitter {
   /** Set by shutdown: the live set is then frozen, so the PTYs' exits do not empty it. */
   private shutDown = false;
   private shell: string;
+  /** The last suggestion's `at`, so the next one's is greater. */
+  private suggestionAt = 0;
   private readonly terminateTimeoutMs?: number;
   private readonly tokens: NodeTokens;
   private sweepTimer: NodeJS.Timeout;
@@ -838,14 +840,19 @@ export class NodeManager extends EventEmitter {
   suggest(id: string, command: string, why?: string): void {
     const rt = this.runtimes.get(id);
     if (!rt) throw new Error(`no such node: ${id}`);
-    rt.suggestion = { command, ...(why ? { why } : {}), at: Date.now() };
+    this.suggestionAt = Math.max(Date.now(), this.suggestionAt + 1); // a revision: two suggestions never share one
+    rt.suggestion = { command, ...(why ? { why } : {}), at: this.suggestionAt };
     this.emitNode(id);
   }
 
-  /** The human inserts the node's suggested command at its shell's prompt (no Enter) or dismisses it; either clears it. */
-  answerSuggestion(id: string, action: 'insert' | 'dismiss'): void {
+  /**
+   * The human inserts the node's suggested command at its shell's prompt (no Enter) or dismisses it; either clears it.
+   * `at` is the suggestion the human saw: if the agent has replaced it since, nothing is typed or cleared.
+   */
+  answerSuggestion(id: string, action: 'insert' | 'dismiss', at: number): void {
     const rt = this.runtimes.get(id), suggestion = rt?.suggestion;
     if (!rt || !suggestion) throw new Error('no suggested command');
+    if (suggestion.at !== at) throw new Error('the suggested command changed; check the new one first');
     if (action === 'insert') this.shells.insert(id, suggestion.command); // throws, keeping it, while the shell is not ready
     rt.suggestion = undefined;
     this.emitNode(id);
