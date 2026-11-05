@@ -25,6 +25,8 @@ export class Shells {
     if (!rec || !this.m.view(id)) throw new Error(`no such node: ${id}`);
     if (!isAgentKind(rec.kind)) throw new Error(`${id} is a terminal node: it has no shell tab`);
     if (this.m.stopped) throw new Error('the daemon is stopping');
+    // Until then cwd is the source checkout, and a shell started there would stay there once the node moves in.
+    if (rec.pending?.isolation === 'worktree' || this.m.runtimes.get(id)?.busy === 'creating') throw new Error(`${id}'s worktree is not created yet: open the Terminal tab again once it exists`);
     const sh = this.shells.get(id) ?? this.spawn(id, rec.cwd, cols, rows);
     sh.s.resize(cols, rows);
     await sh.s.flush();

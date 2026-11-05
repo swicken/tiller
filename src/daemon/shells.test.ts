@@ -95,6 +95,19 @@ it('refuses a shell for a terminal node or an unknown node, and spawns nothing',
   }
 });
 
+it('refuses a shell until a worktree node\'s worktree exists, so it never starts and stays in the source checkout', async () => {
+  const armed = node(manager); // armed or queued for daemon.maxWorking: its worktree comes at launch
+  manager.registry.update(armed, { pending: { after: ['n-other'], afterSuccess: [], met: [], isolation: 'worktree' } });
+  const creating = node(manager); // addWorktree under way
+  manager.runtimes.get(creating)!.busy = 'creating';
+  for (const id of [armed, creating]) await expect(manager.shells.attach(id, 80, 24)).rejects.toThrow(/worktree is not created yet/);
+  expect(manager.shells.session(armed) ?? manager.shells.session(creating)).toBeUndefined();
+  // Created: the next attach starts the shell.
+  manager.runtimes.get(creating)!.busy = undefined;
+  await manager.shells.attach(creating, 80, 24);
+  expect(manager.shells.session(creating)).toBeDefined();
+});
+
 it('kills the shell when its node closes', async () => {
   const id = node(manager);
   send({ t: 'attach', id: shellStreamId(id), cols: 80, rows: 24 });
