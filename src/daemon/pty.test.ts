@@ -180,6 +180,17 @@ describe('env helpers', () => {
     expect(e.LANG).toBeTruthy();
     expect(e.TL_NODE_ID).toBe('n-1');
   });
+  it('buildChildEnv turns on OSC 8 hyperlinks unless the user turned them off', () => {
+    // Without it Claude Code prints Markdown links as `text (url)`, since TERM_PROGRAM is stripped.
+    const saved = { ...process.env };
+    delete process.env.FORCE_HYPERLINK;
+    const on = buildChildEnv({});
+    process.env.FORCE_HYPERLINK = '0';
+    const off = buildChildEnv({});
+    process.env = saved;
+    expect(on.FORCE_HYPERLINK).toBe('1');
+    expect(off.FORCE_HYPERLINK).toBe('0');
+  });
   it('loginShellPath returns a cached PATH', async () => {
     const p = await loginShellPath('/bin/sh'); // never the user's own login shell
     expect(p).toContain('/');
