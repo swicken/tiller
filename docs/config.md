@@ -53,8 +53,9 @@ The layer column says where a key may be set: "project, home" means either file,
 | `notifications.kinds.errored` | as above | `silent` | project, home | How a turn that ended in an error is notified. |
 | `notifications.kinds.done` | as above | `banner` | project, home | Level for the tree completion summary, or individual finished turns when tree summaries are disabled. |
 | `notifications.kinds.exited` | as above | `silent` | project, home | How an exited node is notified. |
+| `notifications.kinds.approval` | as above | `sound` | home | How a request for your approval (an agent's close, merge or terminal write) is notified. The body is the first line of the request. Do not disturb and quiet hours apply, and quiet hours leave it a banner without sound, as for `needsYou`. It is not tied to a node, so only the home config applies; a project value is ignored. |
 | `notifications.treeDoneSummary` | boolean | `true` | project, home | Replace per-agent done and exited notifications with one per tree once all agents finish, including the root; pending launches and unresolved gates delay completion. |
-| `notifications.quietHours` | `"HH:MM-HH:MM"` | none | project, home | Local time span, which may cross midnight, during which only needs-you notifications are shown, without sound. |
+| `notifications.quietHours` | `"HH:MM-HH:MM"` | none | project, home | Local time span, which may cross midnight, during which only needs-you and approval notifications are shown, without sound. |
 | `limits.maxDepth` | integer | `3` | project, home | An agent's spawn is refused when the new node would sit more than this many levels below its root. |
 | `limits.maxChildren` | integer | `8` | project, home | An agent's spawn is refused when the parent already has this many live children. |
 | `limits.stallMinutes` | positive number | `5` | project, home | A working node with no hook event for this long is marked stalled and its parent is told. |

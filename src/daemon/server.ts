@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
-import { HARNESSES, shellNodeId, shellStreamId, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
+import { APPROVAL_ID, HARNESSES, shellNodeId, shellStreamId, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
 import { loadConfig } from './config.js';
 import { DEFAULT_PORT } from './home.js';
 import type { NodeManager, NotifyEvent } from './manager.js';
@@ -29,7 +29,7 @@ const UI_DIR = fileURLToPath(new URL('../../ui/dist', import.meta.url));
 const MAX_HOOK_BYTES = 8_000_000; // a PreToolUse payload for a large Write carries the whole file
 const AUTH_TIMEOUT_MS = 5000;
 const VERSION = (JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as { version: string }).version;
-const CONFIRM_TIMEOUT_MS = 5 * 60_000;
+const CONFIRM_TIMEOUT_MS = 5 * 60_000; // for a request that holds the requester's turn; callers that do not hold it pass longer
 /** A client this far behind stops getting a node's output until its buffer drains; it then gets a fresh screen. */
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 /** Below this the client counts as drained; other nodes' output may keep it from ever reaching zero. */
@@ -87,7 +87,9 @@ export interface DaemonServer {
    * Ask the human to approve something. Resolves false if no UI is connected, on refusal or when `signal` aborts (the
    * dialog then closes), and undefined on timeout.
    */
-  confirm(text: string, signal?: AbortSignal): Promise<boolean | undefined>;
+  confirm(text: string, signal?: AbortSignal, timeoutMs?: number): Promise<boolean | undefined>;
+  /** Called with the text of each new approval request, to notify the human; set once the notifier exists. */
+  onApproval?: (text: string) => void;
   /** How many connected clients are looking at node `id`: it is selected there and their window is in front. */
   watchers(id: string): number;
   /** Whether the native app is connected. */
@@ -116,10 +118,11 @@ export function forUi({ prompt: _prompt, sessionHistory: _history, ...node }: No
 export async function startServer(manager: NodeManager, opts: { port?: number } = {}): Promise<DaemonServer> {
   const clients = new Set<Client>();
   const pendingNotifications = new Map<string, { client: Client; finish(ok: boolean, error?: string): void }>();
-  const pendingConfirms = new Map<string, (ok: boolean | undefined) => void>();
+  /** Requests awaiting an answer, oldest first: a client that connects later is sent these too. */
+  const pendingConfirms = new Map<string, { text: string; finish(ok: boolean | undefined): void }>();
   const focus = (from: string, id: string) => broadcast({ t: 'focus', from, id });
   const updates = createUpdater({ repo: REPO, home: manager.home, onChange: (update) => broadcast({ t: 'update', update }), spawnHelper: (expected, onExit, now) => spawnUpdate(manager.home, daemon.port, expected, onExit, now) });
-  const { handler: mcp, publishAdminToken, authenticate, isAdmin } = mountMcp(manager, (text, signal) => daemon.confirm(text, signal), focus, (on, minutes) => setDnd(on, minutes), updates);
+  const { handler: mcp, publishAdminToken, authenticate, isAdmin } = mountMcp(manager, (text, signal, timeoutMs) => daemon.confirm(text, signal, timeoutMs), focus, (on, minutes) => setDnd(on, minutes), updates);
   const settings = settingsApi(manager, isAdmin);
   const mod = modApi(manager, authenticate, focus, () => [...new Set([...clients].filter((c) => c.authed && c.kind).map((c) => c.kind!))]);
 
@@ -295,7 +298,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
       }
       case 'prune': await manager.prune(); return;
       case 'rename': manager.rename(m.id, m.title); return;
-      case 'confirm': pendingConfirms.get(m.confirmId)?.(m.ok); return;
+      case 'confirm': pendingConfirms.get(m.confirmId)?.finish(m.ok); return;
       case 'transcript': {
         const r = await manager.transcript(m.id, m.sessionId).catch((err: Error) => ({ error: err.message }));
         sendTo(c, { t: 'transcript', id: m.id, ...(m.sessionId ? { sessionId: m.sessionId } : {}), ...r });
@@ -352,6 +355,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
           syncUpdateChecks();
           clearTimeout(authTimer);
           sendTo(c, { t: 'snapshot', update: updates.status(), nodes: manager.list().map(forUi), usage: manager.usage, usageSources: manager.usageRegistry.sources, dnd, drain: manager.drainView(), sessionOrder: manager.sessionOrder() });
+          for (const [confirmId, { text }] of pendingConfirms) sendTo(c, { t: 'confirm', confirmId, text });
         } else {
           ws.close(4401, 'auth required');
         }
@@ -421,11 +425,11 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
 
   const daemon: DaemonServer = {
     port,
-    confirm(text, signal) {
+    confirm(text, signal, timeoutMs = CONFIRM_TIMEOUT_MS) {
       if (signal?.aborted || ![...clients].some((c) => c.authed)) return Promise.resolve(false);
       const confirmId = randomUUID();
       return new Promise<boolean | undefined>((resolveConfirm) => {
-        const timer = setTimeout(() => finish(undefined), CONFIRM_TIMEOUT_MS);
+        const timer = setTimeout(() => finish(undefined), timeoutMs);
         const abort = () => finish(false);
         const finish = (ok: boolean | undefined) => {
           clearTimeout(timer);
@@ -435,11 +439,13 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
           resolveConfirm(ok);
         };
         signal?.addEventListener('abort', abort, { once: true });
-        pendingConfirms.set(confirmId, finish);
+        pendingConfirms.set(confirmId, { text, finish });
         broadcast({ t: 'confirm', confirmId, text });
+        daemon.onApproval?.(text);
       });
     },
-    watchers: (id) => [...clients].filter((c) => c.authed && c.focused && c.selected === id).length,
+    // An approval request is on screen in every focused window, whatever node it has selected.
+    watchers: (id) => [...clients].filter((c) => c.authed && c.focused && (id.startsWith(APPROVAL_ID) || c.selected === id)).length,
     appConnected,
     notifyNative(notification) {
       const client = [...clients].find((c) => c.authed && c.kind === 'app' && c.nativeReady && c.ws.readyState === WebSocket.OPEN);
