@@ -66,10 +66,12 @@ export class Shells {
     this.input(id, text);
   }
 
-  kill(id: string): void {
+  /** Kill the node's shell, if any; returns it so a caller can wait for its exit. */
+  kill(id: string): PtySession | undefined {
     const sh = this.shells.get(id);
     this.shells.delete(id);
     sh?.s.kill();
+    return sh?.s;
   }
 
   /** Kill every shell; resolves once they have exited or `timeoutMs` passed. */

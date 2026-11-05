@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NodeManager } from './manager.js';
 import * as wt from './worktree.js';
 import { worktrees } from './worktree-lifecycle.js';
@@ -134,6 +134,45 @@ describe('closing a worktree node', () => {
     expect(existsSync(stray)).toBe(false);
     expect(m.view(id)).toBeUndefined();
     expect(existsSync(w.path)).toBe(false);
+  });
+});
+
+describe('a worktree and the human shells in it', () => {
+  beforeEach(() => { vi.stubEnv('HOME', home); }); // the login shell must not load the developer's own profile
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+  /** An exited agent node: it has no process, but its Terminal tab can still hold a live shell. */
+  function agent(cwd: string, worktree?: { repo: string; path: string; branch: string; base: string; baseSha: string }): string {
+    const rec = m.registry.create({ parentId: null, kind: 'claude', title: 'agent', cwd, worktree });
+    m.runtimes.set(rec.id, { status: { state: 'done', exited: true, changedAt: Date.now() } });
+    return rec.id;
+  }
+
+  it('refuses the close, even a discard, while another node\'s shell works inside the tree', async () => {
+    const { id, w } = await node();
+    mkdirSync(join(w.path, 'sub'));
+    const other = agent(join(w.path, 'sub'));
+    await m.shells.attach(other, 80, 24);
+    await expect(m.close(id, true, 'discard')).rejects.toThrow(new RegExp(`in use by ${other}`));
+    expect(existsSync(w.path)).toBe(true); // the shell's directory is still there
+  });
+
+  it('does not let a node\'s own shell block its close, and kills it before the tree goes', async () => {
+    const name = `w${++seq}`, path = join(repo, '.claude', 'worktrees', name), branch = `tl/${name}`;
+    git(repo, 'worktree', 'add', '-q', '-b', branch, path);
+    const id = agent(path, { repo, path, branch, base: 'main', baseSha: git(repo, 'rev-parse', 'HEAD') });
+    await m.shells.attach(id, 80, 24);
+    const shell = m.shells.session(id)!;
+    let exitedAtRemoval: boolean | undefined;
+    const update = m.registry.update.bind(m.registry);
+    // Deletion starts when the record is marked removing: the shell must already be gone by then.
+    vi.spyOn(m.registry, 'update').mockImplementation((nid, patch) => {
+      if (nid === id && patch.worktree?.removing) exitedAtRemoval = shell.exited;
+      return update(nid, patch);
+    });
+    await m.close(id, true);
+    expect(exitedAtRemoval).toBe(true);
+    expect(existsSync(path)).toBe(false);
   });
 });
 

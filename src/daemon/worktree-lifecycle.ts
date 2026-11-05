@@ -230,8 +230,8 @@ export async function closeWorktreeNode(m: NodeManager, id: string, title: strin
     const setup = rt.setup;
     setup?.abort.abort();
     await setup?.done;
-    const s = m.kill(id);
-    if (s && !s.exited) await new Promise<void>((done) => { s.onExit(() => done()); setTimeout(done, EXIT_WAIT_MS).unref(); });
+    // The human's shell goes with the agent, before the tree does: nothing may still be working in it while it is removed.
+    await Promise.all([m.kill(id), m.shells.kill(id)].map((s) => s && !s.exited && new Promise<void>((done) => { s.onExit(() => done()); setTimeout(done, EXIT_WAIT_MS).unref(); })));
     let note: string | undefined;
     try {
       note = await removeWorktree(m, id, title, w, mode);
@@ -254,7 +254,7 @@ export async function closeWorktreeNode(m: NodeManager, id: string, title: strin
 export async function worktreeCheck(m: NodeManager, id: string): Promise<WorktreeCheck | undefined> {
   const w = m.registry.get(id)?.worktree;
   if (!w) return undefined;
-  const sharing = m.registry.list().filter((n) => n.id !== id && m.session(n.id) && inside(n.cwd, w.path)).map((n) => n.id);
+  const sharing = m.registry.list().filter((n) => n.id !== id && live(m, n.id) && inside(n.cwd, w.path)).map((n) => n.id);
   // Missing: close keeps an unmerged branch, so nothing is lost. Removing: its own deletions are not changes to count.
   if (!existsSync(w.path) || w.removing) return { dirty: [], unmerged: [], sharing };
   if (!wt.hasGitFile(w.path)) return { dirty: [], unmerged: [], sharing, unreadable: true };
@@ -262,6 +262,9 @@ export async function worktreeCheck(m: NodeManager, id: string): Promise<Worktre
   // A squash merge leaves the branch's own commits outside base; it still counts as merged until the branch moves.
   return { dirty, unmerged: unmerged.length && (await mergedAt(w)) ? [] : unmerged, sharing };
 }
+
+/** The node has a process working in its cwd: its agent, or the human's shell in its Terminal tab (an exited agent may keep one). */
+const live = (m: NodeManager, id: string) => !!(m.session(id) || m.shells.session(id));
 
 /**
  * Finish a removal the checks already allowed: take what is left of the tree away (whole or half-deleted, or already
@@ -297,8 +300,9 @@ async function removeWorktree(m: NodeManager, id: string, title: string, w: Work
   }
   await wt.unlockForRemoval(w.repo, w.path, id);
   await teardown(m, id, w);
+  const c = (await worktreeCheck(m, id))!;
+  if (c.sharing.length) throw new Error(`worktree kept: in use by ${c.sharing.join(', ')}; close those nodes first`); // one moved in during the close
   if (mode !== 'discard') { // git's own last check: teardown or a straggling process may have written files
-    const c = (await worktreeCheck(m, id))!;
     if (c.unreadable || c.dirty.length || (!mode && c.unmerged.length)) throw new Error(`worktree kept: changed during teardown (${c.unreadable ? 'its .git is missing' : `${c.dirty.length} uncommitted file(s), ${c.unmerged.length} unmerged commit(s)`})`);
   }
   const removing = mode ?? 'plain';
@@ -328,7 +332,7 @@ async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 's
     }
   }
   const entries = await wt.listWorktrees(repo);
-  const live = (path: string) => m.registry.list().some((n) => m.session(n.id) && inside(n.cwd, path));
+  const inUse = (path: string) => m.registry.list().some((n) => live(m, n.id) && inside(n.cwd, path));
   const dir = canonical(join(repo, wt.WORKTREES_DIR)) + sep;
   for (const e of entries.filter((x) => canonical(x.path).startsWith(dir))) {
     const marker = await wt.readMarker(e.path);
@@ -340,7 +344,7 @@ async function reconcileRepo(m: NodeManager, repo: string, clean: 'startup' | 's
       const unmerged = e.branch ? await wt.unmergedCommits(repo, e.branch, marker.base, marker.baseSha) : ['(detached HEAD)'];
       Object.assign(orphan, { dirty, unmerged });
       const safe = !dirty.length && !!e.branch && (clean === 'startup' ? !(await wt.hasCommits(repo, e.branch, marker.baseSha)) : !unmerged.length);
-      if (clean && (clean === 'force' || safe) && !live(e.path)) {
+      if (clean && (clean === 'force' || safe) && !inUse(e.path)) {
         await wt.unlockForRemoval(repo, e.path, marker.nodeId);
         await teardown(m, marker.nodeId, { repo, path: e.path, base: marker.base });
         await wt.discard(repo, e.path);
