@@ -1,5 +1,6 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { createTerm, disposeTerm, shiftEnterKey, suggestionKey } from './terminals';
 import { openExternalUrl } from './controls/externalLink';
 import { toast } from './store';
@@ -15,6 +16,9 @@ vi.mock('@xterm/xterm', () => ({ Terminal: vi.fn(class {
   input = vi.fn();
 }) }));
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn(class {}) }));
+vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn(class {
+  constructor(public handler: (event: MouseEvent, uri: string) => void) {}
+}) }));
 vi.mock('./url', () => ({ get IN_APP() { return state.native; } }));
 vi.mock('./controls/externalLink', () => ({ openExternalUrl: vi.fn() }));
 vi.mock('./theme', () => ({ currentTheme: () => state.theme, onThemeChange: (fn: (t: 'light' | 'dark') => void) => state.onTheme.push(fn) }));
@@ -55,45 +59,61 @@ function linkHandler() {
   return options.linkHandler!;
 }
 
-function activate(url: string) {
-  const handler = linkHandler();
-  expect(handler.allowNonHttpProtocols).not.toBe(true);
-  handler.activate({} as MouseEvent, url, { start: { x: 1, y: 1 }, end: { x: 6, y: 1 } });
-}
+// Both ways a terminal link gets clicked: an OSC 8 hyperlink, or a plain-text URL found by the web-links addon.
+// Terminal output is untrusted, so both must open the same way and refuse the same schemes.
+const sources = {
+  'OSC 8 link': (url: string) => {
+    const handler = linkHandler();
+    expect(handler.allowNonHttpProtocols).not.toBe(true);
+    handler.activate({} as MouseEvent, url, { start: { x: 1, y: 1 }, end: { x: 6, y: 1 } });
+  },
+  'plain-text URL': (url: string) => {
+    createTerm('node', {} as HTMLElement);
+    const addon = vi.mocked(WebLinksAddon).mock.results.at(-1)!.value as { handler: (e: MouseEvent, uri: string) => void };
+    const term = vi.mocked(Terminal).mock.results.at(-1)!.value as { loadAddon: ReturnType<typeof vi.fn> };
+    expect(term.loadAddon).toHaveBeenCalledWith(addon);
+    addon.handler({} as MouseEvent, url);
+  },
+};
 
-it('opens terminal Markdown hyperlink targets through the native browser command', () => {
-  vi.mocked(openExternalUrl).mockResolvedValue(undefined);
-  activate('https://github.com/example/tiller/issues/38072');
-  expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith('https://github.com/example/tiller/issues/38072');
-});
+describe.each(Object.entries(sources))('%s', (_name, activate) => {
+  afterEach(() => disposeTerm('node'));
 
-it('reports native browser failures instead of silently ignoring the click', async () => {
-  vi.mocked(openExternalUrl).mockRejectedValue(new Error('No browser'));
-  activate('https://example.com');
-  await Promise.resolve();
-  expect(toast).toHaveBeenCalledExactlyOnceWith('Could not open link: https://example.com', 'node', 'bad');
-});
+  it('opens through the native browser command', () => {
+    vi.mocked(openExternalUrl).mockResolvedValue(undefined);
+    activate('https://github.com/example/tiller/issues/38072');
+    expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith('https://github.com/example/tiller/issues/38072');
+  });
 
-it('opens browser UI links in an isolated new tab', () => {
-  state.native = false;
-  const open = vi.fn();
-  vi.stubGlobal('window', { open });
-  activate('http://example.com/path?q=1#note');
-  expect(open).toHaveBeenCalledExactlyOnceWith('http://example.com/path?q=1#note', '_blank', 'noopener,noreferrer');
-  expect(openExternalUrl).not.toHaveBeenCalled();
-});
+  it('reports native browser failures instead of silently ignoring the click', async () => {
+    vi.mocked(openExternalUrl).mockRejectedValue(new Error('No browser'));
+    activate('https://example.com');
+    await Promise.resolve();
+    expect(toast).toHaveBeenCalledExactlyOnceWith('Could not open link: https://example.com', 'node', 'bad');
+  });
 
-it.each(['javascript:alert(1)', 'file:///tmp/file', 'mailto:a@example.com', '//example.com'])(
-  'does not open unsafe terminal hyperlink targets: %s', (url) => {
+  it('opens browser UI links in an isolated new tab', () => {
+    state.native = false;
     const open = vi.fn();
     vi.stubGlobal('window', { open });
-    activate(url);
-    state.native = false;
-    activate(url);
+    activate('http://example.com/path?q=1#note');
+    expect(open).toHaveBeenCalledExactlyOnceWith('http://example.com/path?q=1#note', '_blank', 'noopener,noreferrer');
     expect(openExternalUrl).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
-  },
-);
+  });
+
+  it.each(['javascript:alert(1)', 'file:///tmp/file', 'mailto:a@example.com', '//example.com'])(
+    'does not open unsafe targets: %s', (url) => {
+      const open = vi.fn();
+      vi.stubGlobal('window', { open });
+      activate(url);
+      disposeTerm('node');
+      state.native = false;
+      activate(url);
+      expect(openExternalUrl).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+    },
+  );
+});
 
 function key(init: KeyboardEventInit & { type?: string; keyCode?: number }) {
   return { type: 'keydown', key: 'Enter', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, isComposing: false, keyCode: 13, preventDefault: vi.fn(), ...init } as unknown as KeyboardEvent;
