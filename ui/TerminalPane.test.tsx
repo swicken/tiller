@@ -90,7 +90,7 @@ it('offers a suggested command over the shell, with Insert disabled until the sh
   let [insert, dismiss] = buttons(run(strip!));
   expect(insert.props).toMatchObject({ children: 'Insert', disabled: true }); // typed-ahead text could be lost while the shell starts
   dismiss.props.onClick();
-  expect(send).toHaveBeenCalledWith({ t: 'suggestion', id: 'a', action: 'dismiss' });
+  expect(send).toHaveBeenCalledWith({ t: 'suggestion', id: 'a', action: 'dismiss', at: 1 });
   [, strip] = render({ opened: ['a'], selected: 'a', nodes: { a: { ...node, shellReady: true } }, connected: true, shellOpen: true }).props.children;
   [insert] = buttons(run(strip!));
   expect(insert.props.disabled).toBe(false);
@@ -98,7 +98,7 @@ it('offers a suggested command over the shell, with Insert disabled until the sh
   vi.mocked(getTerm).mockReturnValue({ term } as never);
   insert.props.onClick();
   // The daemon types its own validated copy; the UI never sends the command text.
-  expect(send).toHaveBeenLastCalledWith({ t: 'suggestion', id: 'a', action: 'insert' });
+  expect(send).toHaveBeenLastCalledWith({ t: 'suggestion', id: 'a', action: 'insert', at: 1 });
   // The button took focus; give it back to the shell so the human can press Enter to run the command.
   expect(getTerm).toHaveBeenLastCalledWith('a:shell');
   expect(term.focus).toHaveBeenCalledOnce();

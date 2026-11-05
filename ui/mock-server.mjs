@@ -312,6 +312,7 @@ wss.on('connection', (ws) => {
         else if (n?.status.git) touch(n, { git: { ...n.status.git, ahead: 0, mergedAt: Date.now() } }); break;
       case 'suggestion': {
         if (!n?.suggestion) break;
+        if (m.at !== n.suggestion.at) { send({ t: 'error', id: m.id, message: 'the suggested command changed; check the new one first' }); break; }
         if (m.action === 'insert' && !n.shellReady) { send({ t: 'error', id: m.id, message: 'the shell is not ready yet: open the Terminal tab and wait for its prompt' }); break; }
         if (m.action === 'insert') send({ t: 'data', id: `${m.id}:shell`, data: n.suggestion.command });
         delete n.suggestion;

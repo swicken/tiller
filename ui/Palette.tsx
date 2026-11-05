@@ -37,9 +37,10 @@ export function Palette() {
     { key: 'cmd:check-updates', title: 'Check for updates', sub: 'check releases and open update management', run: () => { send({ t: 'updateCheck' }); replace({ kind: 'update' }); } },
     { key: 'cmd:history', title: historyOpen ? 'Hide history' : 'History', sub: 'closed nodes: read, follow up or fork', run: () => { toggleHistory(); close(); } },
     // Pane switches, so the keyboard alone reaches a node's shell. Focus after the palette has closed and handed focus back.
+    // Selecting the node first leaves a historical node's view, which would otherwise stay over both panes.
     ...(cur && isAgentKind(cur.kind) ? [
-      { key: 'cmd:shell', title: `Terminal: ${cur.title}`, sub: `your shell in ${cwdBase(cur.cwd)}${cur.suggestion ? ' · suggested command waiting' : ''}`, run: () => { showPane('shell'); close(); requestAnimationFrame(() => getTerm(shellStreamId(cur.id))?.term.focus()); } },
-      { key: 'cmd:agent', title: `Agent: ${cur.title}`, sub: "the agent's terminal", run: () => { showPane('agent'); close(); requestAnimationFrame(() => getTerm(cur.id)?.term.focus()); } },
+      { key: 'cmd:shell', title: `Terminal: ${cur.title}`, sub: `your shell in ${cwdBase(cur.cwd)}${cur.suggestion ? ' · suggested command waiting' : ''}`, run: () => { selectNode(cur.id); showPane('shell'); close(); requestAnimationFrame(() => getTerm(shellStreamId(cur.id))?.term.focus()); } },
+      { key: 'cmd:agent', title: `Agent: ${cur.title}`, sub: "the agent's terminal", run: () => { selectNode(cur.id); showPane('agent'); close(); requestAnimationFrame(() => getTerm(cur.id)?.term.focus()); } },
     ] : []),
     ...(cur && isAgentKind(cur.kind) && harnessFor(cur) === 'claude' ? [{ key: 'cmd:fork', title: `Fork ${cur.title}…`, sub: 'new node from its conversation', run: () => openDialog({ kind: 'fork', from: cur.id, title: cur.title, cwd: cur.cwd, parentId: cur.parentId }) }] : []),
   ].filter((c) => `${c.title} ${c.sub}`.toLowerCase().includes(needle));

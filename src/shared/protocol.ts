@@ -15,6 +15,7 @@ export const shellStreamId = (nodeId: string) => `${nodeId}:shell`;
 export const shellNodeId = (streamId: string): string | undefined => (streamId.endsWith(':shell') ? streamId.slice(0, -':shell'.length) : undefined);
 
 /** A command an agent suggested for the human to run in its node's shell. Not persisted. */
+/** `at` is strictly increasing per node, so it also names this suggestion when the human acts on it. */
 export interface Suggestion { command: string; why?: string; at: number }
 
 /** Which agent CLI runs an agent node; terminals never call this and legacy nodes default to claude. */
@@ -439,7 +440,7 @@ export type ClientMessage =
   | { t: 'send'; id: string; text: string; mode?: SendMode } // a message from the human, as `tl send` delivers it; replies sent
   | { t: 'mute'; id: string; muted: boolean }  // the human mutes or unmutes a node's OS notifications
   | { t: 'dnd'; on: boolean; minutes?: number } // do not disturb on (for minutes, else until turned off) or off
-  | { t: 'suggestion'; id: string; action: 'insert' | 'dismiss' } // clear node id's suggested command; insert first types it into the node's shell, without Enter
+  | { t: 'suggestion'; id: string; action: 'insert' | 'dismiss'; at: number } // clear node id's suggested command; insert first types it into the node's shell, without Enter. `at` is the suggestion's: a newer one refuses the action
   | { t: 'sessionOrder'; ids: string[] }    // save the session tab order (root ids, left to right); broadcast to every client
   ;
 

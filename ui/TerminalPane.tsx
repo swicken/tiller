@@ -9,7 +9,7 @@ import '@xterm/xterm/css/xterm.css';
 function actOnSuggestion(nodeId: string, action: 'insert' | 'dismiss'): void {
   const n = getState().nodes[nodeId];
   if (!n?.suggestion || (action === 'insert' && !n.shellReady)) return;
-  send({ t: 'suggestion', id: nodeId, action });
+  send({ t: 'suggestion', id: nodeId, action, at: n.suggestion.at });
   getTerm(shellStreamId(nodeId))?.term.focus();
 }
 

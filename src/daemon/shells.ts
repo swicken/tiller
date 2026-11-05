@@ -25,6 +25,10 @@ export class Shells {
     if (!rec || !this.m.view(id)) throw new Error(`no such node: ${id}`);
     if (!isAgentKind(rec.kind)) throw new Error(`${id} is a terminal node: it has no shell tab`);
     if (this.m.stopped) throw new Error('the daemon is stopping');
+    // Until then cwd is the source checkout, and a shell started there would stay there once the node moves in.
+    const busy = this.m.runtimes.get(id)?.busy;
+    if (rec.pending?.isolation === 'worktree' || busy === 'creating') throw new Error(`${id}'s worktree is not created yet: open the Terminal tab again once it exists`);
+    if (busy === 'closing') throw new Error(`${id} is closing`); // its tree may be on its way out
     const sh = this.shells.get(id) ?? this.spawn(id, rec.cwd, cols, rows);
     sh.s.resize(cols, rows);
     await sh.s.flush();
@@ -66,10 +70,16 @@ export class Shells {
     this.input(id, text);
   }
 
-  kill(id: string): void {
+  /** Kill the node's shell, if any; returns it so a caller can wait for its exit. */
+  kill(id: string): PtySession | undefined {
     const sh = this.shells.get(id);
     this.shells.delete(id);
     sh?.s.kill();
+    if (sh && this.m.registry.get(id)) { // the node stays (a close that failed after this): show the tab as exited
+      this.m.emit('data', shellStreamId(id), EXITED);
+      this.m.emitNode(id);
+    }
+    return sh?.s;
   }
 
   /** Kill every shell; resolves once they have exited or `timeoutMs` passed. */
