@@ -4,7 +4,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { type Profile, harnessFor, isAgentKind, NEEDS_YOU_STATES, type Harness, type ArchivedNode, type Diff, type DigestItem, type Drain, type Transcript, type GitState, type ModEvent, type NodeKind, type NodeRecord, type NodeStatus, type NodeView, type Outcome, type Effort, type Isolation, type Role, type Usage, type Worktree } from '../shared/protocol.js';
+import { type Profile, harnessFor, isAgentKind, NEEDS_YOU_STATES, type Harness, type ArchivedNode, type Diff, type DigestItem, type Drain, type Transcript, type GitState, type ModEvent, type NodeKind, type NodeRecord, type NodeStatus, type NodeView, type Outcome, type Suggestion, type Effort, type Isolation, type Role, type Usage, type Worktree } from '../shared/protocol.js';
 import { loadConfig, type Config } from './config.js';
 import { UsageRegistry } from './usage.js';
 import { accountForProject, claudeConfigDir, claudeHomeOf, claudeHomes } from './claude-accounts.js';
@@ -26,6 +26,7 @@ import { nodeDefaults, resolveSpawn, restartSelection, spawnTarget } from './spa
 import { DAEMON, deliver, handoverInbox, holdDeliveries, HUMAN, inScope, saveInboxForRestart, submitting, waitForDeliveries } from './messaging.js';
 import { NodeRegistry } from './nodes.js';
 import { buildChildEnv, PtySession } from './pty.js';
+import { Shells } from './shells.js';
 import { count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
 import { addWorktree, closeWorktreeNode, dropQueuedMerges, gitSettled, mergeWorktree, readClaudeJson, refreshGit, refreshGitSoon, refreshMovedTips, setMissing, setupThenLaunch, trustedForWorktree, trustPolicy, worktreeCheck, worktreeCommands, worktreeEnv, worktrees, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
@@ -164,6 +165,8 @@ export interface NodeRuntime {
   restored?: boolean;
   /** The notify_when registrations this node made; discarded with its runtime. */
   watches?: CompletionWatches;
+  /** The command the agent last suggested for the node's shell (suggest_command), until the human inserts or dismisses it. */
+  suggestion?: Suggestion;
 }
 
 /**
@@ -193,9 +196,13 @@ export class NodeManager extends EventEmitter {
   readonly runtimes = new Map<string, NodeRuntime>();
   /** PATH handed to children. */
   readonly path: string;
+  /** The human's shell beside each agent node (the Terminal tab). */
+  readonly shells: Shells;
   /** Set by shutdown: the live set is then frozen, so the PTYs' exits do not empty it. */
   private shutDown = false;
   private shell: string;
+  /** The last suggestion's `at`, so the next one's is greater. */
+  private suggestionAt = 0;
   private readonly terminateTimeoutMs?: number;
   private readonly tokens: NodeTokens;
   private sweepTimer: NodeJS.Timeout;
@@ -216,6 +223,7 @@ export class NodeManager extends EventEmitter {
     this.shell = opts.shell ?? process.env.SHELL ?? '/bin/sh';
     this.path = opts.path ?? process.env.PATH ?? '';
     this.terminateTimeoutMs = opts.terminateTimeoutMs;
+    this.shells = new Shells(this, this.shell);
     this.usageRegistry = new UsageRegistry(this.path, () => claudeHomes(this.home).filter((d): d is string => !!d));
     mkdirSync(join(this.home, 'nodes'), { recursive: true, mode: 0o700 });
     chmodSync(this.home, 0o700); // mkdir's mode does not apply to a directory that already existed
@@ -241,7 +249,7 @@ export class NodeManager extends EventEmitter {
     this.sweepTimer = setInterval(() => this.sweepStale(), SWEEP_MS);
     this.sweepTimer.unref();
     this.on('node', () => scheduleSoon(this));
-    this.on('removed', (id: string) => { this.repoAccounts.delete(id); scheduleSoon(this); });
+    this.on('removed', (id: string) => { this.repoAccounts.delete(id); this.shells.kill(id); scheduleSoon(this); });
   }
 
   // ---- tokens ----
@@ -268,7 +276,7 @@ export class NodeManager extends EventEmitter {
     if (claudeRoot && !this.repoAccounts.has(id)) this.repoAccounts.set(id, this.repoAccountOf(rec));
     const repoAccount = claudeRoot ? this.repoAccounts.get(id) : undefined;
     const shown = rt.busy === 'changing harness' ? { ...s, activity: rt.stoppingAfterFailedChange ? 'waiting for old process exit; harness unchanged' : 'changing harness' } : gate?.state === 'running' ? { ...s, activity: `gate: ${gate.command}` } : s;
-    return { ...rec, status: git ? { ...shown, git } : shown, unread: !!rt.unread, ...(outcome ? { outcome } : {}), ...(gate ? { gate: gate.state } : {}), ...(rt.busy === 'changing harness' ? { changingHarness: true } : {}), ...(repoAccount !== undefined ? { repoAccount } : {}) };
+    return { ...rec, status: git ? { ...shown, git } : shown, unread: !!rt.unread, ...(outcome ? { outcome } : {}), ...(gate ? { gate: gate.state } : {}), ...(rt.busy === 'changing harness' ? { changingHarness: true } : {}), ...(repoAccount !== undefined ? { repoAccount } : {}), ...(rt.suggestion ? { suggestion: rt.suggestion } : {}), ...(this.shells.ready(id) ? { shellReady: true as const } : {}) };
   }
 
   /**
@@ -828,6 +836,28 @@ export class NodeManager extends EventEmitter {
     return true;
   }
 
+  /** Store an agent's suggested command for its node's shell, replacing any earlier one. */
+  suggest(id: string, command: string, why?: string): void {
+    const rt = this.runtimes.get(id);
+    if (!rt) throw new Error(`no such node: ${id}`);
+    this.suggestionAt = Math.max(Date.now(), this.suggestionAt + 1); // a revision: two suggestions never share one
+    rt.suggestion = { command, ...(why ? { why } : {}), at: this.suggestionAt };
+    this.emitNode(id);
+  }
+
+  /**
+   * The human inserts the node's suggested command at its shell's prompt (no Enter) or dismisses it; either clears it.
+   * `at` is the suggestion the human saw: if the agent has replaced it since, nothing is typed or cleared.
+   */
+  answerSuggestion(id: string, action: 'insert' | 'dismiss', at: number): void {
+    const rt = this.runtimes.get(id), suggestion = rt?.suggestion;
+    if (!rt || !suggestion) throw new Error('no suggested command');
+    if (suggestion.at !== at) throw new Error('the suggested command changed; check the new one first');
+    if (action === 'insert') this.shells.insert(id, suggestion.command); // throws, keeping it, while the shell is not ready
+    rt.suggestion = undefined;
+    this.emitNode(id);
+  }
+
   /** A client selected `id`, which clears its unread flag. */
   select(id: string): void {
     const rt = this.runtimes.get(id);
@@ -1068,6 +1098,7 @@ export class NodeManager extends EventEmitter {
       if (rt.session) work.push(rt.session.terminate(wait).catch(() => false));
       work.push(gitSettled(rt));
     }
+    work.push(this.shells.terminateAll(wait));
     this.registry.flush(); // now, in case the process is killed during the wait
     saveInboxForRestart(this);
     await Promise.race([Promise.all(work), sleep(wait, undefined, { ref: false })]);

@@ -73,6 +73,8 @@ export interface State {
   comments: ReviewComment[];
   /** The Transcript tab is showing instead of the terminal (for Claude nodes). */
   transcriptOpen: boolean;
+  /** The Terminal tab is showing the node's shell instead of its agent (for agent nodes). */
+  shellOpen: boolean;
   /** The last transcript asked for (no sessionId: the node's current session); data stays while a refresh is out. */
   transcript: { id: string; sessionId?: string; data?: Transcript; error?: string } | null;
   /** The Transcript tab shows tool calls (per viewer, remembered). */
@@ -97,7 +99,7 @@ const storedTools = readPref('tl.showTools') === '1';
 let state: State = {
   nodes: {}, order: [], sessionOrder: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
   connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
-  transcriptOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
+  transcriptOpen: false, shellOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
 };
 const subs = new Set<() => void>();
 let toastSeq = 0;
@@ -149,7 +151,8 @@ export const toggleShowTools = () => update((s) => {
 });
 
 /** What the stage shows for a live node. */
-export const showPane = (pane: 'terminal' | 'diff' | 'transcript') => update(() => ({ diffOpen: pane === 'diff', transcriptOpen: pane === 'transcript' }));
+export const showPane = (pane: 'agent' | 'diff' | 'transcript' | 'shell') =>
+  update(() => ({ diffOpen: pane === 'diff', transcriptOpen: pane === 'transcript', shellOpen: pane === 'shell' }));
 /** Note that a diff for `id` was asked for; conn.ts sends the request. */
 export const diffRequested = (id: string) => update((s) => ({ diff: s.diff?.id === id ? s.diff : { id } }));
 /** Note that a transcript for `id` (and `sessionId`, else the current one) was asked for; the caller sends the request. */

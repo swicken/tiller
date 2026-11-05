@@ -65,6 +65,12 @@
 .termwrap { position: absolute; inset: 0; }
 .term { position: absolute; inset: 8px 0 0 16px; visibility: hidden; }
 .term.show { visibility: visible; }
+.term.below-strip { top: 48px; }
+.suggest-strip { position: absolute; top: 0; left: 0; right: 0; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); background: var(--surface-2); font-size: 12px; }
+.suggest-strip > span { flex: none; color: var(--dim); }
+.suggest-strip code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-strip .btn { flex: none; }
+.pane-tabs .tab-dot { position: absolute; top: 10px; right: -6px; }
 .empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 16px; color: var(--dim); }
 
 .exited-overlay { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(2px); z-index: 5; }

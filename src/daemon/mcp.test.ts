@@ -618,7 +618,7 @@ describe('mcp api', () => {
     const id = (await spawnT('mcp-caller')).body.data.nodeId as string;
     const human = await connect('human', admin);
     const humanTools = (await human.listTools()).tools;
-    expect(humanTools.map((t) => t.name).sort()).toEqual(['change_harness', 'close', 'diff', 'dnd', 'drain', 'followup', 'history', 'list_nodes', 'merge', 'message_status', 'mute', 'notify_when', 'prune', 'read', 'rename', 'report_outcome', 'restart', 'resume', 'select', 'send', 'sessions_clean', 'shutdown', 'spawn', 'transcript', 'update', 'withdraw', 'worktrees', 'write']);
+    expect(humanTools.map((t) => t.name).sort()).toEqual(['change_harness', 'close', 'diff', 'dnd', 'drain', 'followup', 'history', 'list_nodes', 'merge', 'message_status', 'mute', 'notify_when', 'prune', 'read', 'rename', 'report_outcome', 'restart', 'resume', 'select', 'send', 'sessions_clean', 'shutdown', 'spawn', 'suggest_command', 'transcript', 'update', 'withdraw', 'worktrees', 'write']);
     expect(Object.fromEntries(humanTools.map((t) => [t.name, t.title]))).toMatchObject({
       send: 'Send message', spawn: 'Start node', notify_when: 'Watch node completion', read: 'Read node output',
       history: 'List past agents', followup: 'Continue past agent', merge: 'Merge node changes',
@@ -626,7 +626,7 @@ describe('mcp api', () => {
     await human.close();
     const client = await connect(id, manager.tokenFor(id));
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['close', 'diff', 'history', 'list_nodes', 'merge', 'message_status', 'notify_when', 'read', 'rename', 'report_outcome', 'send', 'spawn', 'withdraw', 'write']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['close', 'diff', 'history', 'list_nodes', 'merge', 'message_status', 'notify_when', 'read', 'rename', 'report_outcome', 'send', 'spawn', 'suggest_command', 'withdraw', 'write']);
     expect(tools.find((t) => t.name === 'spawn')!.inputSchema.required).toEqual(['title']); // kind and cwd default to the caller's
     expect(Object.fromEntries(tools.map((t) => [t.name, t.title]))).toMatchObject({
       notify_when: 'Watch node completion', read: 'Read node output', history: 'List past agents',
@@ -640,6 +640,41 @@ describe('mcp api', () => {
     expect(list.content[0].text).toMatch(/^usage/);
     expect(list.content[0].text).toContain(`- ${id} "mcp-caller" [terminal] none (reported succeeded) `);
     await client.close();
+  });
+
+  it('suggest_command stores one validated line on the caller\'s own node, replacing the last', async () => {
+    const id = (await spawnT('suggester')).body.data.nodeId as string;
+    const tok = manager.tokenFor(id);
+    expect((await api('suggest_command', { command: 'echo hi' }, id, tok)).body.error).toMatch(/terminal node/); // no Terminal tab to show it in
+    manager.registry.update(id, { kind: 'claude' });
+    const r = await api('suggest_command', { command: 'git pull --rebase', why: 'pick up the merged base' }, id, tok);
+    expect(r.body.text).toBe('Suggested in the human\'s Terminal tab. They may run it, edit it or ignore it, and you will not see the output.');
+    expect(manager.view(id)!.suggestion).toEqual({ command: 'git pull --rebase', why: 'pick up the merged base', at: expect.any(Number) });
+    await api('suggest_command', { command: 'npm test' }, id, tok);
+    expect(manager.view(id)!.suggestion).toEqual({ command: 'npm test', at: expect.any(Number) });
+    // Insert types the text at the human's prompt: a newline or carriage return would run it unseen, an escape sequence
+    // could rewrite what is shown, and a bidi override could display another command than the one typed.
+    for (const command of ['ls\nwhoami', 'ls\r', 'a\tb', 'ls\x1b[2K', 'ls\x9b2K', 'ls‮whoami', '', 'x'.repeat(2001)]) {
+      const bad = await api('suggest_command', { command }, id, tok);
+      expect(bad.status, JSON.stringify(command)).toBe(400);
+    }
+    expect((await api('suggest_command', { command: 'ls', why: 'two\nlines' }, id, tok)).status).toBe(400);
+    // An empty why is no reason, not an error the agent has to puzzle over.
+    expect((await api('suggest_command', { command: 'npm test', why: '' }, id, tok)).status).toBe(200);
+    expect(manager.view(id)!.suggestion).toEqual({ command: 'npm test', at: expect.any(Number) });
+    expect(manager.view(id)!.suggestion?.command).toBe('npm test'); // refusals leave the last good one
+    expect((await api('suggest_command', { command: 'ls' })).body.error).toMatch(/only for agent nodes/); // the human has no agent to suggest for
+  });
+
+  it('gives agents no way into a node\'s shell: read and write refuse a shell stream id', async () => {
+    const id = (await spawnT('shell-owner')).body.data.nodeId as string;
+    manager.registry.update(id, { kind: 'claude' });
+    const tok = manager.tokenFor(id);
+    for (const r of [await api('write', { nodeId: `${id}:shell`, text: 'whoami\r' }, id, tok), await api('read', { nodeId: `${id}:shell`, what: 'terminal' }, id, tok)]) {
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/no such node/);
+    }
+    expect(confirms.some((t) => t.includes(':shell'))).toBe(false); // refused before the human is even asked
   });
 
   it('cuts diff text for agents over MCP but not over /api', async () => {

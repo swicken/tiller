@@ -25,7 +25,7 @@ const run = (node: ReturnType<typeof mk>, key: string) => actionsFor(node).find(
 beforeEach(() => {
   vi.clearAllMocks();
   update(() => ({ nodes: {}, renaming: null, panel: false }));
-  openDialog(null); showPane('terminal');
+  openDialog(null); showPane('agent');
 });
 
 describe('node action operations', () => {
@@ -138,17 +138,46 @@ describe('header views', () => {
     controls.find((b) => b.props['aria-label'] === 'Toggle last response panel')!.props.onClick!();
     expect(getState().panel).toBe(true); expect(getState().transcriptOpen).toBe(true);
     controls.find((b) => b.props.children === 'Terminal')!.props.onClick!();
-    expect(getState().diffOpen).toBe(false); expect(getState().transcriptOpen).toBe(false);
+    expect(getState()).toMatchObject({ shellOpen: true, diffOpen: false, transcriptOpen: false });
+    controls.find((b) => b.props.children === 'Agent')!.props.onClick!();
+    expect(getState()).toMatchObject({ shellOpen: false, diffOpen: false, transcriptOpen: false });
     togglePanel();
   });
 
   it('shows only supported views and never treats a hidden view as active', () => {
     const html = (node: ReturnType<typeof mk>) => renderToStaticMarkup(<TitleBar node={node} />);
     showPane('diff');
-    expect(html(mk('root', null, 0))).toContain('aria-pressed="true">Terminal');
+    expect(html(mk('root', null, 0))).toContain('aria-pressed="true">Agent');
     expect(html(child())).toContain('aria-pressed="true">Diff');
     expect(html({ ...child(), kind: 'terminal' })).not.toContain('>Transcript<');
     expect(html({ ...mk('shell', null, 0), kind: 'terminal' })).not.toContain('aria-label="Pane"');
+    // A terminal node already is a shell: it keeps its one Terminal view, never an Agent tab or a second shell.
+    showPane('shell');
+    const term = html({ ...child(), kind: 'terminal' });
+    expect(term).not.toContain('>Agent<');
+    expect(term.match(/>Terminal</g)).toHaveLength(1);
+    expect(term).toContain('aria-pressed="true">Terminal');
+  });
+
+  it('orders an agent node\'s tabs Agent, Diff, Transcript, Terminal', () => {
+    const labels = (node: ReturnType<typeof mk>) => buttons(TitleBar({ node })).filter((b) => (b.props as { 'aria-pressed'?: boolean })['aria-pressed'] !== undefined && !b.props['aria-label']).map((b) => b.props.children);
+    expect(labels(child())).toEqual(['Agent', 'Diff', 'Transcript', 'Terminal']);
+    expect(labels(mk('root', null, 0))).toEqual(['Agent', 'Transcript', 'Terminal']);
+  });
+});
+
+describe('suggested commands', () => {
+  const suggestion = { command: 'npm test', why: 'run the suite', at: 1 };
+  it('marks the Terminal tab and the node\'s row, and a collapsed parent of a node that has one', () => {
+    const node = { ...child(), suggestion };
+    expect(renderToStaticMarkup(<TitleBar node={node} />)).toContain('title="Suggested command waiting"');
+    expect(renderToStaticMarkup(<TitleBar node={child()} />)).not.toContain('Suggested command waiting');
+    update(() => ({ nodes: { root: mk('root', null, 0), child: node }, order: ['root', 'child'], collapsed: ['root'] }));
+    const [rootRow] = flattenSession(getState().nodes, getState().order, 'root', getState().collapsed);
+    expect(renderToStaticMarkup(<NodeRow row={rootRow} />)).toContain('Hidden nodes have a suggested command');
+    const rows = flattenSession(getState().nodes, getState().order, 'root', []);
+    expect(renderToStaticMarkup(<NodeRow row={rows.find((r) => r.node.id === 'child')!} />)).toContain('Suggested command: npm test');
+    expect(renderToStaticMarkup(<NodeRow row={rows.find((r) => r.node.id === 'root')!} />)).not.toContain('uggested command');
   });
 });
 

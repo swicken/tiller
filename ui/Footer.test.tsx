@@ -8,6 +8,8 @@ import { Palette } from './Palette';
 import { getState, update } from './store';
 import { send } from './conn';
 import { toggleDnd } from './hooks';
+import { mk } from './fixtures';
+import type { ArchivedNode } from '../src/shared/protocol';
 
 const effects = vi.hoisted(() => [] as (() => unknown)[]);
 vi.mock('./controls/Modal', () => ({ Modal: ({ children, footer }: { children: ReactNode; footer?: ReactNode }) => <>{children}{footer}</> }));
@@ -103,6 +105,16 @@ it('keeps Activity, notification toggling, and update management reachable throu
   expect(JSON.stringify(command('dnd').props.children)).toContain('Turn off do not disturb');
 });
 
+
+it('leaves a historical node\'s view when switching the live node\'s pane, since the archive view covers both panes', () => {
+  const a = mk('a', null, 0);
+  update(() => ({ nodes: { a }, order: ['a'], selected: 'a', archived: { id: 'n-old' } as ArchivedNode, shellOpen: false }));
+  command('shell').props.onClick();
+  expect(getState()).toMatchObject({ archived: null, selected: 'a', shellOpen: true });
+  update(() => ({ archived: { id: 'n-old' } as ArchivedNode }));
+  command('agent').props.onClick();
+  expect(getState()).toMatchObject({ archived: null, selected: 'a', shellOpen: false });
+});
 
 it('shows only backend installed unread notes and acknowledges their loaded identity, preserving newer notes', () => {
   const release = { id: 1, tag: 'v1', name: 'Installed release', body: 'Installed changes', sha: 'installed', tagObject: 'tag', publishedAt: '' };

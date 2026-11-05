@@ -65,7 +65,7 @@ add('tl-ui', 'tl', 'ui polish', '/Users/scott/workspace/tiller/ui', 'claude', { 
 add('tl-css', 'tl-ui', 'css review', '/Users/scott/workspace/tiller/ui', 'claude', { ...HAIKU, state: 'done', ago: 12 * MIN, contextPct: 18, contextTokens: 36_000, contextWindow: 200_000, costUsd: 0.07, lastAssistantMessage: 'Reviewed theme.css and sidebar.css.\n\nFindings:\n- The connector lines use border colours from --line, good in both themes.\n- .actions overlaps the age on narrow widths; consider hiding the age at hover (already done).\n- No hard-coded colours outside theme.css except the toast shadow.' });
 add('tl-sh', 'tl-ui', 'shell', '/Users/scott/workspace/tiller/ui', 'terminal', { ago: 40 * MIN });
 add('tl-test', 'tl', 'tests', '/Users/scott/workspace/tiller', 'claude', { ...SONNET, state: 'blocked', ago: 90_000, activity: 'needs approval: Bash: rm -rf node_modules && npm ci && npm test -- --run ui', contextPct: 23, contextTokens: 46_000, contextWindow: 200_000, costUsd: 0.31 }, { unread: true });
-add('tl-d', 'tl', 'daemon', '/Users/scott/workspace/tiller', 'claude', { ...OPUS, state: 'done', ago: 25 * MIN, contextPct: 86, contextTokens: 172_000, contextWindow: 200_000, costUsd: 6.9, lastAssistantMessage: 'The daemon now serves ui/dist and reports /health. All 214 tests pass.' });
+add('tl-d', 'tl', 'daemon', '/Users/scott/workspace/tiller', 'claude', { ...OPUS, state: 'done', ago: 25 * MIN, contextPct: 86, contextTokens: 172_000, contextWindow: 200_000, costUsd: 6.9, lastAssistantMessage: 'The daemon now serves ui/dist and reports /health. All 214 tests pass.' }, { suggestion: { command: 'tl reload', why: 'pick up the new daemon build', at: now - 2 * MIN } });
 add('tl-wt', 'tl', 'worktree gone', '/Users/scott/workspace/tiller/.claude/worktrees/tl-wt', 'claude', { ...SONNET, state: 'done', exited: true, ago: 50 * MIN }, { worktree: { repo: '/Users/scott/workspace/tiller', path: '/Users/scott/workspace/tiller/.claude/worktrees/tl-wt', branch: 'tl/tl-wt', base: 'main', baseSha: '6977f01', missing: true } });
 add('tl-feat', 'tl', 'diff view', '/Users/scott/workspace/tiller/.claude/worktrees/tl-feat', 'claude', { ...SONNET, state: 'done', ago: 6 * MIN, contextPct: 37, contextTokens: 74_000, contextWindow: 200_000, costUsd: 0.88, lastAssistantMessage: 'Added the diff tab and its tests.', git: { branch: 'tl/tl-feat', base: 'main', ahead: 2, behind: 0, dirty: 1, additions: 14, deletions: 4 } }, { worktree: { repo: '/Users/scott/workspace/tiller', path: '/Users/scott/workspace/tiller/.claude/worktrees/tl-feat', branch: 'tl/tl-feat', base: 'main', baseSha: '6977f01' } });
 add('tl-spike', 'tl', 'spike: tauri', '/Users/scott/workspace/tiller', 'claude', { ...SONNET, state: 'done', exited: true, ago: 5 * 3600_000, contextPct: 55, contextTokens: 110_000, contextWindow: 200_000, costUsd: 2.05, lastAssistantMessage: 'Tauri wraps the same ui/dist; WKWebView needs the DOM renderer.' });
@@ -234,6 +234,13 @@ wss.on('connection', (ws) => {
       return;
     }
     const n = nodes.get(m.id);
+    // An agent node's shell (Terminal tab): a fake prompt that echoes input.
+    const shellOf = typeof m.id === 'string' && m.id.endsWith(':shell') ? nodes.get(m.id.slice(0, -':shell'.length)) : undefined;
+    if (shellOf && m.t === 'attach') {
+      send({ t: 'data', id: m.id, data: `${shellOf.cwd} $ ` });
+      if (!shellOf.shellReady) setTimeout(() => { shellOf.shellReady = true; broadcast({ t: 'node', node: shellOf }); }, 500);
+      return;
+    }
     switch (m.t) {
       case 'updateCheck':
         if (updateStatus && !updateStatus.applying && !updateStatus.checking) {
@@ -303,6 +310,15 @@ wss.on('connection', (ws) => {
       case 'diff': send({ t: 'diff', id: m.id, ...(n?.worktree ? { base: n.worktree.base, branch: n.worktree.branch, files: FAKE_DIFF } : { error: `${m.id} has no worktree of its own to diff` }) }); break;
       case 'merge': if (n?.status.git?.dirty) send({ t: 'error', id: m.id, message: `merge refused, nothing changed: ${n.status.git.dirty} uncommitted file(s) in the worktree; commit them first` });
         else if (n?.status.git) touch(n, { git: { ...n.status.git, ahead: 0, mergedAt: Date.now() } }); break;
+      case 'suggestion': {
+        if (!n?.suggestion) break;
+        if (m.at !== n.suggestion.at) { send({ t: 'error', id: m.id, message: 'the suggested command changed; check the new one first' }); break; }
+        if (m.action === 'insert' && !n.shellReady) { send({ t: 'error', id: m.id, message: 'the shell is not ready yet: open the Terminal tab and wait for its prompt' }); break; }
+        if (m.action === 'insert') send({ t: 'data', id: `${m.id}:shell`, data: n.suggestion.command });
+        delete n.suggestion;
+        broadcast({ t: 'node', node: n });
+        break;
+      }
       case 'mute': if (n) { n.muted = m.muted || undefined; broadcast({ t: 'node', node: n }); } break;
       case 'dnd': dnd = m.on ? { on: true, ...(m.minutes && { until: Date.now() + m.minutes * MIN }) } : { on: false }; broadcast({ t: 'dnd', ...dnd }); break;
       case 'sessionOrder': sessionOrder = m.ids; broadcast({ t: 'sessionOrder', ids: sessionOrder }); break;

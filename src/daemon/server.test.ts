@@ -218,13 +218,14 @@ describe('websocket', () => {
     await new Promise((r) => setTimeout(r, 200)); // let the attach land before the socket stops reading
     const socket = (stalled as unknown as { _socket: { pause(): void; resume(): void } })._socket;
     socket.pause();
-    let output = '';
-    const tail = (_: string, d: string) => { output = (output + d).slice(-100); };
+    // Sticky: the prompt printed right after FLOOD_2 can push it out of the tail before the next poll (a long PS1 does).
+    let output = '', flooded = false;
+    const tail = (_: string, d: string) => { output = (output + d).slice(-100); flooded ||= output.includes('FLOOD_2'); };
     manager.on('data', tail);
     const flood = 32 * 1024 * 1024;
     // The sleep lets the screen parse the flood before the exit disposes it.
     manager.input(id, `head -c ${flood} /dev/zero | tr '\\0' x; echo; echo FLOOD_$((1+1))${exits ? '; sleep 1; exit' : ''}\r`);
-    await until(() => output.includes('FLOOD_2') || undefined, 60_000);
+    await until(() => flooded || undefined, 60_000);
     if (exits) await until(() => manager.view(id)?.status.exited || undefined, 15_000);
     manager.off('data', tail);
     socket.resume();

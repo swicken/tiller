@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
-import { APPROVAL_ID, HARNESSES, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
+import { APPROVAL_ID, HARNESSES, shellNodeId, shellStreamId, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
 import { loadConfig } from './config.js';
 import { DEFAULT_PORT } from './home.js';
 import type { NodeManager, NotifyEvent } from './manager.js';
@@ -76,6 +76,7 @@ const clientMessage = z.discriminatedUnion('t', [
   z.object({ t: z.literal('followup'), id, prompt: z.string().min(1), title: z.string().min(1).optional() }),
   z.object({ t: z.literal('send'), id, text: z.string().min(1), mode: z.enum(['queue', 'now']).optional() }),
   z.object({ t: z.literal('mute'), id, muted: z.boolean() }),
+  z.object({ t: z.literal('suggestion'), id, action: z.enum(['insert', 'dismiss']), at: z.number() }),
   z.object({ t: z.literal('sessionOrder'), ids: z.array(id).max(10_000) }),
   z.object({ t: z.literal('dnd'), on: z.boolean(), minutes: z.number().positive().max(7 * 24 * 60).optional() }),
 ]) satisfies z.ZodType<ClientMessage>;
@@ -132,11 +133,16 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
   };
   /** Sessions whose exit keeps the final screen for stalled clients: a PTY's screen is disposed when it exits. */
   const exitWatched = new WeakSet<PtySession>();
+  /** The PTY behind a stream id: a node's own, or for a shell stream id (shellStreamId) that node's shell. */
+  const streamSession = (id: string) => {
+    const shellOf = shellNodeId(id);
+    return shellOf === undefined ? manager.session(id) : manager.shells.session(shellOf);
+  };
   const stall = (c: Client, id: string) => {
     c.attached.delete(id);
     c.stalled.set(id, undefined);
     c.drainTimer ??= setInterval(() => { if (c.ws.bufferedAmount < DRAINED_BYTES) resync(c); }, DRAIN_POLL_MS);
-    const s = manager.session(id);
+    const s = streamSession(id);
     if (!s || exitWatched.has(s)) return;
     exitWatched.add(s);
     s.onExit(() => {
@@ -149,7 +155,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
     clearInterval(c.drainTimer);
     c.drainTimer = undefined;
     for (const id of c.stalled.keys()) {
-      const s = manager.session(id);
+      const s = streamSession(id);
       void (s ? s.flush() : Promise.resolve()).then(() => {
         if (!c.stalled.has(id)) return; // detached or removed meanwhile
         const exitScreen = c.stalled.get(id);
@@ -181,7 +187,8 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
 
   manager.on('node', (node: NodeView) => broadcast({ t: 'node', node: forUi(node) }));
   manager.on('removed', (rid: string) => {
-    for (const c of clients) { c.attached.delete(rid); c.stalled.delete(rid); }
+    const shell = shellStreamId(rid);
+    for (const c of clients) { c.attached.delete(rid); c.stalled.delete(rid); c.attached.delete(shell); c.stalled.delete(shell); }
     broadcast({ t: 'removed', id: rid });
   });
   manager.on('data', (rid: string, data: string) => {
@@ -231,15 +238,27 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
       case 'attach': {
         // Snapshot first, then subscribe, so live output is not also part of the snapshot. attach() resolves
         // and we add the client in the same tick, so no chunk can fall between the two.
-        const text = await manager.attach(m.id, m.cols, m.rows);
+        const shellOf = shellNodeId(m.id);
+        const text = await (shellOf === undefined ? manager.attach(m.id, m.cols, m.rows) : manager.shells.attach(shellOf, m.cols, m.rows));
         if (text) sendTo(c, { t: 'data', id: m.id, data: text });
         c.stalled.delete(m.id);
         c.attached.add(m.id);
         return;
       }
       case 'detach': c.attached.delete(m.id); c.stalled.delete(m.id); return;
-      case 'input': manager.input(m.id, m.data, m.binary); return;
-      case 'resize': manager.resize(m.id, m.cols, m.rows); return;
+      case 'input': {
+        const shellOf = shellNodeId(m.id);
+        if (shellOf === undefined) manager.input(m.id, m.data, m.binary);
+        else manager.shells.input(shellOf, m.data, m.binary);
+        return;
+      }
+      case 'resize': {
+        const shellOf = shellNodeId(m.id);
+        if (shellOf === undefined) manager.resize(m.id, m.cols, m.rows);
+        else manager.shells.resize(shellOf, m.cols, m.rows);
+        return;
+      }
+      case 'suggestion': manager.answerSuggestion(m.id, m.action, m.at); return;
       case 'visibility': {
         const wasAway = !anyFocused();
         const regained = m.focused && !c.focused;
