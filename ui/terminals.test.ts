@@ -178,6 +178,15 @@ it('keeps a held Cmd+Enter from the shell after its insert clears the suggestion
   expect(suggestionKey(key({ metaKey: true }), false, act)).toBe(true);
 });
 
+it('gives a later plain Backspace and its repeats to the shell when Cmd+Backspace sent no keyup, as macOS browsers do', () => {
+  const act = vi.fn();
+  expect(suggestionKey(key({ key: 'Backspace', metaKey: true }), true, act)).toBe(false);
+  // Released while Cmd was down: no keyup arrives. The next Backspace is a fresh press, and holding it must keep deleting.
+  expect(suggestionKey(key({ key: 'Backspace' }), false, act)).toBe(true);
+  expect(suggestionKey(key({ key: 'Backspace', repeat: true }), false, act)).toBe(true);
+  expect(act.mock.calls).toEqual([['dismiss']]);
+});
+
 it.each([
   ['Cmd+Enter with no suggestion', key({ metaKey: true }), false],
   ['plain Enter', key({}), true],

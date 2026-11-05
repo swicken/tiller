@@ -80,8 +80,10 @@ export function shiftEnterKey(e: KeyboardEvent, agent: boolean, input: (data: st
  */
 export function suggestionKey(e: KeyboardEvent, pending: boolean, act: (action: 'insert' | 'dismiss') => void): boolean {
   // The suggestion clears as soon as the first keydown acts, so a held key's auto-repeats must not reach the shell either:
-  // a repeated Cmd+Enter would send CR and run the inserted line. A fresh press always starts over.
-  if (held === e.key && (e.type !== 'keydown' || e.repeat)) {
+  // a repeated Cmd+Enter would send CR and run the inserted line. A fresh press always starts over: macOS browsers send
+  // no keyup for a key released while Cmd is down, so the keyup cannot be what ends it.
+  if (e.type === 'keydown' && !e.repeat) held = undefined;
+  if (held === e.key) {
     if (e.type === 'keyup') held = undefined;
     if (e.type === 'keydown') e.preventDefault();
     return false;
