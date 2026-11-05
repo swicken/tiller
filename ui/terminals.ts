@@ -1,5 +1,6 @@
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { openExternalUrl } from './controls/externalLink';
 import { getState, toast } from './store';
 import { isAgentKind } from '../src/shared/protocol';
@@ -36,24 +37,27 @@ export function createTerm(id: string, el: HTMLElement): Term {
     cursorBlink: true,
     scrollback: 5000,
     ...themeOptions(currentTheme()),
-    linkHandler: {
-      activate: (_event, url) => {
-        if (!/^https?:\/\//i.test(url)) return;
-        if (IN_APP) {
-          void openExternalUrl(url).catch(() => toast(`Could not open link: ${url}`, id, 'bad'));
-        } else {
-          window.open(url, '_blank', 'noopener,noreferrer');
-        }
-      },
-    },
+    linkHandler: { activate: (_event, url) => openLink(url, id) },
   });
   term.attachCustomKeyEventHandler((e) => shiftEnterKey(e, isAgentNode(id), (data) => term.input(data)));
   const fit = new FitAddon();
   term.loadAddon(fit);
+  // Plain-text URLs in terminal output; OSC 8 hyperlinks go through linkHandler above.
+  term.loadAddon(new WebLinksAddon((_event, url) => openLink(url, id)));
   term.open(el);
   const t = { term, fit };
   terms.set(id, t);
   return t;
+}
+
+// Terminal output is untrusted, so only http(s) links open, whether OSC 8 or plain text.
+function openLink(url: string, id: string) {
+  if (!/^https?:\/\//i.test(url)) return;
+  if (IN_APP) {
+    void openExternalUrl(url).catch(() => toast(`Could not open link: ${url}`, id, 'bad'));
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
 }
 
 const isAgentNode = (id: string) => { const n = getState().nodes[id]; return !!n && isAgentKind(n.kind); };
