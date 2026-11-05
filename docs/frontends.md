@@ -21,7 +21,7 @@ In the app, the New session dialog has a Choose… button beside Working directo
 
 Each node's row shows its spend summed across its sessions, with the subtree total (Σ) on nodes with children. A trailing `+` (as in `$0.12+`) marks a figure that is only a lower bound because some of a Pi node's usage had no price; it carries into the subtree and today totals. The browser keeps its own toasts, a tab-title badge and a chime. A client that falls more than 8 MB behind on a node's terminal output (a stalled or backgrounded tab, say) stops receiving it; once its buffer drains it gets that terminal's current screen and carries on, so it never replays the backlog. `ui/README.md` covers developing the UI against a mock daemon.
 
-In an agent node's terminal, Shift+Enter starts a new line in the prompt instead of submitting it: the terminal sends Ctrl+J (a line feed), which Claude Code, Pi and Codex all read as "insert newline". Enter still submits, Option+Enter is passed through unchanged (Pi uses it to queue a follow-up), and keys pressed during IME composition are left alone. Terminal nodes receive Shift+Enter as a plain Enter, as before.
+In an agent node's terminal, Shift+Enter starts a new line in the prompt instead of submitting it: the terminal sends Ctrl+J (a line feed), which Claude Code, Pi and Codex all read as "insert newline". Enter still submits, Option+Enter is passed through unchanged (Pi uses it to queue a follow-up), and keys pressed during IME composition are left alone. Terminal nodes receive Shift+Enter as a plain Enter, as before. Links in a terminal, both OSC 8 hyperlinks and plain http(s) URLs, are clickable and open in the browser; other schemes such as `file:` are ignored.
 
 ## Working in the app
 
