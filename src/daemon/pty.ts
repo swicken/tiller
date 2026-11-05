@@ -180,6 +180,8 @@ export function buildChildEnv(extra: Record<string, string>): Record<string, str
   }
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
+  // TERM_PROGRAM is stripped above, so supports-hyperlinks (Claude Code) would print `text (url)`; xterm.js renders OSC 8. A user's FORCE_HYPERLINK=0 still wins.
+  env.FORCE_HYPERLINK ??= '1';
   if (!env.LANG) env.LANG = 'en_US.UTF-8';
   return { ...env, ...extra };
 }
