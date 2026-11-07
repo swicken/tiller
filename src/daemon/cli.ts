@@ -16,7 +16,7 @@ import { setProjectTrust } from './trust.js';
 import { ADMIN_TOKEN_FILE, daemonPort as portFor, homeDir } from './home.js';
 import { agentStatus, install, LABEL, TLD, plistPath, uninstall } from './autostart.js';
 import { buildChildEnv, loginShellPath } from './pty.js';
-import { formatEvent, listSessions, parseSince, readEvents, readNewEvents, sessionDir, type EventCursor, type SessionEvent } from './sessions.js';
+import { expiringSessions, formatEvent, listSessions, parseSince, readEvents, readNewEvents, sessionDir, type EventCursor, type SessionEvent } from './sessions.js';
 import { fmtAge } from '../shared/format.js';
 import { fmtUsd } from '../shared/spend.js';
 import { HARNESSES, type Harness, type NodeKind } from '../shared/protocol.js';
@@ -87,8 +87,9 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl gate [--cwd P]                                   run the configured completion gate command once in a directory and print the result
   tl worktrees [--cwd P]                            list node worktrees, orphans and kept branches for this repo
   tl worktrees clean [--force] [--cwd P]              remove orphans and kept branches that are clean and merged; --force removes all
-  tl sessions                                         list session directories (<home>/sessions/<rootId>) with title, age, size and closedAt
-  tl sessions clean                                   delete the ones daemon.sessionsKeepDays has expired now
+  tl sessions                                         list session directories (<home>/sessions/<rootId>) with title, age, size, closedAt and when the sweep deletes them
+  tl sessions clean                                   delete the ones daemon.sessionsKeepDays has expired now, without the day's hold after the last warning
+  tl sessions keep <rootId>                           never delete this session directory
   tl sessions path [id]                               print the session directory of a node's tree (default: this node's, or this directory's orchestrator's)
   tl log [id] [--since 2h] [--follow]                 print a tree's event log (for a non-root id, only that node's events)
   tl help`;
@@ -469,11 +470,18 @@ switch (cmd) {
   case 'sessions': {
     if (pos[0] === 'path') { console.log((await sessionTarget(pos[1])).dir); break; }
     if (pos[0] === 'clean') { await call('sessions_clean', {}); break; }
+    if (pos[0] === 'keep' && pos[1]) { await call('sessions_keep', { rootId: pos[1] }); break; }
     if (pos[0]) fail(usage());
     const now = Date.now();
+    const when = (t: number) => new Date(t).toLocaleString('sv-SE').slice(0, 16);
+    // prune: the CLI cannot see which trees still have a node, so only closed roots (never protected) say when they go;
+    // the app's list also covers directories without closedAt.
+    const expiring = new Map(expiringSessions(home, new Set(), loadConfig(null, home).daemon.sessionsKeepDays, now).filter((s) => s.closedAt !== undefined).map((s) => [s.rootId, s.deleteAt]));
     for (const x of listSessions(home).sort((a, b) => b.newest - a.newest)) {
-      const closed = x.closedAt ? `closed ${new Date(x.closedAt).toLocaleString('sv-SE').slice(0, 16)}` : 'open';
-      console.log([x.rootId, (x.title ?? '?').slice(0, 30), fmtAge(now - (x.createdAt ?? x.newest)), `${(x.bytes / 1024).toFixed(1)} KB`, closed].join('\t'));
+      const closed = x.closedAt ? `closed ${when(x.closedAt)}` : 'open';
+      const deleteAt = expiring.get(x.rootId);
+      const fate = x.keep ? 'kept' : deleteAt !== undefined ? `deletes ${when(deleteAt)}` : '';
+      console.log([x.rootId, (x.title ?? '?').slice(0, 30), fmtAge(now - (x.createdAt ?? x.newest)), `${(x.bytes / 1024).toFixed(1)} KB`, closed, fate].filter(Boolean).join('\t'));
     }
     break;
   }

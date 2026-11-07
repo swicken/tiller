@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
+import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, ExpiringSession, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
 import type { ReviewComment } from './diff';
 import { arrange, besideSession, pickInitial, rootOf } from './sidebar/sessions';
 import { insertSorted, type Nodes } from './sidebar/tree';
@@ -26,6 +26,8 @@ export type Dialog =
   | { kind: 'fork'; from: string; title: string; cwd: string; parentId: string | null }
   | { kind: 'palette' }
   | { kind: 'update' }
+  /** Review closed sessions the daemon will delete soon. */
+  | { kind: 'retention' }
   | { kind: 'whatsNew'; notes: InstalledReleaseNotes };
 
 export interface Renaming { id: string; at: 'title' | 'row' | 'session' | 'tab' }
@@ -59,6 +61,8 @@ export interface State {
   /** Account-level rate limits, as the newest node report gave them. */
   usage?: Usage;
   update?: UpdateStatus;
+  /** Closed sessions the daemon will delete within a week, soonest first. */
+  retention?: ExpiringSession[];
   /** A daemon restart waiting for agents to finish their turns. */
   drain?: Drain;
   usageSources?: UsageSource[];
@@ -206,11 +210,13 @@ export function applyServer(m: ServerMessage) {
         order = arrange(nodes, order, sessionOrder);
         const base = { ...s, order, opened: s.opened.filter((id) => nodes[id]) };
         const sel = s.selected && nodes[s.selected] ? s.selected : pickInitial(nodes, order, s.selected ? undefined : wantedNode);
-        return { confirms: [], order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
+        return { confirms: [], order, sessionOrder, opened: base.opened, update: m.update, retention: m.retention, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
       });
     case 'update':
       if (m.update.failed && m.update.failed !== state.update?.failed) toast(m.update.failed, undefined, 'bad');
       return update(() => ({ update: m.update }));
+    case 'retention':
+      return update(() => ({ retention: m.sessions }));
     case 'dnd':
       return update(() => ({ dnd: { on: m.on, until: m.until } }));
     case 'drain':

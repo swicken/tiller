@@ -10,11 +10,29 @@ Everything the daemon keeps is under `~/.tiller`, or `TL_HOME` when set: the nod
 
 Each tree gets a directory, `~/.tiller/sessions/<rootId>/`, created when the root launches. Every node in the tree has its path in the environment variable `TL_SESSION_DIR`, a sentence in its system prompt telling it to keep notes that must outlive its context there, with `handoff.md` as the current state of the work (kept short and rewritten in place, not appended to as a log; history goes in a separate file), and permission to write there without prompting. The directory is keyed by the root's id, not by Claude's session id, so it survives a node restart, `tl reload` and a reboot, unlike Claude's own scratchpad under `/tmp`. A `meta.json` in it records the root's title, directory and creation time, so the files remain identifiable after the root is gone.
 
-`tl sessions` lists the directories with title, age, size and whether the root is closed, and `tl sessions path [id]` prints a tree's directory (by default this node's, or the orchestrator's for the current directory).
+`tl sessions` lists the directories with title, age, size, whether the root is closed, `deletes <date>` for a closed one the sweep deletes within 7 days and `kept` for one kept forever, and `tl sessions path [id]` prints a tree's directory (by default this node's, or the orchestrator's for the current directory).
 
 ## Cleanup
 
-When a root is closed, its `meta.json` gets `closedAt`. On daemon start and once a day, the daemon deletes the directories whose root closed more than `daemon.sessionsKeepDays` (default 14) ago, and those whose root is gone and that nothing has written to for that long. `tl sessions clean` runs that sweep now.
+When a root is closed, its `meta.json` gets `closedAt`. On daemon start and once a day, the daemon deletes the directories whose root closed more than `daemon.sessionsKeepDays` (default 14) ago, and those whose root is gone and that nothing has written to for that long, but only once the app has shown the directory's last-day warning at least a day earlier (see below). `tl sessions clean` runs that sweep now, without waiting for the warning: it deletes everything past `daemon.sessionsKeepDays`.
+
+Deleting a directory loses the tree's archive, so `tl history`, `tl followup` and `tl restore` can no longer reach it. A directory is never deleted while its tree has a node, or once it is kept (`keep: true` in `meta.json`).
+
+### Retention warnings
+
+The daemon keeps a list of the directories the sweep will delete within 7 days and shows it in the app as a banner. A directory warns at three stages: in the week before deletion (7), in the last 3 days (3) and on the last day (1).
+
+Warn, then delete: the automatic sweep deletes a directory only after its `daemon.sessionsKeepDays` deadline has passed and at least 24 hours after its last-day warning first reached a connected app or browser (recorded as `warnedAt` in `meta.json`), whether or not it was then dismissed. A directory that is past its deadline but whose warning nobody has seen yet (the daemon was down, no window was open, or `sessionsKeepDays` was lowered) waits at the last stage, with its deletion time shown a day from now, until a client connects. The deletion time in the banner is this real time, hold included.
+
+For each directory, the banner offers:
+
+- **Keep**: never delete it (`tl sessions keep <rootId>` does the same).
+- **Restore**: bring the closed root back as a dormant node, as `tl restore` does; offered when the archive holds a root with a session whose transcript still exists, that did not run in a worktree, and whose working directory (or, for a removed worktree, its main checkout) still exists. A restored tree has a node again, so it leaves the list.
+- **Delete now**: delete the directory at once; refused while its tree has a node.
+
+Dismissing the banner records the current stage in `meta.json`; the directory warns again when it reaches the next stage. Restoring a root and closing it again starts its warnings over. The list is recomputed on daemon start, after each sweep, every 10 minutes, and at once after a root closes, a restore, keep, delete or dismissal, and `tl sessions clean`.
+
+With `daemon.sessionsKeepDays` below 7, a directory warns as soon as its root closes, already at a later stage. With 0, the directory warns at the last stage as soon as its root closes and is deleted by the first automatic sweep (daemon start or the daily sweep) at least 24 hours after that warning first reached a client; `tl sessions clean` deletes it at once.
 
 ## The event log
 

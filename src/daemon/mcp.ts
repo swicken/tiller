@@ -653,12 +653,18 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   sessions_clean: tool(
     'Clean old sessions',
-    'Delete the session directories that daemon.sessionsKeepDays has expired now, rather than at the daily sweep. Only the human may call this.',
+    'Delete the session directories that daemon.sessionsKeepDays has expired now, rather than at the daily sweep, without waiting a day after their last warning. Only the human may call this.',
     {},
     async (c) => {
-      const removed = c.manager.sweepSessions();
+      const removed = c.manager.sweepSessions(false);
       return { text: `removed ${removed.length} expired session director${removed.length === 1 ? 'y' : 'ies'}${removed.length ? `: ${removed.join(', ')}` : ''}`, data: { removed } };
     }, true),
+
+  sessions_keep: tool(
+    'Keep a session',
+    'Never delete the session directory of root `rootId` (its archive, handoff and notes): the sweep skips it from now on. Only the human may call this.',
+    { rootId: z.string().min(1) },
+    async (c, a) => { await c.manager.keepSession(a.rootId); return { text: `kept session directory ${a.rootId}`, data: { ok: true } }; }, true),
 
   rename: tool(
     'Rename node',

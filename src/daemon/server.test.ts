@@ -64,6 +64,23 @@ describe('websocket', () => {
     expect(change).toHaveBeenCalledTimes(1);
   });
 
+  it('sends the retention list in the snapshot and on change, and handles keep and delete', async () => {
+    const dir = join(home, 'sessions', 'old');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'meta.json'), JSON.stringify({ rootId: 'old', title: 'old', cwd: '/', createdAt: 0, closedAt: Date.now() - 13 * 86_400_000 }));
+    await manager.refreshRetention();
+    await connect();
+    const snapshot = await until(() => seen.find((m) => m.t === 'snapshot'));
+    expect(snapshot.t === 'snapshot' && snapshot.retention).toMatchObject([{ rootId: 'old', stage: 1, dismissed: false, restorable: false }]);
+    // Delivering the last-day warning starts the day's hold.
+    await until(() => JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')).warnedAt);
+    send({ t: 'sessionDelete', rootId: '..' });
+    await until(() => seen.find((m) => m.t === 'error' && m.message === 'no session directory ..'));
+    send({ t: 'sessionKeep', rootId: 'old' });
+    await until(() => seen.find((m) => m.t === 'retention' && m.sessions.length === 0));
+    expect(JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')).keep).toBe(true);
+  });
+
   it('discovers all supported tools in the initial snapshot with no live nodes', async () => {
     await connect();
     const snapshot = await until(() => seen.find((m) => m.t === 'snapshot'));

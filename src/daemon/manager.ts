@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { stripVTControlCharacters } from 'node:util';
-import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { type Profile, harnessFor, profileFor, isAgentKind, NEEDS_YOU_STATES, type Harness, type ArchivedNode, type Diff, type DigestItem, type Drain, type Transcript, type GitState, type ModEvent, type NodeKind, type NodeRecord, type NodeStatus, type NodeView, type Outcome, type Suggestion, type Effort, type Isolation, type Role, type Usage, type Worktree } from '../shared/protocol.js';
+import { type Profile, harnessFor, profileFor, isAgentKind, NEEDS_YOU_STATES, type Harness, type ArchivedNode, type Diff, type DigestItem, type Drain, type ExpiringSession, type Transcript, type GitState, type ModEvent, type NodeKind, type NodeRecord, type NodeStatus, type NodeView, type Outcome, type Suggestion, type Effort, type Isolation, type Role, type Usage, type Worktree } from '../shared/protocol.js';
 import { loadConfig, type Config } from './config.js';
 import { UsageRegistry } from './usage.js';
 import { accountForProject, claudeConfigDir, claudeHomeOf, claudeHomes } from './claude-accounts.js';
@@ -30,7 +30,7 @@ import { Shells } from './shells.js';
 import { count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
 import { addWorktree, closeWorktreeNode, dropQueuedMerges, gitSettled, mergeWorktree, readClaudeJson, refreshGit, refreshGitSoon, refreshMovedTips, setMissing, setupThenLaunch, trustedForWorktree, trustPolicy, worktreeCheck, worktreeCommands, worktreeEnv, worktrees, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
-import { appendEvent, buildDigest, ensureSession, flushEvents, handoffPrompt, listSessions, markClosed, markOpen, readEvents, sessionDir, sweepSessions } from './sessions.js';
+import { appendEvent, buildDigest, ensureSession, expiringSessions, flushEvents, handoffPrompt, listSessions, markClosed, markDismissed, markKept, markOpen, markWarned, readEvents, sessionDir, sweepSessions } from './sessions.js';
 import { archivedOf, archiveNode, findArchived, type BranchFate } from './archive.js';
 import { adoptSessionHistory, nodeTranscript, recordedSessions, transcriptFor } from './transcript.js';
 import { active, initialState, interruptKeyPressed, interruptTimeout, ptyExited, reduce, stall, sweep, turnComplete, type HookEvent } from './status.js';
@@ -41,6 +41,8 @@ const MAX_PREVIOUS_SESSIONS = 10;
 const sessionChain = (rec: NodeRecord) => [...(rec.previousSessions ?? []), ...(rec.sessionId ? [rec.sessionId] : [])].slice(-MAX_PREVIOUS_SESSIONS);
 const INTERRUPT_MS = 1500;
 const SWEEP_MS = 60_000;
+/** How often the minute sweep also recomputes the retention list (it scans the session directories). */
+const RETENTION_MS = 10 * 60_000;
 const TRUST_WATCH_MS = 20_000;
 /** How the Pi adapter prints an activation refusal to stderr (adapters/pi/index.ts report). */
 const PI_REFUSAL = '[tiller] tiller: ';
@@ -58,13 +60,6 @@ const SHUTDOWN_WAIT_MS = 7000;
 
 /** The daemon's message to a resumed node whose turn the restart cut off. */
 export const cutOffText = (reason: string) => `The tiller daemon restarted (${reason}) while your turn was running, so that turn was cut off. Your conversation is intact, but the last tool call may not have finished. Check where you were, for example with git status and the commands you last ran, then continue the task.`;
-
-/** `cwd`, or the main checkout when it was a worktree since removed; undefined when neither exists. */
-function usableCwd(cwd: string): string | undefined {
-  if (existsSync(cwd)) return cwd;
-  const at = cwd.indexOf(`${sep}${wt.WORKTREES_DIR}${sep}`), repo = at >= 0 ? cwd.slice(0, at) : undefined;
-  return repo && existsSync(repo) ? repo : undefined;
-}
 
 /**
  * A Claude worktree record's transcript paths that name a missing file where the worktree's project dir holds it: from
@@ -179,6 +174,7 @@ export interface NodeRuntime {
  *   'notify'  (n: NotifyEvent)
  *   'usage'   (u: Usage)                  a node reported account-level rate limits
  *   'sessionOrder' (ids: string[])       the human rearranged the session tabs
+ *   'retention' (sessions: ExpiringSession[])  the session directories the sweep deletes soon changed
  */
 export class NodeManager extends EventEmitter {
   readonly home: string;
@@ -214,6 +210,11 @@ export class NodeManager extends EventEmitter {
   private drainState?: { reason: string; exclude?: string; force?: boolean; lease: NodeJS.Timeout };
   /** projectDir's main checkout of each cwd outside a worktree node. */
   private projectDirs = new Map<string, string>();
+  /** The session directories the sweep deletes within a week, soonest first; see refreshRetention. */
+  retention: ExpiringSession[] = [];
+  private retentionAt = 0;
+  /** Roots restore is reading the archive of, so their session directory cannot be deleted meanwhile. */
+  private readonly restoring = new Set<string>();
   /** repoAccountOf per node, computed on first view; refreshRepoAccounts recomputes it after a config change. */
   private repoAccounts = new Map<string, string | null | undefined>();
 
@@ -246,6 +247,8 @@ export class NodeManager extends EventEmitter {
       this.runtimes.set(n.id, { status: { state: initialState(n.kind), exited: true, changedAt: Date.now() } });
       refreshGit(this, n.id).catch(logError);
     }
+    this.retention = this.expiring();
+    this.retentionAt = Date.now();
     this.sweepTimer = setInterval(() => this.sweepStale(), SWEEP_MS);
     this.sweepTimer.unref();
     this.on('node', () => scheduleSoon(this));
@@ -344,9 +347,71 @@ export class NodeManager extends EventEmitter {
     return buildDigest(listSessions(this.home).filter((x) => x.newest >= since).flatMap((x) => readEvents(x.dir, since)));
   }
 
-  /** Delete the session directories that daemon.sessionsKeepDays has expired; returns their root ids. */
-  sweepSessions(): string[] {
-    const protectedRoots = new Set<string>();
+  /**
+   * Delete the session directories that daemon.sessionsKeepDays has expired; returns their root ids. With `hold` (the
+   * automatic sweep), only those whose last-day warning reached a client a day ago or more.
+   */
+  sweepSessions(hold = true): string[] {
+    const removed = sweepSessions(this.home, this.protectedRoots(), this.keepDays(), Date.now(), hold);
+    this.refreshRetention().catch(logError);
+    return removed;
+  }
+
+  private keepDays = (): number => loadConfig(null, this.home).daemon.sessionsKeepDays;
+  private expiring = (): ExpiringSession[] => expiringSessions(this.home, this.protectedRoots(), this.keepDays());
+
+  /** Recompute the retention list once pending archive lines land, and emit 'retention' when it changed. */
+  async refreshRetention(): Promise<void> {
+    await flushEvents(); // a just-closed root's archive line decides whether it is restorable
+    const next = this.expiring();
+    this.retentionAt = Date.now();
+    if (JSON.stringify(next) === JSON.stringify(this.retention)) return;
+    this.retention = next;
+    this.emit('retention', next);
+  }
+
+  /** These entries reached a connected client: a last-day one starts the day the sweep holds it for. */
+  noteDelivered(sessions: ExpiringSession[]): void {
+    let changed = false;
+    for (const s of sessions) {
+      if (s.stage !== 1) continue;
+      try { changed = markWarned(this.home, s.rootId) || changed; } catch (err) { logError(err); } // deleted meanwhile, or a planted meta.json
+    }
+    if (changed) this.refreshRetention().catch(logError);
+  }
+
+  /** The session directory of `rootId`, which must be a plain directory name under <home>/sessions. */
+  private validSessionDir(rootId: string): string {
+    const dir = sessionDir(this.home, rootId);
+    if (!/^[\w.-]+$/.test(rootId) || /^\.+$/.test(rootId) || !lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`no session directory ${rootId}`);
+    return dir;
+  }
+
+  /** Never delete the session directory of `rootId`. */
+  async keepSession(rootId: string): Promise<void> {
+    this.validSessionDir(rootId);
+    markKept(this.home, rootId);
+    await this.refreshRetention();
+  }
+
+  /** Delete the session directory of `rootId` now; refused while its tree has a node. */
+  async deleteSession(rootId: string): Promise<void> {
+    const dir = this.validSessionDir(rootId);
+    if (this.protectedRoots().has(rootId)) throw new Error(`refused: the tree of ${rootId} still has a node`);
+    rmSync(dir, { recursive: true, force: true });
+    await this.refreshRetention();
+  }
+
+  /** Hide the warning for these sessions until their next retention stage; ids not in the retention list are ignored. */
+  async dismissRetention(rootIds: string[]): Promise<void> {
+    await flushEvents();
+    for (const s of this.expiring()) if (rootIds.includes(s.rootId)) markDismissed(this.home, s.rootId, s.stage); // the stage as of now, not as cached
+    await this.refreshRetention();
+  }
+
+  /** Roots whose session directory must stay: every node's tree, trees a node's transcript lives in, and roots being restored. */
+  private protectedRoots(): Set<string> {
+    const protectedRoots = new Set<string>(this.restoring);
     const sessionsRoot = resolve(this.home, 'sessions');
     for (const n of this.registry.list()) {
       protectedRoots.add(n.id);
@@ -356,7 +421,7 @@ export class NodeManager extends EventEmitter {
         if (path && inside(resolve(path), sessionsRoot)) protectedRoots.add(relative(sessionsRoot, resolve(path)).split(sep)[0]!);
       }
     }
-    return sweepSessions(this.home, protectedRoots, loadConfig(null, this.home).daemon.sessionsKeepDays);
+    return protectedRoots;
   }
 
   // ---- lifecycle ----
@@ -492,7 +557,7 @@ export class NodeManager extends EventEmitter {
     if ((src.harness ?? 'claude') !== harnessFor(req)) throw new Error('cannot fork a session across harnesses');
     // transcriptPath comes with SessionStart: without it the session has not started and there is nothing to fork.
     if (!src.sessionId || !src.transcriptPath) throw new Error(`refused: ${req.fork} has no session yet to fork`);
-    const want = req.cwd || src.cwd, cwd = usableCwd(want);
+    const want = req.cwd || src.cwd, cwd = wt.usableCwd(want);
     if (!cwd) throw new Error(`refused: ${want} no longer exists`);
     return { sessionId: src.sessionId, cwd, account: src.account };
   }
@@ -510,7 +575,7 @@ export class NodeManager extends EventEmitter {
     if (!existsSync(a.transcriptPath)) throw new Error(`the transcript of ${id} is gone (${a.transcriptPath})`);
     const twin = this.registry.list().find((n) => n.followupOf === id || n.sessionId === a.sessionId);
     if (twin) throw new Error(`refused: ${twin.id} already continues the session of ${id}; send it the prompt instead`);
-    const cwd = usableCwd(a.cwd);
+    const cwd = wt.usableCwd(a.cwd);
     if (!cwd) throw new Error(`refused: ${a.cwd} no longer exists`);
     const parentId = a.parentId && this.registry.get(a.parentId) ? a.parentId : null;
     return this.spawn({ kind: a.harness && a.harness !== 'claude' ? 'agent' : 'claude', ...(a.harness ? { harness: a.harness } : {}), title: title || a.title, cwd, prompt, model: a.model, effort: a.effort, role: a.role, profile: a.profile, parentId, isolation: 'none', byHuman: true, followup: a });
@@ -523,6 +588,12 @@ export class NodeManager extends EventEmitter {
    */
   async restore(id: string): Promise<NodeView> {
     if (this.registry.get(id)) throw new Error(`refused: ${id} is already a node`);
+    if (this.restoring.has(id)) throw new Error(`refused: ${id} is already being restored`);
+    this.restoring.add(id);
+    try { return await this.restoreArchived(id); } finally { this.restoring.delete(id); }
+  }
+
+  private async restoreArchived(id: string): Promise<NodeView> {
     const a = await findArchived(this.home, id, id);
     if (!a) throw new Error(`no archived node ${id}`);
     if (a.parentId !== null) throw new Error(`refused: ${id} was not a root; use tl followup to continue its session`);
@@ -531,7 +602,7 @@ export class NodeManager extends EventEmitter {
     if (!existsSync(a.transcriptPath)) throw new Error(`the transcript of ${id} is gone (${a.transcriptPath})`);
     const twin = this.registry.list().find((n) => n.followupOf === id || n.sessionId === a.sessionId);
     if (twin) throw new Error(`refused: ${twin.id} already continues the session of ${id}`);
-    const cwd = usableCwd(a.cwd);
+    const cwd = wt.usableCwd(a.cwd);
     if (!cwd) throw new Error(`refused: ${a.cwd} no longer exists`);
     const kind: NodeKind = a.harness && a.harness !== 'claude' ? 'agent' : 'claude';
     // archivedOf stored the resolved role and profile; keeping a root's defaults would turn them into overrides.
@@ -547,6 +618,7 @@ export class NodeManager extends EventEmitter {
     markOpen(this.home, id);
     this.logEvent(id, 'restore');
     refreshGit(this, id).catch(logError);
+    this.refreshRetention().catch(logError);
     return this.emitNode(id)!;
   }
 
@@ -792,6 +864,7 @@ export class NodeManager extends EventEmitter {
     if (rec?.parentId === null) markClosed(this.home, id);
     this.discard(id);
     this.emit('removed', id);
+    if (rec?.parentId === null) this.refreshRetention().catch(logError);
   }
 
   /** Kill the node's process, if any, and forget it, freeing its maxWorking slot; returns the session it had. */
@@ -1367,6 +1440,7 @@ export class NodeManager extends EventEmitter {
       this.setStatus(id, sweep(stalled, now));
     }
     refreshMovedTips(this).catch(logError);
+    if (now - this.retentionAt >= RETENTION_MS) this.refreshRetention().catch(logError);
   }
 
   /** Store a new status, broadcast it, and notify on transitions into done / blocked / waiting. */

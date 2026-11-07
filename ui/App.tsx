@@ -11,6 +11,7 @@ import { Palette } from './Palette';
 import { moveSession, nthSession, SessionTabs, stepSession } from './SessionTabs';
 import { Sidebar, useRows } from './sidebar/Sidebar';
 import { StatusBar } from './StatusBar';
+import { RetentionNotice } from './RetentionNotice';
 import { TerminalPane } from './TerminalPane';
 import { TitleBar } from './TitleBar';
 import { TranscriptPane } from './transcript/TranscriptPane';
@@ -64,6 +65,7 @@ export function App() {
       <SessionTabs />
       <Sidebar onSettings={() => setSettingsNode({ id: node?.id })} />
       <main className="main">
+        <RetentionNotice />
         {node && !archived ? <TitleBar node={node} /> : null}
         <div className="work">
           <div className="stage">

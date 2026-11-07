@@ -357,6 +357,26 @@ export interface ReleaseUpdate {
 }
 /** Notes for a proven installed release; identity must be echoed when read. */
 export interface InstalledReleaseNotes { identity: string; releases: ReleaseUpdate[] }
+/** Days before deletion at which a closed session directory warns: in the week before, then 3 days, then the last day. */
+export const RETENTION_STAGES = [7, 3, 1] as const;
+export type RetentionStage = (typeof RETENTION_STAGES)[number];
+
+/** A closed session directory (<home>/sessions/<rootId>) the sweep will delete within 7 days (daemon.sessionsKeepDays). */
+export interface ExpiringSession {
+  rootId: string;
+  title?: string;
+  cwd?: string;
+  closedAt?: number;
+  /** When the sweep deletes it. */
+  deleteAt: number;
+  /** The smallest RETENTION_STAGES entry with deleteAt at most that many days away. */
+  stage: RetentionStage;
+  /** The human dismissed the banner for it at this stage; it warns again at the next one. */
+  dismissed: boolean;
+  /** Its archive holds a line tl restore accepts (a root with a session and no removed worktree). */
+  restorable: boolean;
+}
+
 export interface UpdateStatus {
   runtimeSha?: string; sha: string; checkedAt: number; eligible: boolean; reason?: string; fetchError?: string;
   repository?: string; origin?: string; currentVersion?: string; target?: ReleaseUpdate; releases: ReleaseUpdate[];
@@ -378,9 +398,10 @@ export interface Drain {
 // Daemon -> UI (WebSocket, JSON). One message per line.
 export type ServerMessage =
   | { t: 'update'; update: UpdateStatus }
+  | { t: 'retention'; sessions: ExpiringSession[] } // every expiring session, soonest first; sent when the list changes
   | { t: 'claudeAccounts'; accounts: ClaudeAccountView[] } // reply to the claudeAccounts request
   // nodes, like 'node' messages, omit prompt, pending.prompt and sessionHistory
-  | { t: 'snapshot'; nodes: NodeView[]; update?: UpdateStatus; usage?: Usage; usageSources?: UsageSource[]; dnd?: Dnd; drain?: Drain; sessionOrder?: string[] } // sessionOrder: root ids in tab order
+  | { t: 'snapshot'; nodes: NodeView[]; update?: UpdateStatus; usage?: Usage; usageSources?: UsageSource[]; dnd?: Dnd; drain?: Drain; sessionOrder?: string[]; retention?: ExpiringSession[] } // sessionOrder: root ids in tab order
   | { t: 'sessionOrder'; ids: string[] }    // the human rearranged the session tabs
   | { t: 'drain'; drain?: Drain }            // a restart started, progressed or ended waiting for agents
   | ({ t: 'dnd' } & Dnd)                     // do not disturb changed
@@ -432,6 +453,10 @@ export type ClientMessage =
   | { t: 'resume'; id: string }
   | { t: 'prune'; ids?: string[] }             // remove the exited children with no live descendant (pruneIds); ids: only those, roots and dormant nodes included
   | { t: 'rename'; id: string; title: string }
+  | { t: 'restore'; id: string }               // tl restore: bring a closed root back from its archive, exited and dormant
+  | { t: 'sessionKeep'; rootId: string }       // never delete this session directory (meta.json keep)
+  | { t: 'sessionDelete'; rootId: string }     // delete this session directory now; refused while its tree has a node
+  | { t: 'retentionDismiss'; rootIds: string[] } // hide the banner for these sessions until their next stage
   | { t: 'confirm'; confirmId: string; ok: boolean }
   | { t: 'diff'; id: string }                  // a worktree node's diff; replies diff, with error for a node without a worktree
   | { t: 'transcript'; id: string; sessionId?: string } // a live or archived Claude node's conversation (default: its current session); replies transcript

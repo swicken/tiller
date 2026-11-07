@@ -25,6 +25,14 @@
 .stab-new:hover { background: var(--hover); color: var(--fg); }
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
+/* Session retention warning: a bar across the top of the main pane. */
+.retention-notice { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 20px; border-bottom: 1px solid var(--line); border-left: 3px solid var(--needs); background: var(--surface-2); color: var(--fg); font-size: 13px; }
+.retention-notice.urgent { border-left-color: var(--bad); font-weight: 500; }
+.retention-notice .spacer { flex: 1; }
+.retention-notice button { padding: 2px 8px; border: 1px solid var(--line); border-radius: 3px; background: none; color: var(--fg); font: inherit; font-weight: 400; cursor: pointer; }
+.retention-notice.urgent button:first-of-type { border-color: var(--bad); }
+.retention-notice button:hover { color: var(--accent); border-color: var(--accent); }
+.retention-notice button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .titlebar { container: titlebar / inline-size; flex: none; padding: 14px 20px 0; border-bottom: 1px solid var(--line); background: var(--surface); display: grid; gap: 8px; }
 .tb1, .tb2 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .titlebar .tb1 { gap: 12px; }
