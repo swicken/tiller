@@ -29,6 +29,7 @@ export function App() {
   const palette = useStore((s) => s.dialog?.kind === 'palette');
   const diff = useStore((s) => s.diffOpen) && !!node?.worktree;
   const transcript = useStore((s) => s.transcriptOpen) && !!node && isAgentKind(node.kind);
+  const shell = useStore((s) => s.shellOpen) && !!node && isAgentKind(node.kind);
   const archived = useStore((s) => s.archived);
   useDocumentSync();
 
@@ -68,6 +69,7 @@ export function App() {
           <div className="stage">
             <TerminalPane />
             {archived ? <ArchivePane a={archived} />
+              : shell ? null // the node's shell (TerminalPane) works whatever its agent is doing
               // Refreshed whenever a turn ends.
               : transcript ? <TranscriptPane key={node!.id} id={node!.id} currentSessionId={node!.sessionId} refresh={finished(node!.status) ? node!.status.changedAt : 'running'} harness={node!.harness} />
               : diff ? <DiffPane node={node!} /> : node?.status.exited && <ExitedCard node={node} />}

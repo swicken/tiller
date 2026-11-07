@@ -22,6 +22,7 @@
 .count { flex: none; padding: 0 6px; border-radius: 8px; font-size: 11px; background: var(--surface-2); color: var(--dim); }
 .count.warn { background: color-mix(in srgb, var(--needs) 18%, transparent); color: var(--needs); font-weight: 600; }
 .count.bad { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); font-weight: 600; }
+.count.suggested { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 
 .sidebar-session-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* The closed drawer keeps its reopen control at the same lower boundary. */

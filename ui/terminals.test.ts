@@ -1,6 +1,7 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
-import { createTerm, disposeTerm, shiftEnterKey } from './terminals';
+import { WebLinksAddon } from '@xterm/addon-web-links';
+import { createTerm, disposeTerm, shiftEnterKey, suggestionKey } from './terminals';
 import { openExternalUrl } from './controls/externalLink';
 import { toast } from './store';
 
@@ -15,6 +16,9 @@ vi.mock('@xterm/xterm', () => ({ Terminal: vi.fn(class {
   input = vi.fn();
 }) }));
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: vi.fn(class {}) }));
+vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: vi.fn(class {
+  constructor(public handler: (event: MouseEvent, uri: string) => void) {}
+}) }));
 vi.mock('./url', () => ({ get IN_APP() { return state.native; } }));
 vi.mock('./controls/externalLink', () => ({ openExternalUrl: vi.fn() }));
 vi.mock('./theme', () => ({ currentTheme: () => state.theme, onThemeChange: (fn: (t: 'light' | 'dark') => void) => state.onTheme.push(fn) }));
@@ -55,45 +59,61 @@ function linkHandler() {
   return options.linkHandler!;
 }
 
-function activate(url: string) {
-  const handler = linkHandler();
-  expect(handler.allowNonHttpProtocols).not.toBe(true);
-  handler.activate({} as MouseEvent, url, { start: { x: 1, y: 1 }, end: { x: 6, y: 1 } });
-}
+// Both ways a terminal link gets clicked: an OSC 8 hyperlink, or a plain-text URL found by the web-links addon.
+// Terminal output is untrusted, so both must open the same way and refuse the same schemes.
+const sources = {
+  'OSC 8 link': (url: string) => {
+    const handler = linkHandler();
+    expect(handler.allowNonHttpProtocols).not.toBe(true);
+    handler.activate({} as MouseEvent, url, { start: { x: 1, y: 1 }, end: { x: 6, y: 1 } });
+  },
+  'plain-text URL': (url: string) => {
+    createTerm('node', {} as HTMLElement);
+    const addon = vi.mocked(WebLinksAddon).mock.results.at(-1)!.value as { handler: (e: MouseEvent, uri: string) => void };
+    const term = vi.mocked(Terminal).mock.results.at(-1)!.value as { loadAddon: ReturnType<typeof vi.fn> };
+    expect(term.loadAddon).toHaveBeenCalledWith(addon);
+    addon.handler({} as MouseEvent, url);
+  },
+};
 
-it('opens terminal Markdown hyperlink targets through the native browser command', () => {
-  vi.mocked(openExternalUrl).mockResolvedValue(undefined);
-  activate('https://github.com/example/tiller/issues/38072');
-  expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith('https://github.com/example/tiller/issues/38072');
-});
+describe.each(Object.entries(sources))('%s', (_name, activate) => {
+  afterEach(() => disposeTerm('node'));
 
-it('reports native browser failures instead of silently ignoring the click', async () => {
-  vi.mocked(openExternalUrl).mockRejectedValue(new Error('No browser'));
-  activate('https://example.com');
-  await Promise.resolve();
-  expect(toast).toHaveBeenCalledExactlyOnceWith('Could not open link: https://example.com', 'node', 'bad');
-});
+  it('opens through the native browser command', () => {
+    vi.mocked(openExternalUrl).mockResolvedValue(undefined);
+    activate('https://github.com/example/tiller/issues/38072');
+    expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith('https://github.com/example/tiller/issues/38072');
+  });
 
-it('opens browser UI links in an isolated new tab', () => {
-  state.native = false;
-  const open = vi.fn();
-  vi.stubGlobal('window', { open });
-  activate('http://example.com/path?q=1#note');
-  expect(open).toHaveBeenCalledExactlyOnceWith('http://example.com/path?q=1#note', '_blank', 'noopener,noreferrer');
-  expect(openExternalUrl).not.toHaveBeenCalled();
-});
+  it('reports native browser failures instead of silently ignoring the click', async () => {
+    vi.mocked(openExternalUrl).mockRejectedValue(new Error('No browser'));
+    activate('https://example.com');
+    await Promise.resolve();
+    expect(toast).toHaveBeenCalledExactlyOnceWith('Could not open link: https://example.com', 'node', 'bad');
+  });
 
-it.each(['javascript:alert(1)', 'file:///tmp/file', 'mailto:a@example.com', '//example.com'])(
-  'does not open unsafe terminal hyperlink targets: %s', (url) => {
+  it('opens browser UI links in an isolated new tab', () => {
+    state.native = false;
     const open = vi.fn();
     vi.stubGlobal('window', { open });
-    activate(url);
-    state.native = false;
-    activate(url);
+    activate('http://example.com/path?q=1#note');
+    expect(open).toHaveBeenCalledExactlyOnceWith('http://example.com/path?q=1#note', '_blank', 'noopener,noreferrer');
     expect(openExternalUrl).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
-  },
-);
+  });
+
+  it.each(['javascript:alert(1)', 'file:///tmp/file', 'mailto:a@example.com', '//example.com'])(
+    'does not open unsafe targets: %s', (url) => {
+      const open = vi.fn();
+      vi.stubGlobal('window', { open });
+      activate(url);
+      disposeTerm('node');
+      state.native = false;
+      activate(url);
+      expect(openExternalUrl).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+    },
+  );
+});
 
 function key(init: KeyboardEventInit & { type?: string; keyCode?: number }) {
   return { type: 'keydown', key: 'Enter', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, isComposing: false, keyCode: 13, preventDefault: vi.fn(), ...init } as unknown as KeyboardEvent;
@@ -131,4 +151,50 @@ it('routes Shift+Enter by the node kind at key time', () => {
     expect(term.input.mock.calls).toEqual(id === 'shell' ? [] : [['\n']]);
     disposeTerm(id);
   }
+});
+
+it('inserts on Cmd+Enter and dismisses on Cmd+Backspace while a suggestion waits, keeping both keys from the shell', () => {
+  const act = vi.fn();
+  const down = key({ metaKey: true });
+  expect(suggestionKey(down, true, act)).toBe(false); // false: xterm must not also send Enter, which would run the line
+  expect(down.preventDefault).toHaveBeenCalledOnce();
+  expect(suggestionKey(key({ type: 'keyup', metaKey: true }), true, act)).toBe(false);
+  expect(suggestionKey(key({ key: 'Backspace', metaKey: true }), true, act)).toBe(false);
+  expect(act.mock.calls).toEqual([['insert'], ['dismiss']]);
+});
+
+it('keeps a held Cmd+Enter from the shell after its insert clears the suggestion, so auto-repeat cannot send CR and run it', () => {
+  const act = vi.fn();
+  expect(suggestionKey(key({ metaKey: true }), true, act)).toBe(false);
+  // The daemon has cleared the suggestion: pending is false from here on, yet the key is still held down.
+  const repeat = key({ metaKey: true, repeat: true });
+  expect(suggestionKey(repeat, false, act)).toBe(false);
+  expect(repeat.preventDefault).toHaveBeenCalledOnce();
+  expect(suggestionKey(key({ type: 'keypress', metaKey: true }), false, act)).toBe(false);
+  expect(suggestionKey(key({ type: 'keyup', metaKey: true }), false, act)).toBe(false);
+  expect(act.mock.calls).toEqual([['insert']]); // acted once, never again for the repeats
+  // Released: the next Enter is the shell's again.
+  expect(suggestionKey(key({}), false, act)).toBe(true);
+  expect(suggestionKey(key({ metaKey: true }), false, act)).toBe(true);
+});
+
+it('gives a later plain Backspace and its repeats to the shell when Cmd+Backspace sent no keyup, as macOS browsers do', () => {
+  const act = vi.fn();
+  expect(suggestionKey(key({ key: 'Backspace', metaKey: true }), true, act)).toBe(false);
+  // Released while Cmd was down: no keyup arrives. The next Backspace is a fresh press, and holding it must keep deleting.
+  expect(suggestionKey(key({ key: 'Backspace' }), false, act)).toBe(true);
+  expect(suggestionKey(key({ key: 'Backspace', repeat: true }), false, act)).toBe(true);
+  expect(act.mock.calls).toEqual([['dismiss']]);
+});
+
+it.each([
+  ['Cmd+Enter with no suggestion', key({ metaKey: true }), false],
+  ['plain Enter', key({}), true],
+  ['Cmd+Shift+Enter', key({ metaKey: true, shiftKey: true }), true],
+  ['Ctrl+Backspace', key({ key: 'Backspace', ctrlKey: true }), true],
+  ['Cmd+K', key({ key: 'k', metaKey: true }), true],
+])('leaves %s to the shell', (_name, e, pending) => {
+  const act = vi.fn();
+  expect(suggestionKey(e, pending, act)).toBe(true);
+  expect(act).not.toHaveBeenCalled();
 });

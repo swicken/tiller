@@ -41,6 +41,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
           <StateDot kind={kind} />
           {renaming ? <RenameInput id={node.id} title={node.title} /> : <span className={`title${s.exited ? ' dim' : ''}`} title={node.title}>{node.title}</span>}
           {node.unread && <i className="unread" title="unread" />}
+          {node.suggestion && <span className="count suggested" title={`Suggested command: ${node.suggestion.command}`}>cmd</span>}
           {node.muted && <span className="muted" title="notifications muted"><Icon name="bellOff" size={11} /></span>}
           <span className="age" title="Time since last state change">{fmtAge(now - s.changedAt)}</span>
           <ActionButtons node={node} />
@@ -62,6 +63,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
           {hasChanges(node) && <span className="count" title={`unmerged work on ${node.status.git!.branch}: merge or close it`}>changes · {node.status.git!.ahead} ahead · {node.status.git!.dirty} dirty</span>}
           {collapsed && <span className="count" title={`${descendants.length} hidden`}>+{descendants.length}</span>}
           {collapsed && descendants.some((d) => d.unread) && <span className="count" title="Hidden nodes have unread activity">unread</span>}
+          {collapsed && descendants.some((d) => d.suggestion) && <span className="count suggested" title="Hidden nodes have a suggested command">suggested command</span>}
           {collapsed && descendants.some((d) => d.status.stalled && !d.status.exited) && <span className="count warn">stalled below</span>}
           {collapsed && needs > 0 && <span className="count warn">{needs} needs you</span>}
           {s.stalled && !s.exited && <span className="count warn" title="working with no hook event">no activity {fmtAge(now - s.changedAt)}</span>}
