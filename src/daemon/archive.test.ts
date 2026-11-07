@@ -245,7 +245,7 @@ describe('archive, history, follow-up and fork', () => {
     const grandkid = await started('grandkid', kid);
     for (const id of [root, kid, grandkid]) process.kill(m.session(id)!.pid, 'SIGKILL');
     await expect.poll(() => [root, kid, grandkid].every((id) => m.view(id)!.status.exited)).toBe(true);
-    expect((await m.prune()).removed).toHaveLength(3);
+    expect((await m.prune([root, kid, grandkid])).removed).toHaveLength(3);
     expect((await history(home, { rootId: root })).map((a) => [a.id, a.rootId]).sort()).toEqual([[grandkid, root], [kid, root], [root, root]].sort());
 
     const root2 = await started('root2', null);
@@ -253,6 +253,31 @@ describe('archive, history, follow-up and fork', () => {
     await m.close(root2, true);
     await m.close(kid2); // its root is gone; it still belongs to root2's tree
     expect((await history(home, { rootId: root2 })).map((a) => a.id).sort()).toEqual([kid2, root2].sort());
+  });
+
+  it('restores a closed root under its own id, exited and dormant, with its session; refuses a live id, a child and a worktree root', async () => {
+    setup();
+    const root = await started('root', null, 'lead');
+    const kid = await started('kid', root);
+    const before = m.registry.get(root)!;
+    await m.close(kid);
+    await m.close(root, true);
+    const meta = () => JSON.parse(readFileSync(join(home, 'sessions', root, 'meta.json'), 'utf8'));
+    expect(meta().closedAt).toEqual(expect.any(Number));
+    const v = await m.restore(root);
+    expect(v).toMatchObject({ id: root, parentId: null, title: 'root', cwd: home, status: { exited: true } });
+    expect(m.registry.get(root)).toMatchObject({ kind: 'claude', sessionId: before.sessionId, transcriptPath: before.transcriptPath, prompt: 'lead', createdAt: before.createdAt, dormant: true });
+    expect(m.registry.get(root)!.role).toBeUndefined(); // a root's default stays derived
+    expect(meta().closedAt).toBeUndefined();
+    await expect(m.restore(root)).rejects.toThrow(`refused: ${root} is already a node`);
+    await expect(m.restore(kid)).rejects.toThrow(`refused: ${kid} was not a root; use tl followup`);
+    await expect(m.restore('n-none')).rejects.toThrow('no archived node n-none');
+    mkdirSync(join(home, 'sessions', 'n-wt'), { recursive: true }); // a worktree root: its tree was removed at close
+    writeFileSync(join(home, 'sessions', 'n-wt', 'archive.jsonl'), `${JSON.stringify({ id: 'n-wt', parentId: null, title: 'wt', cwd: home, sessionId: 's', transcriptPath: before.transcriptPath, branch: 'tl/wt', createdAt: 0, closedAt: 1 })}\n`);
+    await expect(m.restore('n-wt')).rejects.toThrow('refused: n-wt ran in a worktree (tl/wt)');
+    expect(await m.resume(root)).toEqual({ ok: true });
+    expect(await argv(root)).toContain(`--resume ${before.sessionId}`);
+    expect(m.registry.get(root)!.dormant).toBeUndefined();
   });
 
   it('refuses a second follow-up of the same session while the first is live', async () => {

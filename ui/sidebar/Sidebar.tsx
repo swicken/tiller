@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { send } from '../conn';
 import { HistoryPanel } from '../transcript/History';
 import { Icon } from '../controls/icons';
 import { NodeRow } from './NodeRow';
@@ -7,7 +6,8 @@ import { SessionSwitcher } from './SessionSwitcher';
 import { SidebarInspector } from './SidebarInspector';
 import { SidebarResize } from './SidebarResize';
 import { flattenSession, type Row } from './tree';
-import { selectNode, toggleCollapsed, toggleHistory, useStore } from '../store';
+import { openDialog, selectNode, toggleCollapsed, toggleHistory, useStore } from '../store';
+import { pruneIds } from '../../src/shared/prune';
 import { readPref, writePref } from '../prefs';
 
 const DETAILS_KEY = 'tl.sidebarDetails';
@@ -44,7 +44,8 @@ function onKey(e: React.KeyboardEvent, rows: Row[], selected: string | null) {
 export function Sidebar({ onSettings }: { onSettings: () => void }) {
   const rows = useRows();
   const selected = useStore((s) => s.selected);
-  const exited = useStore((s) => Object.values(s.nodes).filter((n) => n.status.exited).length);
+  const nodes = useStore((s) => s.nodes);
+  const prunable = useMemo(() => pruneIds(Object.values(nodes)), [nodes]);
   const node = useStore((s) => s.selected ? s.nodes[s.selected] ?? null : null);
   const [detailsOpen, setDetailsOpen] = useState(readSidebarDetails);
   const detailsButton = useRef<HTMLButtonElement>(null);
@@ -88,8 +89,8 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
       )}
       <footer className="sidefoot">
         <button className="btn" onClick={onSettings}>Settings</button>
-        <button className="btn" disabled={!exited} onClick={() => send({ t: 'prune' })} title="Remove exited nodes that have no live descendant">
-          <Icon name="trash" size={14} />Clear exited{exited ? ` (${exited})` : ''}
+        <button className="btn" disabled={!prunable.length} onClick={() => openDialog({ kind: 'prune', ids: prunable })} title="Remove exited child nodes that have no live descendant; sessions are kept">
+          <Icon name="trash" size={14} />Clear finished{prunable.length ? ` (${prunable.length})` : ''}
         </button>
         <button className={`btn hist${history ? ' on' : ''}`} aria-pressed={history} onClick={toggleHistory} title="History: closed nodes to read, follow up or fork" aria-label="History">
           <Icon name="history" size={14} />History

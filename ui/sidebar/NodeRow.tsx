@@ -7,7 +7,7 @@ import { Icon } from '../controls/icons';
 import { RenameInput } from '../controls/RenameInput';
 import { selectNode, toggleCollapsed, useStore } from '../store';
 import { isAgentKind, needsYou } from '../../src/shared/protocol';
-import { accountMismatch, kindTag, KIND_LABEL, statusKind, type Row } from './tree';
+import { accountMismatch, DORMANT_TITLE, kindTag, statusKind, statusLabel, type Row } from './tree';
 
 export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
   const { node, depth, hasChildren, collapsed, descendants } = row;
@@ -22,7 +22,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
   const needs = descendants.filter((d) => needsYou(d.status)).length;
   const blocked = s.state === 'blocked' && !s.exited;
   const kind = statusKind(node);
-  const state = kind === 'needs' ? s.state : KIND_LABEL[kind];
+  const state = kind === 'needs' ? s.state : statusLabel(node);
   const outcome = node.outcome && outcomeLabel(node.outcome);
 
   return (
@@ -47,7 +47,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
           <ActionButtons node={node} />
         </div>
         <div className="row-status">
-          <span className={`row-state ${kind}`}>{node.kind === 'terminal' ? `terminal · ${state}` : state}</span>
+          <span className={`row-state ${kind}`} title={s.exited && node.dormant ? DORMANT_TITLE : undefined}>{node.kind === 'terminal' ? `terminal · ${state}` : state}</span>
           {s.activity && <span className={`row-activity${blocked ? ' warn' : ''}`} title={s.activity}>{s.activity}</span>}
         </div>
         {(node.gate || node.outcome || node.repoAccount !== undefined || node.worktree?.missing || s.git?.conflicts || hasChanges(node) || collapsed || (s.stalled && !s.exited)) && <div className="row-signals">

@@ -44,6 +44,14 @@ export class NodeRegistry {
     return node;
   }
 
+  /** Add a whole record under its own id (tl restore); throws when that id exists. */
+  insert(node: NodeRecord): NodeRecord {
+    if (this.nodes.has(node.id)) throw new Error(`node ${node.id} already exists`);
+    this.nodes.set(node.id, node);
+    this.save();
+    return node;
+  }
+
   get(id: string): NodeRecord | undefined { return this.nodes.get(id); }
   list(): NodeRecord[] { return [...this.nodes.values()]; }
 

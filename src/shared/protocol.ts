@@ -182,6 +182,8 @@ export interface NodeRecord {
   lastActiveAt?: number;
   /** Set while a turn is in progress (working, waiting or blocked), so the next daemon can tell the node its turn was cut off. */
   midTurn?: boolean;
+  /** Set when the node exited without finishing: resume on start did not bring it back, or tl restore did. Prune keeps it unless listed. Cleared at its next launch. */
+  dormant?: boolean;
   /** Harness session id: minted at launch, updated from SessionStart. Persisted so a restarted daemon can offer Resume. */
   sessionId?: string;
   /** Harness transcript file, from SessionStart (or found by resume). Persisted so Resume can find it. */
@@ -428,7 +430,7 @@ export type ClientMessage =
   | { t: 'restart'; id: string; prompt?: string } // relaunch with a fresh session: clears context, keeps the node and its children; prompt is its first prompt
   | { t: 'changeHarness'; id: string; harness: Harness; prompt?: string } // human only: fresh context, target defaults; preserve node and history
   | { t: 'resume'; id: string }
-  | { t: 'prune' }                             // remove every exited node that has no live descendant
+  | { t: 'prune'; ids?: string[] }             // remove the exited children with no live descendant (pruneIds); ids: only those, roots and dormant nodes included
   | { t: 'rename'; id: string; title: string }
   | { t: 'confirm'; confirmId: string; ok: boolean }
   | { t: 'diff'; id: string }                  // a worktree node's diff; replies diff, with error for a node without a worktree

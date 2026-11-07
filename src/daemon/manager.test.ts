@@ -725,6 +725,27 @@ describe('NodeManager live set and resume on start', () => {
     expect(m.view('idle')!.status.exited).toBe(true);
     await expect.poll(() => saved().sort()).toEqual(['kid', 'root']); // only what came back up
     expect(await m.resumeLive()).toBe('resume on start: nothing to resume');
+    // What resume on start left down is dormant, so prune keeps it; a node that was already exited is not.
+    expect(['root', 'kid', 'idle', 'nowt', 'exited'].map((id) => m.registry.get(id)!.dormant)).toEqual([undefined, undefined, true, true, undefined]);
+    expect((await m.prune()).removed).toEqual(['exited']);
+    expect(await m.resume('idle')).toEqual({ ok: true });
+    expect(m.registry.get('idle')!.dormant).toBeUndefined(); // cleared at launch
+  });
+
+  it('prune keeps an exited root unless listed, and a dormant root skipped as idle', async () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-'));
+    const opts = fakeClaude(home);
+    const transcript = join(home, 't.jsonl');
+    writeFileSync(transcript, '');
+    const now = Date.now(), day = 86_400_000;
+    const rec = (id: string, parentId: string | null, lastActiveAt = now) => ({ id, parentId, kind: 'claude', title: id, cwd: home, createdAt: now - 30 * day, lastActiveAt, sessionId: `s-${id}`, transcriptPath: transcript });
+    writeFileSync(join(home, 'state.json'), JSON.stringify({ version: 1, nodes: [rec('old', null, now - 4 * day), rec('root', null), rec('kid', 'root')], live: ['old'] }));
+    m = new NodeManager(opts);
+    await m.resumeLive();
+    expect(m.registry.get('old')).toMatchObject({ dormant: true });
+    expect(await m.prune()).toEqual({ removed: ['kid'], kept: [] }); // the exited roots stay
+    expect(await m.prune(['root'])).toEqual({ removed: ['root'], kept: [] });
+    expect(m.view('old')).toBeDefined();
   });
 });
 

@@ -2,6 +2,7 @@ import { Select } from '../controls/Select';
 import { useEffect, useRef, useState } from 'react';
 import { PROFILES, PROFILE_LABELS, harnessFor, profileFor, type InstalledReleaseNotes, type Profile, type Effort, isAgentKind, type ClientMessage, type Harness, type NodeKind, type Role } from '../../src/shared/protocol';
 import { HARNESSES, HARNESS_EFFORTS } from '../../src/shared/harness-policy';
+import { pruneIds } from '../../src/shared/prune';
 import { accountOptionLabel } from '../settings/settings-model';
 import { send } from '../conn';
 import type { TauriWindow } from '../hooks';
@@ -166,6 +167,28 @@ function KillDialog({ id }: { id: string }) {
   );
 }
 
+/** Lists the nodes prune will remove and sends exactly those ids, less any that stopped qualifying while it was open. */
+function PruneDialog({ ids }: { ids: string[] }) {
+  const nodes = useStore((s) => s.nodes);
+  const still = new Set(pruneIds(Object.values(nodes)));
+  const listed = ids.filter((id) => still.has(id)).map((id) => nodes[id]!);
+  return (
+    <Modal title={`Remove ${listed.length} finished node${listed.length === 1 ? '' : 's'}?`} onClose={close} restoreFocus>
+      <p>These exited child nodes have no live descendant. Sessions and dormant nodes are kept.</p>
+      <ul className="prune-list">
+        {listed.map((n) => {
+          const parent = n.parentId ? nodes[n.parentId] : undefined;
+          return <li key={n.id}><strong>{n.title}</strong> <code>{n.id}</code>{parent && ` · under ${parent.title}`}</li>;
+        })}
+      </ul>
+      <div className="btns">
+        <button className="btn" autoFocus onClick={close}>Cancel</button>
+        <button className="btn danger solid" disabled={!listed.length} onClick={() => { send({ t: 'prune', ids: listed.map((n) => n.id) }); close(); }}>Remove</button>
+      </div>
+    </Modal>
+  );
+}
+
 /** What the restart dialog sends; a first prompt is meaningful for an agent node (Claude or Pi). */
 export const restartMsg = (id: string, kind: NodeKind, prompt: string): ClientMessage =>
   ({ t: 'restart', id, ...(isAgentKind(kind) && prompt.trim() ? { prompt } : {}) });
@@ -320,6 +343,7 @@ export function Dialogs() {
   if (d?.kind === 'spawn') return <SpawnDialog d={d} />;
   if (d?.kind === 'kill') return <KillDialog id={d.id} />;
   if (d?.kind === 'restart') return <RestartDialog id={d.id} />;
+  if (d?.kind === 'prune') return <PruneDialog ids={d.ids} />;
   if (d?.kind === 'changeHarness') return <ChangeHarnessDialog key={d.id} id={d.id} />;
   if (d?.kind === 'followup') return <FollowupDialog id={d.id} title={d.title} />;
   if (d?.kind === 'fork') return <ForkDialog d={d} />;

@@ -5,7 +5,7 @@ import { Icon } from './controls/icons';
 import { RenameInput } from './controls/RenameInput';
 import { ancestry } from './sidebar/sessions';
 import { selectNode, showPane, togglePanel, useStore } from './store';
-import { KIND_LABEL, kindTag, statusKind } from './sidebar/tree';
+import { DORMANT_TITLE, kindTag, statusKind, statusLabel } from './sidebar/tree';
 
 function Breadcrumb({ node }: { node: NodeView }) {
   const nodes = useStore((s) => s.nodes);
@@ -43,7 +43,7 @@ export function TitleBar({ node }: { node: NodeView }) {
     <header className="titlebar" key={node.id}>
       <div className="tb1">
         <Breadcrumb node={node} />
-        <span className={`badge ${kind}`}><StateDot kind={kind} />{KIND_LABEL[kind]}{s.errored && s.interrupted ? ' (interrupted)' : ''}</span>
+        <span className={`badge ${kind}`} title={s.exited && node.dormant ? DORMANT_TITLE : undefined}><StateDot kind={kind} />{statusLabel(node)}{s.errored && s.interrupted ? ' (interrupted)' : ''}</span>
         <span className="spacer" />
         <ActionButtons node={node} labels />
       </div>
