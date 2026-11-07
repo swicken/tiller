@@ -4,3 +4,4 @@
 .account-login { display: grid; gap: 4px; font-size: 12px; color: var(--dim); }
 .account-login p, .account-inherited { margin: 0; }
 .account-inherited { font-size: 12px; color: var(--dim); }
+.prune-list { max-height: 40vh; overflow-y: auto; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
