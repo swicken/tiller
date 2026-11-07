@@ -176,6 +176,12 @@
 .statusbar .restart-now { margin-left: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 3px; background: none; color: var(--fg); font: inherit; cursor: pointer; }
 .statusbar .restart-now:hover { color: var(--accent); border-color: var(--accent); }
 .statusbar .restart-now:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.statusbar .retention-notice { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--needs); }
+.statusbar .retention-notice.urgent { color: var(--bad); font-weight: 500; }
+.statusbar .retention-notice button { padding: 0 6px; border: 1px solid var(--line); border-radius: 3px; background: none; color: var(--fg); font: inherit; font-weight: 400; cursor: pointer; }
+.statusbar .retention-notice.urgent button:first-of-type { border-color: var(--bad); }
+.statusbar .retention-notice button:hover { color: var(--accent); border-color: var(--accent); }
+.statusbar .retention-notice button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .statusbar .whats-new, .statusbar .update-available { padding: 2px 4px; border: 0; border-radius: 3px; background: none; color: var(--fg); font: inherit; white-space: nowrap; cursor: pointer; }
 .statusbar .whats-new:hover, .statusbar .update-available:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .statusbar .whats-new:focus-visible, .statusbar .update-available:focus-visible, .release-notes:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

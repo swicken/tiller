@@ -12,6 +12,7 @@ import { ReleaseNotes } from '../release-notes/ReleaseNotes';
 import { expectSpawn, openDialog, toast, useStore, type Dialog } from '../store';
 import { IN_APP } from '../url';
 import { UpdateDialog } from './UpdateDialog';
+import { RetentionDialog } from './RetentionDialog';
 import { accountsError } from '../settings/settings-model';
 import './dialogs.css';
 
@@ -340,6 +341,7 @@ export function Dialogs() {
   const d = useStore((s) => s.dialog);
   if (d?.kind === 'whatsNew') return <WhatsNewDialog notes={d.notes} />;
   if (d?.kind === 'update') return <UpdateDialog />;
+  if (d?.kind === 'retention') return <RetentionDialog />;
   if (d?.kind === 'spawn') return <SpawnDialog d={d} />;
   if (d?.kind === 'kill') return <KillDialog id={d.id} />;
   if (d?.kind === 'restart') return <RestartDialog id={d.id} />;
