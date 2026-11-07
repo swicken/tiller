@@ -189,13 +189,17 @@ describe('mcp api', () => {
       three.decide(undefined); // the confirm timed out
       expect((await notice(3)).text).toContain('arrived in time; nothing was closed');
       expect(manager.view(k2)).toBeDefined();
-      // Closed by the human while the request waited: reported as such, not as closed by this request.
+      // A second request for a node already waiting for the human is refused at once, naming the pending one.
       const four = await pending(k2);
+      const dup = await api('close', { nodeIds: [k2] }, p, tok);
+      expect(dup.body.error).toBe(`close request ${four.requestId} for ${k2} is already waiting for the human`);
+      // Closed by the human while the request waited: the request is cancelled, its dialog dismissed, the caller told.
       expect((await api('close', { nodeIds: [k2] })).body.data).toMatchObject({ ok: true });
+      expect(signals.at(-1)?.aborted).toBe(true);
+      expect(await notice(4)).toMatchObject({ from: `tiller (close request ${four.requestId} cancelled)`, text: expect.stringContaining('closed by other means') });
       four.decide(true);
-      const text = (await notice(4)).text;
-      expect(text).toContain(`Already closed by someone else: ${k2}.`);
-      expect(text).not.toContain('Closed:');
+      await new Promise((r) => setTimeout(r, 50));
+      expect(inbox(manager, p)).toHaveLength(4); // no approval notice follows
       // The caller closed while its request waits: the dialog is dismissed and nothing closes.
       const k3 = await kid();
       const five = await pending(k3);
@@ -234,6 +238,35 @@ describe('mcp api', () => {
       expect(manager.view(kid)).toBeDefined();
     } finally { answer = true; }
     await manager.close(kid, true, 'discard');
+    await manager.close(p, true);
+  });
+
+  it('a discard approved later succeeds when the worktree folder was removed meanwhile, and is not counted against the approval', async () => {
+    const repo = join(home, 'gone-repo'), path = join(repo, '.claude', 'worktrees', 'g');
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { encoding: 'utf8' }).trim();
+    mkdirSync(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'a.txt'), 'a');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'root');
+    git(repo, 'worktree', 'add', '-q', '-b', 'tl/g', path);
+    writeFileSync(join(path, 'one.txt'), '1');
+    const p = (await spawnT('gp')).body.data.nodeId as string;
+    const tok = manager.tokenFor(p);
+    manager.registry.update(p, { kind: 'claude' });
+    inbox(manager, p);
+    const kid = (await spawnT('gk', p, tok, { cwd: path })).body.data.nodeId as string;
+    manager.registry.update(kid, { worktree: { repo, path, branch: 'tl/g', base: 'main', baseSha: git(repo, 'rev-parse', 'HEAD') } });
+    let decide!: (ok: boolean) => void;
+    answer = new Promise((r) => { decide = r; });
+    try {
+      expect((await api('close', { nodeIds: [kid], worktree: 'discard' }, p, tok)).body.data).toMatchObject({ pending: true });
+      rmSync(path, { recursive: true }); // the folder is removed before the human answers
+      decide(true);
+      await expect.poll(() => inbox(manager, p).map((x) => x.text)).toEqual([expect.stringContaining(`Closed: ${kid}.`)]);
+      expect(manager.view(kid)).toBeUndefined();
+      expect(git(repo, 'branch', '--list', 'tl/g')).toBe('');
+    } finally { answer = true; }
     await manager.close(p, true);
   });
 
@@ -585,7 +618,7 @@ describe('mcp api', () => {
     const id = (await spawnT('mcp-caller')).body.data.nodeId as string;
     const human = await connect('human', admin);
     const humanTools = (await human.listTools()).tools;
-    expect(humanTools.map((t) => t.name).sort()).toEqual(['change_harness', 'close', 'diff', 'dnd', 'drain', 'followup', 'history', 'list_nodes', 'merge', 'message_status', 'mute', 'notify_when', 'prune', 'read', 'rename', 'report_outcome', 'restart', 'restore', 'resume', 'select', 'send', 'sessions_clean', 'sessions_keep', 'shutdown', 'spawn', 'transcript', 'update', 'withdraw', 'worktrees', 'write']);
+    expect(humanTools.map((t) => t.name).sort()).toEqual(['change_harness', 'close', 'diff', 'dnd', 'drain', 'followup', 'history', 'list_nodes', 'merge', 'message_status', 'mute', 'notify_when', 'prune', 'read', 'rename', 'report_outcome', 'restart', 'restore', 'resume', 'select', 'send', 'sessions_clean', 'sessions_keep', 'shutdown', 'spawn', 'suggest_command', 'transcript', 'update', 'withdraw', 'worktrees', 'write']);
     expect(Object.fromEntries(humanTools.map((t) => [t.name, t.title]))).toMatchObject({
       send: 'Send message', spawn: 'Start node', notify_when: 'Watch node completion', read: 'Read node output',
       history: 'List past agents', followup: 'Continue past agent', merge: 'Merge node changes',
@@ -593,7 +626,7 @@ describe('mcp api', () => {
     await human.close();
     const client = await connect(id, manager.tokenFor(id));
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['close', 'diff', 'history', 'list_nodes', 'merge', 'message_status', 'notify_when', 'read', 'rename', 'report_outcome', 'send', 'spawn', 'withdraw', 'write']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['close', 'diff', 'history', 'list_nodes', 'merge', 'message_status', 'notify_when', 'read', 'rename', 'report_outcome', 'send', 'spawn', 'suggest_command', 'withdraw', 'write']);
     expect(tools.find((t) => t.name === 'spawn')!.inputSchema.required).toEqual(['title']); // kind and cwd default to the caller's
     expect(Object.fromEntries(tools.map((t) => [t.name, t.title]))).toMatchObject({
       notify_when: 'Watch node completion', read: 'Read node output', history: 'List past agents',
@@ -607,6 +640,41 @@ describe('mcp api', () => {
     expect(list.content[0].text).toMatch(/^usage/);
     expect(list.content[0].text).toContain(`- ${id} "mcp-caller" [terminal] none (reported succeeded) `);
     await client.close();
+  });
+
+  it('suggest_command stores one validated line on the caller\'s own node, replacing the last', async () => {
+    const id = (await spawnT('suggester')).body.data.nodeId as string;
+    const tok = manager.tokenFor(id);
+    expect((await api('suggest_command', { command: 'echo hi' }, id, tok)).body.error).toMatch(/terminal node/); // no Terminal tab to show it in
+    manager.registry.update(id, { kind: 'claude' });
+    const r = await api('suggest_command', { command: 'git pull --rebase', why: 'pick up the merged base' }, id, tok);
+    expect(r.body.text).toBe('Suggested in the human\'s Terminal tab. They may run it, edit it or ignore it, and you will not see the output.');
+    expect(manager.view(id)!.suggestion).toEqual({ command: 'git pull --rebase', why: 'pick up the merged base', at: expect.any(Number) });
+    await api('suggest_command', { command: 'npm test' }, id, tok);
+    expect(manager.view(id)!.suggestion).toEqual({ command: 'npm test', at: expect.any(Number) });
+    // Insert types the text at the human's prompt: a newline or carriage return would run it unseen, an escape sequence
+    // could rewrite what is shown, and a bidi override could display another command than the one typed.
+    for (const command of ['ls\nwhoami', 'ls\r', 'a\tb', 'ls\x1b[2K', 'ls\x9b2K', 'ls‮whoami', '', 'x'.repeat(2001)]) {
+      const bad = await api('suggest_command', { command }, id, tok);
+      expect(bad.status, JSON.stringify(command)).toBe(400);
+    }
+    expect((await api('suggest_command', { command: 'ls', why: 'two\nlines' }, id, tok)).status).toBe(400);
+    // An empty why is no reason, not an error the agent has to puzzle over.
+    expect((await api('suggest_command', { command: 'npm test', why: '' }, id, tok)).status).toBe(200);
+    expect(manager.view(id)!.suggestion).toEqual({ command: 'npm test', at: expect.any(Number) });
+    expect(manager.view(id)!.suggestion?.command).toBe('npm test'); // refusals leave the last good one
+    expect((await api('suggest_command', { command: 'ls' })).body.error).toMatch(/only for agent nodes/); // the human has no agent to suggest for
+  });
+
+  it('gives agents no way into a node\'s shell: read and write refuse a shell stream id', async () => {
+    const id = (await spawnT('shell-owner')).body.data.nodeId as string;
+    manager.registry.update(id, { kind: 'claude' });
+    const tok = manager.tokenFor(id);
+    for (const r of [await api('write', { nodeId: `${id}:shell`, text: 'whoami\r' }, id, tok), await api('read', { nodeId: `${id}:shell`, what: 'terminal' }, id, tok)]) {
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/no such node/);
+    }
+    expect(confirms.some((t) => t.includes(':shell'))).toBe(false); // refused before the human is even asked
   });
 
   it('cuts diff text for agents over MCP but not over /api', async () => {

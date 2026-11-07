@@ -1,5 +1,6 @@
 import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { openExternalUrl } from './controls/externalLink';
 import { getState, toast } from './store';
 import { isAgentKind } from '../src/shared/protocol';
@@ -28,7 +29,8 @@ export function getTerm(id: string): Term | undefined {
   return terms.get(id);
 }
 
-export function createTerm(id: string, el: HTMLElement): Term {
+/** `keys` sees each key event first, as xterm's custom key handler does: return false to keep the key from the terminal. */
+export function createTerm(id: string, el: HTMLElement, keys?: (e: KeyboardEvent) => boolean): Term {
   // xterm 6 renders with the DOM renderer unless an addon is loaded, which keeps WKWebView happy.
   const term = new Terminal({
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
@@ -36,24 +38,27 @@ export function createTerm(id: string, el: HTMLElement): Term {
     cursorBlink: true,
     scrollback: 5000,
     ...themeOptions(currentTheme()),
-    linkHandler: {
-      activate: (_event, url) => {
-        if (!/^https?:\/\//i.test(url)) return;
-        if (IN_APP) {
-          void openExternalUrl(url).catch(() => toast(`Could not open link: ${url}`, id, 'bad'));
-        } else {
-          window.open(url, '_blank', 'noopener,noreferrer');
-        }
-      },
-    },
+    linkHandler: { activate: (_event, url) => openLink(url, id) },
   });
-  term.attachCustomKeyEventHandler((e) => shiftEnterKey(e, isAgentNode(id), (data) => term.input(data)));
+  term.attachCustomKeyEventHandler((e) => (keys?.(e) ?? true) && shiftEnterKey(e, isAgentNode(id), (data) => term.input(data)));
   const fit = new FitAddon();
   term.loadAddon(fit);
+  // Plain-text URLs in terminal output; OSC 8 hyperlinks go through linkHandler above.
+  term.loadAddon(new WebLinksAddon((_event, url) => openLink(url, id)));
   term.open(el);
   const t = { term, fit };
   terms.set(id, t);
   return t;
+}
+
+// Terminal output is untrusted, so only http(s) links open, whether OSC 8 or plain text.
+function openLink(url: string, id: string) {
+  if (!/^https?:\/\//i.test(url)) return;
+  if (IN_APP) {
+    void openExternalUrl(url).catch(() => toast(`Could not open link: ${url}`, id, 'bad'));
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
 }
 
 const isAgentNode = (id: string) => { const n = getState().nodes[id]; return !!n && isAgentKind(n.kind); };
@@ -68,6 +73,29 @@ export function shiftEnterKey(e: KeyboardEvent, agent: boolean, input: (data: st
   if (e.type === 'keydown') { e.preventDefault(); input('\n'); }
   return false; // also swallow the keypress/keyup so xterm sends no CR
 }
+
+/**
+ * Cmd+Enter inserts and Cmd+Backspace dismisses a waiting suggested command from the shell, so the keyboard alone is
+ * enough. While a suggestion waits, those keys never reach the shell, so Cmd+Enter cannot also send Enter and run the line.
+ */
+export function suggestionKey(e: KeyboardEvent, pending: boolean, act: (action: 'insert' | 'dismiss') => void): boolean {
+  // The suggestion clears as soon as the first keydown acts, so a held key's auto-repeats must not reach the shell either:
+  // a repeated Cmd+Enter would send CR and run the inserted line. A fresh press always starts over: macOS browsers send
+  // no keyup for a key released while Cmd is down, so the keyup cannot be what ends it.
+  if (e.type === 'keydown' && !e.repeat) held = undefined;
+  if (held === e.key) {
+    if (e.type === 'keyup') held = undefined;
+    if (e.type === 'keydown') e.preventDefault();
+    return false;
+  }
+  if (!pending || !e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return true;
+  const action = e.key === 'Enter' ? 'insert' : e.key === 'Backspace' ? 'dismiss' : undefined;
+  if (!action) return true;
+  if (e.type === 'keydown') { e.preventDefault(); held = e.key; act(action); }
+  return false; // also swallow the keypress/keyup
+}
+// ponytail: one held key for all terminals, since only the focused one gets keys.
+let held: string | undefined;
 
 export function disposeTerm(id: string) {
   terms.get(id)?.term.dispose();

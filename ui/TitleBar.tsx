@@ -26,12 +26,16 @@ function Breadcrumb({ node }: { node: NodeView }) {
 
 export function TitleBar({ node }: { node: NodeView }) {
   const panel = useStore((s) => s.panel);
+  const agent = isAgentKind(node.kind);
   const diff = useStore((s) => s.diffOpen) && !!node.worktree;
-  const transcript = useStore((s) => s.transcriptOpen) && isAgentKind(node.kind);
+  const transcript = useStore((s) => s.transcriptOpen) && agent;
+  const shell = useStore((s) => s.shellOpen) && agent;
+  // A terminal node's own PTY is its Terminal; an agent node's Terminal tab is the human's shell beside it.
   const tabs = [
-    { key: 'terminal', label: 'Terminal', on: !diff && !transcript, show: true },
+    { key: 'agent', label: agent ? 'Agent' : 'Terminal', on: !diff && !transcript && !shell, show: true },
     { key: 'diff', label: 'Diff', on: diff, show: !!node.worktree },
-    { key: 'transcript', label: 'Transcript', on: transcript, show: isAgentKind(node.kind) },
+    { key: 'transcript', label: 'Transcript', on: transcript, show: agent },
+    { key: 'shell', label: 'Terminal', on: shell, show: agent },
   ] as const;
   const kind = statusKind(node);
   const s = node.status;
@@ -53,7 +57,9 @@ export function TitleBar({ node }: { node: NodeView }) {
         {tabs.filter((t) => t.show).length > 1 && (
           <div className="pane-tabs" role="group" aria-label="Pane">
             {tabs.filter((t) => t.show).map((t) => (
-              <button key={t.key} className={t.on ? 'on' : ''} aria-pressed={t.on} onClick={() => showPane(t.key)}>{t.label}</button>
+              <button key={t.key} className={t.on ? 'on' : ''} aria-pressed={t.on} onClick={() => showPane(t.key)}>
+                {t.key === 'shell' && node.suggestion ? <>{t.label}<i className="unread tab-dot" title="Suggested command waiting" /></> : t.label}
+              </button>
             ))}
           </div>
         )}

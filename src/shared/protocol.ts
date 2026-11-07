@@ -9,6 +9,15 @@ export type NodeKind = (typeof NODE_KINDS)[number];
 /** An agent node runs an agent harness; a terminal node is a shell with no agent behind it. */
 export const isAgentKind = (kind: NodeKind): boolean => kind !== 'terminal';
 
+/** The stream id of an agent node's shell (its Terminal tab). Node ids contain no colon, so the two never collide. */
+export const shellStreamId = (nodeId: string) => `${nodeId}:shell`;
+/** The node a shell stream id belongs to; undefined for a node id. */
+export const shellNodeId = (streamId: string): string | undefined => (streamId.endsWith(':shell') ? streamId.slice(0, -':shell'.length) : undefined);
+
+/** A command an agent suggested for the human to run in its node's shell. Not persisted. */
+/** `at` is strictly increasing per node, so it also names this suggestion when the human acts on it. */
+export interface Suggestion { command: string; why?: string; at: number }
+
 /** Which agent CLI runs an agent node; terminals never call this and legacy nodes default to claude. */
 export const harnessFor = ({ harness }: { harness?: Harness }): Harness => harness ?? 'claude';
 
@@ -90,6 +99,8 @@ export interface Worktree {
   missing?: boolean;
   /** The branch tip and time of the last merge: a squashed branch counts as merged until it moves. */
   merged?: { tip: string; at: number };
+  /** Set once every close check has passed and deletion starts, with the close mode; a later close finishes the removal without re-checking. */
+  removing?: 'plain' | 'keep' | 'discard';
 }
 
 /** A worktree node's branch against its base, refreshed when its turn ends, after edits, on exit, merge and close. */
@@ -232,6 +243,10 @@ export interface NodeView extends NodeRecord {
   /** The completion gate's last run for this node: running now, or how it ended. */
   gate?: 'running' | 'passed' | 'failed';
   changingHarness?: boolean;
+  /** A command the node's agent suggested for its shell, until the human inserts or dismisses it. */
+  suggestion?: Suggestion;
+  /** The node's shell is running and has printed output, so a suggestion can be inserted. */
+  shellReady?: true;
   /** On a root Claude node: the account a new session in its repository would run in now, when that differs from `account`; null for no account (Claude's default home). A new session is needed to switch. */
   repoAccount?: string | null;
 }
@@ -288,6 +303,9 @@ export interface ArchivedNode {
 export interface RateLimit { kind: string; percentUsed: number; resetsAt?: string; windowId?: string; observedAt?: number }
 /** Legacy latest Claude account report, retained for CLI consumers. */
 export interface Usage { rateLimits: RateLimit[]; nodeId: string; at: number; /** Tiller Claude account label, stamped by the daemon. */ account?: string }
+
+/** Prefix of the id on a notification for an agent's approval request, which is not about any one node. */
+export const APPROVAL_ID = 'approval';
 
 /** Prepared by the daemon only after notification suppression, grouping and sound policy. */
 export interface NativeNotification { id: string; title: string; subtitle?: string; body: string; sound: boolean }
@@ -391,7 +409,7 @@ export type ServerMessage =
   | { t: 'usage'; usage: Usage }             // a node reported new account-level rate limits
   | { t: 'node'; node: NodeView }            // created or updated (full record minus spawn prompts and sessionHistory)
   | { t: 'removed'; id: string }
-  | { t: 'data'; id: string; data: string }  // raw PTY output
+  | { t: 'data'; id: string; data: string }  // raw PTY output; id may be a shell stream id (shellStreamId)
   | { t: 'nativeNotify'; requestId: string; notification: NativeNotification }
   | { t: 'notify'; id: string; kind: 'done' | 'needsYou' | 'errored' | 'exited'; title: string; body?: string }
   | { t: 'confirm'; confirmId: string; text: string } // ask the human to approve an agent action
@@ -422,7 +440,7 @@ export type ClientMessage =
   | { t: 'nativeNotifyResult'; requestId: string; ok: boolean; error?: string }
   | { t: 'usageRefresh' }                    // bounded local CLI discovery; never starts inference
   | { t: 'visibility'; focused: boolean }       // whether this client's window is in front; the daemon skips OS notifications for a node a focused client has selected
-  | { t: 'attach'; id: string; cols: number; rows: number } // start receiving data; replies with a data message holding the serialized screen
+  | { t: 'attach'; id: string; cols: number; rows: number } // start receiving data; replies with a data message holding the serialized screen. id may be a shell stream id (shellStreamId), which starts the node's shell if it has none; detach, input and resize take one too
   | { t: 'detach'; id: string }
   | { t: 'input'; id: string; data: string; binary?: boolean } // binary: data contains raw byte values (xterm legacy mouse reports)
   | { t: 'resize'; id: string; cols: number; rows: number }
@@ -449,6 +467,7 @@ export type ClientMessage =
   | { t: 'send'; id: string; text: string; mode?: SendMode } // a message from the human, as `tl send` delivers it; replies sent
   | { t: 'mute'; id: string; muted: boolean }  // the human mutes or unmutes a node's OS notifications
   | { t: 'dnd'; on: boolean; minutes?: number } // do not disturb on (for minutes, else until turned off) or off
+  | { t: 'suggestion'; id: string; action: 'insert' | 'dismiss'; at: number } // clear node id's suggested command; insert first types it into the node's shell, without Enter. `at` is the suggestion's: a newer one refuses the action
   | { t: 'sessionOrder'; ids: string[] }    // save the session tab order (root ids, left to right); broadcast to every client
   ;
 

@@ -79,6 +79,8 @@ export interface State {
   comments: ReviewComment[];
   /** The Transcript tab is showing instead of the terminal (for Claude nodes). */
   transcriptOpen: boolean;
+  /** The Terminal tab is showing the node's shell instead of its agent (for agent nodes). */
+  shellOpen: boolean;
   /** The last transcript asked for (no sessionId: the node's current session); data stays while a refresh is out. */
   transcript: { id: string; sessionId?: string; data?: Transcript; error?: string } | null;
   /** The Transcript tab shows tool calls (per viewer, remembered). */
@@ -103,7 +105,7 @@ const storedTools = readPref('tl.showTools') === '1';
 let state: State = {
   nodes: {}, order: [], sessionOrder: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
   connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
-  transcriptOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
+  transcriptOpen: false, shellOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
 };
 const subs = new Set<() => void>();
 let toastSeq = 0;
@@ -155,7 +157,8 @@ export const toggleShowTools = () => update((s) => {
 });
 
 /** What the stage shows for a live node. */
-export const showPane = (pane: 'terminal' | 'diff' | 'transcript') => update(() => ({ diffOpen: pane === 'diff', transcriptOpen: pane === 'transcript' }));
+export const showPane = (pane: 'agent' | 'diff' | 'transcript' | 'shell') =>
+  update(() => ({ diffOpen: pane === 'diff', transcriptOpen: pane === 'transcript', shellOpen: pane === 'shell' }));
 /** Note that a diff for `id` was asked for; conn.ts sends the request. */
 export const diffRequested = (id: string) => update((s) => ({ diff: s.diff?.id === id ? s.diff : { id } }));
 /** Note that a transcript for `id` (and `sessionId`, else the current one) was asked for; the caller sends the request. */
@@ -197,6 +200,7 @@ export const selectSession = (rootId: string) => update((s) => (s.session === ro
 export function applyServer(m: ServerMessage) {
   switch (m.t) {
     case 'snapshot':
+      // The server replays the requests still pending right after it; one answered meanwhile must not linger.
       return update((s) => {
         const nodes = Object.fromEntries(m.nodes.map((n) => [n.id, n]));
         let order = s.order.filter((id) => nodes[id]);
@@ -206,7 +210,7 @@ export function applyServer(m: ServerMessage) {
         order = arrange(nodes, order, sessionOrder);
         const base = { ...s, order, opened: s.opened.filter((id) => nodes[id]) };
         const sel = s.selected && nodes[s.selected] ? s.selected : pickInitial(nodes, order, s.selected ? undefined : wantedNode);
-        return { order, sessionOrder, opened: base.opened, update: m.update, retention: m.retention, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
+        return { confirms: [], order, sessionOrder, opened: base.opened, update: m.update, retention: m.retention, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
       });
     case 'update':
       if (m.update.failed && m.update.failed !== state.update?.failed) toast(m.update.failed, undefined, 'bad');
@@ -249,7 +253,7 @@ export function applyServer(m: ServerMessage) {
     case 'focus':
       return update((s) => ((m.from === 'human' || s.selected === m.from) && s.nodes[m.id] ? choose(s, s.nodes, m.id) : {}));
     case 'confirm':
-      return update((s) => ({ confirms: [...s.confirms, { confirmId: m.confirmId, text: m.text }] }));
+      return update((s) => (s.confirms.some((c) => c.confirmId === m.confirmId) ? {} : { confirms: [...s.confirms, { confirmId: m.confirmId, text: m.text }] }));
     case 'confirmDone':
       return dropConfirm(m.confirmId);
     case 'diff': {
