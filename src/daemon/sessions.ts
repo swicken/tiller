@@ -48,6 +48,13 @@ export function markClosed(home: string, rootId: string, at = Date.now()): void 
   if (meta) writeFileSync(join(dir, 'meta.json'), JSON.stringify({ ...meta, closedAt: at }, null, 2));
 }
 
+/** Undo markClosed, for a restored root: the sweep and tl sessions treat the tree as open again. */
+export function markOpen(home: string, rootId: string): void {
+  const dir = sessionDir(home, rootId);
+  const meta = readMeta(dir);
+  if (meta?.closedAt !== undefined) writeFileSync(join(dir, 'meta.json'), JSON.stringify({ ...meta, closedAt: undefined }, null, 2));
+}
+
 export interface SessionInfo extends Partial<SessionMeta> { rootId: string; dir: string; files: number; bytes: number; newest: number }
 
 export function listSessions(home: string): SessionInfo[] {

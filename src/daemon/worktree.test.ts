@@ -205,7 +205,7 @@ describe('worktree nodes', () => {
     commit(busy.cwd, 'a.txt');
     await exited(busy.id);
     await exited(idle.id);
-    const r = await m.prune();
+    const r = await m.prune([busy.id, idle.id]); // roots: pruned only when listed
     expect(r.removed).toEqual([idle.id]);
     expect(r.kept).toEqual([{ id: busy.id, reason: 'worktree kept: 0 dirty files, 1 unmerged commit; close with keep or discard' }]);
     expect(existsSync(busy.cwd)).toBe(true);

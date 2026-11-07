@@ -40,7 +40,7 @@ A merge refused only because the node is working can wait for its turn instead. 
 
 ## Close and kill
 
-Closing a worktree node removes the worktree and deletes the branch, but only when the tree is clean, the branch is merged and no other live node works in it; otherwise the close is refused, with the counts, and nothing is closed. Two options decide instead: `tl kill <id> --keep-branch` (or `worktree: "keep"` on the MCP `close` tool) commits any changes as a WIP commit, removes the directory and keeps the branch, and `--discard` (`worktree: "discard"`) deletes both, unmerged work included; an agent's discard always needs the human's approval, whatever `approvals.close` says. `tl prune` keeps worktree nodes with unmerged work and lists them.
+Closing a worktree node removes the worktree and deletes the branch, but only when the tree is clean, the branch is merged and no other live node works in it; otherwise the close is refused, with the counts, and nothing is closed. Two options decide instead: `tl kill <id> --keep-branch` (or `worktree: "keep"` on the MCP `close` tool) commits any changes as a WIP commit, removes the directory and keeps the branch, and `--discard` (`worktree: "discard"`) deletes both, unmerged work included; an agent's discard always needs the human's approval, whatever `approvals.close` says. `tl prune` keeps worktree nodes with unmerged work and lists them; it closes a root only when listed (see [sessions](sessions.md)).
 
 ## tl worktrees
 
