@@ -17,7 +17,7 @@ export const KIND_LABEL: Record<StatusKind, string> = {
   working: 'working', needs: 'needs you', done: 'done', errored: 'errored', exited: 'exited', unknown: 'idle', armed: 'armed', queued: 'queued',
 };
 
-export const DORMANT_TITLE = 'Not resumed after the daemon restart; resume to continue';
+export const DORMANT_TITLE = 'Exited without finishing (not resumed after a daemon restart, or restored); resume to continue';
 
 /** The status text for a node: an exited dormant node reads "dormant" (see NodeRecord.dormant). */
 export const statusLabel = (n: NodeView): string => (n.status.exited && n.dormant ? 'dormant' : KIND_LABEL[statusKind(n)]);

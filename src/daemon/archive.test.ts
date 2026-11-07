@@ -255,7 +255,7 @@ describe('archive, history, follow-up and fork', () => {
     expect((await history(home, { rootId: root2 })).map((a) => a.id).sort()).toEqual([kid2, root2].sort());
   });
 
-  it('restores a closed root under its own id, exited and dormant, with its session; refuses a live id and a child', async () => {
+  it('restores a closed root under its own id, exited and dormant, with its session; refuses a live id, a child and a worktree root', async () => {
     setup();
     const root = await started('root', null, 'lead');
     const kid = await started('kid', root);
@@ -272,6 +272,9 @@ describe('archive, history, follow-up and fork', () => {
     await expect(m.restore(root)).rejects.toThrow(`refused: ${root} is already a node`);
     await expect(m.restore(kid)).rejects.toThrow(`refused: ${kid} was not a root; use tl followup`);
     await expect(m.restore('n-none')).rejects.toThrow('no archived node n-none');
+    mkdirSync(join(home, 'sessions', 'n-wt'), { recursive: true }); // a worktree root: its tree was removed at close
+    writeFileSync(join(home, 'sessions', 'n-wt', 'archive.jsonl'), `${JSON.stringify({ id: 'n-wt', parentId: null, title: 'wt', cwd: home, sessionId: 's', transcriptPath: before.transcriptPath, branch: 'tl/wt', createdAt: 0, closedAt: 1 })}\n`);
+    await expect(m.restore('n-wt')).rejects.toThrow('refused: n-wt ran in a worktree (tl/wt)');
     expect(await m.resume(root)).toEqual({ ok: true });
     expect(await argv(root)).toContain(`--resume ${before.sessionId}`);
     expect(m.registry.get(root)!.dormant).toBeUndefined();

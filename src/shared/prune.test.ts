@@ -17,5 +17,11 @@ test('keeps a node that resume on start skipped (dormant), root or child', () =>
 
 test('with an explicit list, considers only those ids, roots and dormant nodes included, never one with a live descendant', () => {
   const nodes = [n('root', null, true), n('kid', 'root', true, true), n('other', 'root', true), n('busy', null, true), n('live', 'busy', false)];
-  expect(pruneIds(nodes, ['root', 'kid', 'busy', 'live', 'missing']).sort()).toEqual(['kid', 'root']);
+  expect(pruneIds(nodes, ['root', 'kid', 'other', 'busy', 'live', 'missing']).sort()).toEqual(['kid', 'other', 'root']);
+});
+
+test('keeps the ancestors of an exited node it keeps, so nothing is orphaned', () => {
+  const nodes = [n('R', null, true), n('P', 'R', true), n('D', 'P', true, true), n('Q', 'R', true), n('K', 'Q', true)];
+  expect(pruneIds(nodes).sort()).toEqual(['K', 'Q']); // P stays for its dormant child D
+  expect(pruneIds(nodes, ['Q'])).toEqual([]); // Q stays for its unlisted child K
 });

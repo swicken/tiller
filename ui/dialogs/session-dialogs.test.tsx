@@ -36,9 +36,18 @@ it('lists the nodes prune will remove and sends exactly those ids on Remove', ()
   expect(tree.props.title).toBe('Remove 2 finished nodes?');
   expect(elements(tree).filter((el) => el.type === 'li').map((el) => el.key)).toEqual(['a', 'b']);
   expect(button(tree, 'Cancel').props.autoFocus).toBe(true);
+  expect(tree.props.restoreFocus).toBe(true);
   button(tree, 'Remove').props.onClick();
   expect(send).toHaveBeenCalledExactlyOnceWith({ t: 'prune', ids: ['a', 'b'] });
   expect(getState().dialog).toBeNull();
+});
+
+it('leaves out a listed node that was resumed or became dormant while the confirmation was open', () => {
+  update(() => ({ nodes: { root: mk('root', null, 0), a: mk('a', 'root', 0), b: { ...mk('b', 'root', 0, { exited: true }), dormant: true }, c: mk('c', 'root', 0, { exited: true }) }, dialog: { kind: 'prune', ids: ['a', 'b', 'c'] } }));
+  const tree = render();
+  expect(tree.props.title).toBe('Remove 1 finished node?');
+  button(tree, 'Remove').props.onClick();
+  expect(send).toHaveBeenCalledExactlyOnceWith({ t: 'prune', ids: ['c'] });
 });
 
 it('cancelling or dismissing the prune confirmation sends nothing', () => {

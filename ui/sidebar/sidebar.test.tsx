@@ -205,7 +205,7 @@ it('labels a dormant exited node "dormant" with the resume hint, and a plain exi
   const row = (node: NodeView) => renderToStaticMarkup(<NodeRow row={{ node, depth: 1, hasChildren: false, collapsed: false, descendants: [], guides: [], last: true }} />);
   const html = row(dormant);
   expect(html).toContain('>dormant</span>');
-  expect(html).toContain('Not resumed after the daemon restart; resume to continue');
+  expect(html).toContain('Exited without finishing (not resumed after a daemon restart, or restored); resume to continue');
   expect(row(mk('x', 'a', 0, { exited: true }))).toContain('>exited</span>');
 });
 

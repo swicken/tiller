@@ -510,14 +510,15 @@ export class NodeManager extends EventEmitter {
 
   /**
    * Bring a closed root back from its archive line under the same id, exited and dormant, for tl resume to continue its
-   * session. Refused for a node that exists, a child (that is followup's job), a session that is gone or that another
-   * node already continues, and a cwd that no longer exists.
+   * session. Refused for a node that exists, a child or a worktree node (followup's job), a session that is gone or that
+   * another node already continues, and a cwd that no longer exists.
    */
   async restore(id: string): Promise<NodeView> {
     if (this.registry.get(id)) throw new Error(`refused: ${id} is already a node`);
     const a = await findArchived(this.home, id, id);
     if (!a) throw new Error(`no archived node ${id}`);
     if (a.parentId !== null) throw new Error(`refused: ${id} was not a root; use tl followup to continue its session`);
+    if (a.branch) throw new Error(`refused: ${id} ran in a worktree (${a.branch}) that close removed; use tl followup to continue its session`);
     if (!a.sessionId || !a.transcriptPath) throw new Error(`${id} never started a session to restore`);
     if (!existsSync(a.transcriptPath)) throw new Error(`the transcript of ${id} is gone (${a.transcriptPath})`);
     const twin = this.registry.list().find((n) => n.followupOf === id || n.sessionId === a.sessionId);

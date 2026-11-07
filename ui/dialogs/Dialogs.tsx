@@ -2,6 +2,7 @@ import { Select } from '../controls/Select';
 import { useEffect, useRef, useState } from 'react';
 import { PROFILES, PROFILE_LABELS, harnessFor, profileFor, type InstalledReleaseNotes, type Profile, type Effort, isAgentKind, type ClientMessage, type Harness, type NodeKind, type Role } from '../../src/shared/protocol';
 import { HARNESSES, HARNESS_EFFORTS } from '../../src/shared/harness-policy';
+import { pruneIds } from '../../src/shared/prune';
 import { accountOptionLabel } from '../settings/settings-model';
 import { send } from '../conn';
 import type { TauriWindow } from '../hooks';
@@ -166,12 +167,13 @@ function KillDialog({ id }: { id: string }) {
   );
 }
 
-/** Lists the nodes prune will remove and sends exactly those ids. */
+/** Lists the nodes prune will remove and sends exactly those ids, less any that stopped qualifying while it was open. */
 function PruneDialog({ ids }: { ids: string[] }) {
   const nodes = useStore((s) => s.nodes);
-  const listed = ids.map((id) => nodes[id]).filter((n) => !!n);
+  const still = new Set(pruneIds(Object.values(nodes)));
+  const listed = ids.filter((id) => still.has(id)).map((id) => nodes[id]!);
   return (
-    <Modal title={`Remove ${listed.length} finished node${listed.length === 1 ? '' : 's'}?`} onClose={close}>
+    <Modal title={`Remove ${listed.length} finished node${listed.length === 1 ? '' : 's'}?`} onClose={close} restoreFocus>
       <p>These exited child nodes have no live descendant. Sessions and dormant nodes are kept.</p>
       <ul className="prune-list">
         {listed.map((n) => {
