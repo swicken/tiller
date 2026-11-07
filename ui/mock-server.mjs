@@ -271,7 +271,7 @@ wss.on('connection', (ws) => {
       }
       case 'close': if (n?.worktree && !m.worktree && n.title.includes('dirty')) send({ t: 'error', id: m.id, message: 'worktree has 2 uncommitted files and 1 unmerged commit; close with keep or discard' });
         else if (n) { nodes.delete(m.id); broadcast({ t: 'removed', id: m.id }); } break;
-      case 'prune': for (const id of pruneIds([...nodes.values()])) { nodes.delete(id); broadcast({ t: 'removed', id }); } break;
+      case 'prune': for (const id of pruneIds([...nodes.values()], m.ids)) { nodes.delete(id); broadcast({ t: 'removed', id }); } break;
       case 'claudeAccounts': send({ t: 'claudeAccounts', accounts }); break;
       case 'spawn': {
         if (m.fork) console.log(`spawn ${m.title} forked from ${m.fork}`);

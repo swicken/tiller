@@ -176,17 +176,37 @@ it('closes the session menu on focus departure and outside clicks, and restores 
   vi.unstubAllGlobals();
 });
 
-it('keeps Settings, History, and Clear exited reachable without a redundant footer New child', () => {
+it('keeps Settings, History, and Clear finished reachable without a redundant footer New child', () => {
   const settings = vi.fn();
   const exited = mk('exited', 'a', 0, { exited: true });
-  update((s) => ({ nodes: { ...s.nodes, exited }, order: [...s.order, exited.id] }));
+  const exitedRoot = mk('gone', null, 0, { exited: true });
+  const dormant = { ...mk('dormant', 'a', 0, { exited: true }), dormant: true };
+  update((s) => ({ nodes: { ...s.nodes, exited, gone: exitedRoot, dormant }, order: [...s.order, 'exited', 'gone', 'dormant'] }));
   const sidebar = Sidebar({ onSettings: settings });
   const footer = find(sidebar, (el) => el.type === 'footer');
   const buttons = elements(footer).filter((el) => el.type === 'button');
   buttons[0].props.onClick(); expect(settings).toHaveBeenCalledOnce();
-  buttons[1].props.onClick(); expect(send).toHaveBeenCalledWith({ t: 'prune' });
+  expect(JSON.stringify(buttons[1].props.children)).toContain('Clear finished');
+  // Only the exited child: an exited root (a session) and a dormant node are kept. The click only asks.
+  buttons[1].props.onClick(); expect(getState().dialog).toEqual({ kind: 'prune', ids: ['exited'] });
+  expect(send).not.toHaveBeenCalled();
   buttons[2].props.onClick(); expect(getState().historyOpen).toBe(true);
   expect(JSON.stringify(footer)).not.toContain('New child');
+});
+
+it('disables Clear finished when only an exited root and a dormant node remain', () => {
+  update((s) => ({ nodes: { ...s.nodes, gone: mk('gone', null, 0, { exited: true }), dormant: { ...mk('dormant', 'a', 0, { exited: true }), dormant: true } } }));
+  const footer = find(Sidebar({ onSettings: () => {} }), (el) => el.type === 'footer');
+  expect(elements(footer).filter((el) => el.type === 'button')[1].props.disabled).toBe(true);
+});
+
+it('labels a dormant exited node "dormant" with the resume hint, and a plain exited node "exited"', () => {
+  const dormant = { ...mk('dormant', 'a', 0, { exited: true }), dormant: true };
+  const row = (node: NodeView) => renderToStaticMarkup(<NodeRow row={{ node, depth: 1, hasChildren: false, collapsed: false, descendants: [], guides: [], last: true }} />);
+  const html = row(dormant);
+  expect(html).toContain('>dormant</span>');
+  expect(html).toContain('Not resumed after the daemon restart; resume to continue');
+  expect(row(mk('x', 'a', 0, { exited: true }))).toContain('>exited</span>');
 });
 
 it('preserves tree keyboard selection and collapse, while ignoring rename input keys', () => {

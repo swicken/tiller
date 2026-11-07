@@ -3,7 +3,7 @@ import { isAgentKind, PROFILE_LABELS, profileFor, type NodeView } from '../../sr
 import { fmtTokens, shortModel } from '../../src/shared/format';
 import { CtxBar, DiffCounts, outcomeLabel, StateDot } from '../controls/Bits';
 import { Icon } from '../controls/icons';
-import { accountMismatch, KIND_LABEL, kindTag, statusKind } from './tree';
+import { accountMismatch, DORMANT_TITLE, kindTag, statusKind, statusLabel } from './tree';
 import { readPreference, useResizeHandle } from './useResizeHandle';
 import './sidebar-inspector.css';
 
@@ -61,7 +61,7 @@ export function SidebarInspector({ node, onClose }: { node: NodeView | null; onC
       </header>
       {!node || !s || !kind ? <p className="inspector-empty">Select a node in this session to see its details.</p> : <>
         <dl className="inspector-facts">
-          {row('Live status', <span className={`inspector-state ${kind}`}><StateDot kind={kind} />{KIND_LABEL[kind]}</span>)}
+          {row('Live status', <span className={`inspector-state ${kind}`} title={s.exited && node.dormant ? DORMANT_TITLE : undefined}><StateDot kind={kind} />{statusLabel(node)}</span>)}
           {row('Harness', kindTag(node))}
           {agent && (node.account || node.repoAccount !== undefined) && row('Account', node.repoAccount !== undefined
             ? <span className="warn">{accountMismatch(node)}</span>
