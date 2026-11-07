@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ExpiringSession } from '../src/shared/protocol';
 import { elements, type Element } from './test-tree';
 import { RetentionNotice, retentionNotice } from './RetentionNotice';
@@ -24,7 +24,8 @@ const session = (rootId: string, days: number, patch: Partial<ExpiringSession> =
   ({ rootId, title: `t-${rootId}`, cwd: '/w', closedAt: NOW - 10 * DAY, deleteAt: NOW + days * DAY, stage: days <= 1 ? 1 : days <= 3 ? 3 : 7, dismissed: false, restorable: true, ...patch });
 const button = (nodes: Element[], label: string) => nodes.find((el) => el.type === 'button' && el.props['aria-label'] === label);
 
-beforeEach(() => { vi.clearAllMocks(); hooks.confirming = null; });
+beforeEach(() => { vi.clearAllMocks(); hooks.confirming = null; vi.useFakeTimers({ toFake: ['Date'], now: NOW }); });
+afterEach(() => { vi.useRealTimers(); });
 
 it.each([
   [[session('a', 6)], '1 closed session will be deleted in 6 days', false],
@@ -38,24 +39,36 @@ it.each([
   expect(notice.title).toMatch(/deleted on /i);
 });
 
-it('counts and times only undismissed sessions, and hides when all are dismissed', () => {
+const regions = () => elements(RetentionNotice() as Element).filter((el) => el.props.role);
+const roleWithText = () => regions().filter((el) => el.props.children).map((el) => el.props.role);
+
+it('counts and times only undismissed sessions, and empties the banner when all are dismissed', () => {
   expect(retentionNotice([session('a', 1, { dismissed: true }), session('b', 5)], NOW)!.text).toBe('1 closed session will be deleted in 5 days');
   expect(retentionNotice([session('a', 1, { dismissed: true })], NOW)).toBeNull();
   update(() => ({ retention: [session('a', 1, { dismissed: true })] }));
-  expect(RetentionNotice()).toBeNull();
+  // The status region stays mounted, empty, so later warnings are announced.
+  expect(regions().map((el) => el.props.role)).toEqual(['status']);
+  expect(roleWithText()).toEqual([]);
 });
 
-it('alerts at stage 1, opens the review dialog and dismisses the undismissed ids', () => {
+it('says the next cleanup, not a past date, once deleteAt has passed', () => {
+  const notice = retentionNotice([session('a', -0.1), session('b', 2)], NOW)!;
+  expect(notice.text).toBe('2 closed sessions will be deleted, starting at the next cleanup');
+  expect(notice.title).not.toMatch(/ on /);
+  expect(retentionNotice([session('a', -0.1)], NOW)!.text).toBe('1 closed session will be deleted at the next cleanup');
+});
+
+it('shows stage 1 as a separate alert, opens the review dialog and dismisses the undismissed ids', () => {
+  update(() => ({ retention: [session('c', 4)], dialog: null }));
+  expect(roleWithText()).toEqual(['status']);
   update(() => ({ retention: [session('a', 1), session('b', 2, { dismissed: true }), session('c', 4)], dialog: null }));
-  const banner = RetentionNotice() as Element;
-  expect(banner.props.role).toBe('alert');
-  const nodes = elements(banner);
+  expect(roleWithText()).toEqual(['alert']);
+  expect(regions().map((el) => el.props.role)).toEqual(['status', 'alert']);
+  const nodes = elements(RetentionNotice() as Element);
   button(nodes, 'Review sessions due for deletion')!.props.onClick();
   expect(getState().dialog).toEqual({ kind: 'retention' });
   button(nodes, 'Dismiss session deletion warning')!.props.onClick();
   expect(send).toHaveBeenCalledWith({ t: 'retentionDismiss', rootIds: ['a', 'c'] });
-  update(() => ({ retention: [session('c', 4)] }));
-  expect((RetentionNotice() as Element).props.role).toBe('status');
 });
 
 it('lists every session in the dialog and sends keep, restore and delete only after a second click', () => {
@@ -63,6 +76,7 @@ it('lists every session in the dialog and sends keep, restore and delete only af
   let nodes = elements(RetentionDialog());
   expect(nodes.filter((el) => el.type === 'li').map((el) => el.key)).toEqual(['a', 'b']);
   expect(button(nodes, 'Restore b')).toBeUndefined();
+  expect(JSON.stringify(nodes.filter((el) => el.props.className === 'retention-dates').map((el) => el.props.children))).not.toContain('next cleanup');
   button(nodes, 'Keep t-a')!.props.onClick();
   expect(send).toHaveBeenLastCalledWith({ t: 'sessionKeep', rootId: 'a' });
   button(nodes, 'Restore t-a')!.props.onClick();
@@ -74,6 +88,12 @@ it('lists every session in the dialog and sends keep, restore and delete only af
   expect(button(nodes, 'Delete now: b')).toBeUndefined();
   button(nodes, 'Confirm delete b')!.props.onClick();
   expect(send).toHaveBeenCalledWith({ t: 'sessionDelete', rootId: 'b' });
+});
+
+it('shows an overdue session as due at the next cleanup in the dialog', () => {
+  update(() => ({ retention: [session('a', -1)] }));
+  const dates = elements(RetentionDialog()).find((el) => el.props.className === 'retention-dates')!;
+  expect(dates.props.children).toContain('Deleted at the next cleanup');
 });
 
 it('holds retention from the snapshot and retention messages', async () => {

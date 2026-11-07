@@ -25,6 +25,14 @@
 .stab-new:hover { background: var(--hover); color: var(--fg); }
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
+/* Session retention warning: a bar across the top of the main pane. */
+.retention-notice { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 20px; border-bottom: 1px solid var(--line); border-left: 3px solid var(--needs); background: var(--surface-2); color: var(--fg); font-size: 13px; }
+.retention-notice.urgent { border-left-color: var(--bad); font-weight: 500; }
+.retention-notice .spacer { flex: 1; }
+.retention-notice button { padding: 2px 8px; border: 1px solid var(--line); border-radius: 3px; background: none; color: var(--fg); font: inherit; font-weight: 400; cursor: pointer; }
+.retention-notice.urgent button:first-of-type { border-color: var(--bad); }
+.retention-notice button:hover { color: var(--accent); border-color: var(--accent); }
+.retention-notice button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .titlebar { container: titlebar / inline-size; flex: none; padding: 14px 20px 0; border-bottom: 1px solid var(--line); background: var(--surface); display: grid; gap: 8px; }
 .tb1, .tb2 { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .titlebar .tb1 { gap: 12px; }
@@ -176,12 +184,6 @@
 .statusbar .restart-now { margin-left: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 3px; background: none; color: var(--fg); font: inherit; cursor: pointer; }
 .statusbar .restart-now:hover { color: var(--accent); border-color: var(--accent); }
 .statusbar .restart-now:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.statusbar .retention-notice { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--needs); }
-.statusbar .retention-notice.urgent { color: var(--bad); font-weight: 500; }
-.statusbar .retention-notice button { padding: 0 6px; border: 1px solid var(--line); border-radius: 3px; background: none; color: var(--fg); font: inherit; font-weight: 400; cursor: pointer; }
-.statusbar .retention-notice.urgent button:first-of-type { border-color: var(--bad); }
-.statusbar .retention-notice button:hover { color: var(--accent); border-color: var(--accent); }
-.statusbar .retention-notice button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .statusbar .whats-new, .statusbar .update-available { padding: 2px 4px; border: 0; border-radius: 3px; background: none; color: var(--fg); font: inherit; white-space: nowrap; cursor: pointer; }
 .statusbar .whats-new:hover, .statusbar .update-available:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .statusbar .whats-new:focus-visible, .statusbar .update-available:focus-visible, .release-notes:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

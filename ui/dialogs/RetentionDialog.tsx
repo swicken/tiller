@@ -9,6 +9,7 @@ const close = () => openDialog(null);
 /** Every expiring session, dismissed ones too; a row leaves when the daemon's next retention list drops it. */
 export function RetentionDialog() {
   const sessions = useStore((s) => s.retention) ?? [];
+  const now = Date.now();
   // Delete now asks for a second click on the same row.
   const [confirming, setConfirming] = useState<string | null>(null);
   return (
@@ -20,7 +21,7 @@ export function RetentionDialog() {
           return <li key={s.rootId}>
             <div><strong>{name}</strong>{s.title && <> <code>{s.rootId}</code></>}</div>
             {s.cwd && <div className="mono">{s.cwd}</div>}
-            <div className="retention-dates">{s.closedAt ? `Closed ${fmtDeleteDate(s.closedAt)} · ` : ''}Deleted on {fmtDeleteDate(s.deleteAt)}</div>
+            <div className="retention-dates">{s.closedAt ? `Closed ${fmtDeleteDate(s.closedAt)} · ` : ''}{s.deleteAt <= now ? 'Deleted at the next cleanup' : `Deleted on ${fmtDeleteDate(s.deleteAt)}`}</div>
             <div className="btns">
               <button className="btn" aria-label={`Keep ${name}`} onClick={() => send({ t: 'sessionKeep', rootId: s.rootId })}>Keep</button>
               {s.restorable && <button className="btn" aria-label={`Restore ${name}`} onClick={() => send({ t: 'restore', id: s.rootId })}>Restore</button>}
