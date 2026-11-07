@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NodeManager } from './manager.js';
-import { buildDigest, flushEvents, parseSince, readEvents, readNewEvents, sessionDir, sweepSessions, type SessionEvent } from './sessions.js';
+import { buildDigest, expiringSessions, flushEvents, markDismissed, markKept, parseSince, readEvents, readNewEvents, sessionDir, sweepSessions, type SessionEvent } from './sessions.js';
 
 const DAY = 86_400_000;
 const read = (f: string) => { try { return readFileSync(f, 'utf8'); } catch { return ''; } };
@@ -117,6 +117,84 @@ describe('sweepSessions', () => {
     expect(sweepSessions(home, new Set(['live-old']), 14, now).sort()).toEqual(['closed-old', 'gone-quiet']);
     for (const id of ['closed-recent', 'gone-active', 'live-old']) expect(existsSync(sessionDir(home, id))).toBe(true);
     expect(existsSync(sessionDir(home, 'closed-old'))).toBe(false);
+  });
+});
+
+describe('retention warnings', () => {
+  let home = '';
+  let m: NodeManager | undefined;
+  afterEach(async () => { await m?.shutdown(); m = undefined; rmSync(home, { recursive: true, force: true }); });
+  const now = Date.now();
+  /** A directory whose root closed `daysAgo` days ago, optionally with archive lines. */
+  const make = (id: string, daysAgo: number, archive: object[] = []) => {
+    const dir = sessionDir(home, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'meta.json'), JSON.stringify({ rootId: id, title: id, cwd: '/', createdAt: now - 30 * DAY, closedAt: now - daysAgo * DAY }));
+    writeFileSync(join(dir, 'archive.jsonl'), archive.map((a) => `${JSON.stringify(a)}\n`).join(''));
+  };
+  const rootLine = (id: string, extra: object = {}) => ({ id, parentId: null, sessionId: 's', transcriptPath: '/t.jsonl', closedAt: now, ...extra });
+
+  it('lists unprotected, unkept directories within 7 days of deletion, soonest first, with their stage', () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
+    // keepDays 14: deletion 8, 6, 2 and 0.5 days away.
+    make('d8', 6); make('d6', 8); make('d2', 12); make('h12', 13.5); make('overdue', 20);
+    make('protected', 13); make('kept', 13);
+    markKept(home, 'kept');
+    const list = expiringSessions(home, new Set(['protected']), 14, now);
+    expect(list.map((s) => [s.rootId, s.stage])).toEqual([['overdue', 1], ['h12', 1], ['d2', 3], ['d6', 7]]);
+    expect(list.find((s) => s.rootId === 'd2')).toMatchObject({ title: 'd2', cwd: '/', closedAt: now - 12 * DAY, deleteAt: now + 2 * DAY, dismissed: false });
+    expect(sweepSessions(home, new Set(['protected']), 14, now)).toEqual(['overdue']);
+    expect(existsSync(sessionDir(home, 'kept'))).toBe(true);
+    expect(sweepSessions(home, new Set(), 0, now).sort()).toEqual(['d2', 'd6', 'd8', 'h12', 'protected']); // kept survives keepDays 0
+  });
+
+  it('counts a dismissal only at the stage it was made, keeping a meta-less directory\'s age', () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
+    make('a', 8);
+    markDismissed(home, 'a', 7);
+    expect(expiringSessions(home, new Set(), 14, now)[0]).toMatchObject({ stage: 7, dismissed: true });
+    expect(expiringSessions(home, new Set(), 14, now + 4 * DAY)[0]).toMatchObject({ stage: 3, dismissed: false });
+    // No meta.json: the dismissal writes one but keeps the file times its deleteAt comes from.
+    const dir = sessionDir(home, 'quiet');
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'handoff.md'), 'x');
+    const old = (now - 10 * DAY) / 1000;
+    utimesSync(join(dir, 'handoff.md'), old, old); utimesSync(dir, old, old);
+    markDismissed(home, 'quiet', 3);
+    expect(expiringSessions(home, new Set(), 14, now).find((s) => s.rootId === 'quiet')).toMatchObject({ stage: 7, dismissed: false });
+    expect(expiringSessions(home, new Set(), 14, now + 2 * DAY).find((s) => s.rootId === 'quiet')).toMatchObject({ stage: 3, dismissed: true, title: undefined });
+  });
+
+  it('is restorable only when the root\'s newest archive line has a session and no worktree', () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
+    make('ok', 10, [rootLine('ok'), rootLine('child', { parentId: 'ok' })]);
+    make('none', 10, [rootLine('child', { parentId: 'none' })]);
+    make('worktree', 10, [rootLine('worktree', { branch: 'tl/x' })]);
+    make('nosession', 10, [rootLine('nosession', { sessionId: undefined })]);
+    make('later', 10, [rootLine('later', { closedAt: now }), rootLine('later', { closedAt: now - 1, branch: 'tl/x' })]);
+    const r = Object.fromEntries(expiringSessions(home, new Set(), 14, now).map((s) => [s.rootId, s.restorable]));
+    expect(r).toEqual({ ok: true, none: false, worktree: false, nosession: false, later: true });
+  });
+
+  it('manager deletes, keeps and dismisses, refusing protected trees and names outside sessions', async () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
+    make('gone', 10);
+    make('keepme', 10);
+    m = new NodeManager({ home, shell: '/bin/sh' });
+    expect(m.retention.map((s) => s.rootId)).toEqual(['gone', 'keepme']);
+    const emitted: string[][] = [];
+    m.on('retention', (list: { rootId: string }[]) => emitted.push(list.map((s) => s.rootId)));
+    const n = await m.spawn({ kind: 'terminal', title: 't', cwd: tmpdir() });
+    mkdirSync(sessionDir(home, n.id), { recursive: true });
+    await expect(m.deleteSession(n.id)).rejects.toThrow(/still has a node/);
+    for (const bad of ['..', '../tl-x', 'a/b', '.', 'missing']) await expect(m.deleteSession(bad)).rejects.toThrow(/no session directory/);
+    await m.keepSession('keepme');
+    await m.dismissRetention(['gone']);
+    expect(m.retention).toMatchObject([{ rootId: 'gone', stage: 7, dismissed: true }]);
+    await m.deleteSession('gone');
+    expect(existsSync(sessionDir(home, 'gone'))).toBe(false);
+    expect(m.retention).toEqual([]);
+    expect(emitted).toEqual([['gone'], ['gone'], []]);
   });
 });
 

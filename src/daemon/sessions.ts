@@ -1,10 +1,10 @@
 // Per-tree session directories, <home>/sessions/<rootId>: notes that outlive a node's context (handoff.md and the like),
 // meta.json, and events.jsonl, the daemon's log of what happened in the tree. Keyed by rootId, so restart keeps them.
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { outcomeLine } from '../shared/format.js';
-import { NEEDS_YOU_STATES, type AgentState, type DigestItem, type Outcome } from '../shared/protocol.js';
+import { NEEDS_YOU_STATES, RETENTION_STAGES, type AgentState, type ArchivedNode, type DigestItem, type ExpiringSession, type Outcome, type RetentionStage } from '../shared/protocol.js';
 import { logError } from './util.js';
 
 const SESSIONS_DIR = 'sessions';
@@ -13,7 +13,13 @@ const EVENTS = 'events.jsonl';
 const DAY_MS = 86_400_000;
 const CHUNK = 64 * 1024;
 
-export interface SessionMeta { rootId: string; title: string; cwd: string; createdAt: number; closedAt?: number }
+export interface SessionMeta {
+  rootId: string; title: string; cwd: string; createdAt: number; closedAt?: number;
+  /** The human chose to keep it: the sweep never deletes it. */
+  keep?: boolean;
+  /** The retention stage at which the human dismissed its warning. */
+  dismissedStage?: RetentionStage;
+}
 
 export const sessionDir = (home: string, rootId: string): string => join(home, SESSIONS_DIR, rootId);
 const eventsFile = (dir: string): string => join(dir, EVENTS);
@@ -55,6 +61,26 @@ export function markOpen(home: string, rootId: string): void {
   if (meta?.closedAt !== undefined) writeFileSync(join(dir, 'meta.json'), JSON.stringify({ ...meta, closedAt: undefined }, null, 2));
 }
 
+/**
+ * Merge `patch` into meta.json, creating it for a directory without one. File times are kept, so a directory without
+ * closedAt does not look freshly touched to the sweep.
+ */
+function patchMeta(home: string, rootId: string, patch: Partial<SessionMeta>): void {
+  const dir = sessionDir(home, rootId), file = join(dir, 'meta.json');
+  const dirTime = statSync(dir).mtime;
+  let fileTime: Date;
+  try { fileTime = statSync(file).mtime; } catch { fileTime = dirTime; }
+  writeFileSync(file, JSON.stringify({ rootId, ...readMeta(dir), ...patch }, null, 2));
+  utimesSync(file, fileTime, fileTime);
+  utimesSync(dir, dirTime, dirTime);
+}
+
+/** Never delete this directory. */
+export const markKept = (home: string, rootId: string): void => patchMeta(home, rootId, { keep: true });
+
+/** Hide its warning until the next retention stage. */
+export const markDismissed = (home: string, rootId: string, stage: RetentionStage): void => patchMeta(home, rootId, { dismissedStage: stage });
+
 export interface SessionInfo extends Partial<SessionMeta> { rootId: string; dir: string; files: number; bytes: number; newest: number }
 
 export function listSessions(home: string): SessionInfo[] {
@@ -79,11 +105,36 @@ export function sweepSessions(home: string, existing: Set<string>, keepDays: num
   const cutoff = now - keepDays * DAY_MS;
   const removed: string[] = [];
   for (const s of listSessions(home)) {
-    if (existing.has(s.rootId) || (s.closedAt ?? s.newest) >= cutoff) continue;
+    if (existing.has(s.rootId) || s.keep || (s.closedAt ?? s.newest) >= cutoff) continue;
     rmSync(s.dir, { recursive: true, force: true });
     removed.push(s.rootId);
   }
   return removed;
+}
+
+/** The smallest retention stage with `ms` at most that many days. */
+const stageOf = (ms: number): RetentionStage => [...RETENTION_STAGES].reverse().find((d) => ms <= d * DAY_MS) ?? RETENTION_STAGES[0];
+
+/** Whether the tree's archive holds a line tl restore accepts: its newest line for the root itself, with a session and no worktree. */
+function restorable(dir: string, rootId: string): boolean {
+  let raw: string;
+  try { raw = readFileSync(join(dir, 'archive.jsonl'), 'utf8'); } catch { return false; }
+  const lines = raw.split('\n').flatMap((l) => { try { return l ? [JSON.parse(l) as ArchivedNode] : []; } catch { return []; } });
+  const a = lines.filter((x) => x.id === rootId).sort((x, y) => y.closedAt - x.closedAt)[0];
+  return !!a && a.parentId === null && !!a.sessionId && !!a.transcriptPath && !a.branch;
+}
+
+/**
+ * The directories sweepSessions deletes within RETENTION_STAGES[0] days (or overdue ones it has not reached), soonest
+ * first: unprotected, not kept, with deleteAt keepDays after closedAt or, without it, the newest file time.
+ */
+export function expiringSessions(home: string, protectedRoots: Set<string>, keepDays: number, now = Date.now()): ExpiringSession[] {
+  return listSessions(home).flatMap((s): ExpiringSession[] => {
+    const deleteAt = (s.closedAt ?? s.newest) + keepDays * DAY_MS;
+    if (protectedRoots.has(s.rootId) || s.keep || deleteAt - now > RETENTION_STAGES[0] * DAY_MS) return [];
+    const stage = stageOf(deleteAt - now);
+    return [{ rootId: s.rootId, title: s.title, cwd: s.cwd, closedAt: s.closedAt, deleteAt, stage, dismissed: s.dismissedStage === stage, restorable: restorable(s.dir, s.rootId) }];
+  }).sort((a, b) => a.deleteAt - b.deleteAt);
 }
 
 // ---- event log ----

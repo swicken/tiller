@@ -19,7 +19,7 @@ import { buildChildEnv, loginShellPath } from './pty.js';
 import { formatEvent, listSessions, parseSince, readEvents, readNewEvents, sessionDir, type EventCursor, type SessionEvent } from './sessions.js';
 import { fmtAge } from '../shared/format.js';
 import { fmtUsd } from '../shared/spend.js';
-import { HARNESSES, type Harness, type NodeKind } from '../shared/protocol.js';
+import { HARNESSES, RETENTION_STAGES, type Harness, type NodeKind } from '../shared/protocol.js';
 import { carry, mainCheckout, protectedBranches, runCommands, WORKTREES_DIR } from './worktree.js';
 import { cancelDrain, drainDaemon, restartDaemon, findDaemon, humanEnv, pickOrchestrator, spawnReload, startDaemon, upDir, type OrchestratorCandidate } from './up.js';
 
@@ -87,8 +87,9 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl gate [--cwd P]                                   run the configured completion gate command once in a directory and print the result
   tl worktrees [--cwd P]                            list node worktrees, orphans and kept branches for this repo
   tl worktrees clean [--force] [--cwd P]              remove orphans and kept branches that are clean and merged; --force removes all
-  tl sessions                                         list session directories (<home>/sessions/<rootId>) with title, age, size and closedAt
+  tl sessions                                         list session directories (<home>/sessions/<rootId>) with title, age, size, closedAt and when the sweep deletes them
   tl sessions clean                                   delete the ones daemon.sessionsKeepDays has expired now
+  tl sessions keep <rootId>                           never delete this session directory
   tl sessions path [id]                               print the session directory of a node's tree (default: this node's, or this directory's orchestrator's)
   tl log [id] [--since 2h] [--follow]                 print a tree's event log (for a non-root id, only that node's events)
   tl help`;
@@ -469,11 +470,16 @@ switch (cmd) {
   case 'sessions': {
     if (pos[0] === 'path') { console.log((await sessionTarget(pos[1])).dir); break; }
     if (pos[0] === 'clean') { await call('sessions_clean', {}); break; }
+    if (pos[0] === 'keep' && pos[1]) { await call('sessions_keep', { rootId: pos[1] }); break; }
     if (pos[0]) fail(usage());
-    const now = Date.now();
+    const now = Date.now(), keepMs = loadConfig(null, home).daemon.sessionsKeepDays * 86_400_000;
+    const when = (t: number) => new Date(t).toLocaleString('sv-SE').slice(0, 16);
     for (const x of listSessions(home).sort((a, b) => b.newest - a.newest)) {
-      const closed = x.closedAt ? `closed ${new Date(x.closedAt).toLocaleString('sv-SE').slice(0, 16)}` : 'open';
-      console.log([x.rootId, (x.title ?? '?').slice(0, 30), fmtAge(now - (x.createdAt ?? x.newest)), `${(x.bytes / 1024).toFixed(1)} KB`, closed].join('\t'));
+      const closed = x.closedAt ? `closed ${when(x.closedAt)}` : 'open';
+      // A closed root's directory expires like the sweep's; within the warning window, say when.
+      const deleteAt = x.closedAt !== undefined ? x.closedAt + keepMs : undefined;
+      const fate = x.keep ? 'kept' : deleteAt !== undefined && deleteAt - now <= RETENTION_STAGES[0] * 86_400_000 ? `deletes ${when(deleteAt)}` : '';
+      console.log([x.rootId, (x.title ?? '?').slice(0, 30), fmtAge(now - (x.createdAt ?? x.newest)), `${(x.bytes / 1024).toFixed(1)} KB`, closed, fate].filter(Boolean).join('\t'));
     }
     break;
   }
