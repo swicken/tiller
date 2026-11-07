@@ -49,7 +49,8 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl mute <id> | unmute <id>                          stop or restart OS notifications for one node
   tl dnd [on|off|1h|30m]                              do not disturb: no OS notifications until off, or for the time given;
                                                       with no argument, show whether it is on
-  tl prune                                            remove every exited node that has no live descendant
+  tl prune [<id>...]                                  remove every exited child node that has no live descendant (not roots
+                                                      or dormant nodes); with ids, remove only those, roots included
   tl restart <id> [--prompt T]                        relaunch a node with a fresh session (clears its context; children are kept);
                                                       T is its first prompt, else it is pointed at the tree's handoff.md if any
   tl kill [--force] [--keep-branch|--discard] <id...> | close <id...>  close and delete nodes (an orchestrator needs --force);
@@ -70,6 +71,7 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
                                                       title, first prompt or last message
   tl transcript <id> [--session SID]                  a live or closed node's conversation; SID picks one of its earlier sessions
   tl followup <id> --prompt P [--title T]             continue a closed node's session as a new node that starts on P
+  tl restore <id>                                     bring a closed root back under its id, exited, for tl resume to continue
   tl spawn [--kind claude|agent|terminal] [--harness claude|pi|codex] --title T [--cwd PATH] [--prompt P] [--model M] [--effort low|medium|high|xhigh|max] [--permission-mode M] [--role orchestrator|worker|none] [--profile orchestrator|implementation|explorer|mechanical|reviewer] [--worktree [--base B]] [--preset NAME] [--request-id ID]
            [--after ID,ID] [--after-success ID,ID] [--now] [--fork ID] [--account NAME]
                                                       --kind defaults to claude, or agent with --harness pi|codex or from a Pi or Codex agent; --cwd to here; --after / --after-success
@@ -253,11 +255,9 @@ switch (cmd) {
     if (!pos[0]) fail(usage());
     await call('restart', { nodeId: pos[0], prompt: f.prompt });
     break;
-  case 'prune': {
-    const { data } = await call('prune', {}, false);
-    console.log(`removed ${data.removed.length} exited node${data.removed.length === 1 ? '' : 's'}`);
+  case 'prune':
+    await call('prune', pos.length ? { nodeIds: pos } : {}); // its text names the nodes kept for their worktree
     break;
-  }
   case 'spawn': {
     // Each spawn field from its kebab-case flag; isolation, cwd and the id lists from tl's own spellings.
     const flag = (k: string) => (f as Record<string, unknown>)[k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)];
@@ -288,6 +288,10 @@ switch (cmd) {
   case 'transcript':
     if (!pos[0]) fail(usage());
     await call('transcript', { nodeId: pos[0], sessionId: f.session });
+    break;
+  case 'restore':
+    if (!pos[0]) fail(usage());
+    await call('restore', { nodeId: pos[0] });
     break;
   case 'followup':
     if (!pos[0] || !f.prompt) fail(usage());

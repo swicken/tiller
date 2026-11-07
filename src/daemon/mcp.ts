@@ -368,6 +368,12 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
     { ...nodeIdArg, prompt: z.string().min(1), title: z.string().min(1).optional() },
     async (c, a) => ({ data: { nodeId: (await c.manager.followup(nodeId(a), a.prompt, a.title)).id } }), true),
 
+  restore: tool(
+    'Restore closed session',
+    'Bring a closed root node back from the archive under its own id, exited and dormant, with its session, cwd, title and settings; resume it afterwards to continue the conversation. Refused for a child (use followup) or a session another node continues. Only the human may call this.',
+    nodeIdArg,
+    async (c, a) => ({ data: { nodeId: (await c.manager.restore(nodeId(a))).id } }), true),
+
   write: tool(
     'Type in terminal',
     'Type raw keystrokes into another node\'s terminal (yourself, ancestors, siblings or descendants), for example to answer a prompt in a terminal node or press Enter. The human must approve each call in the UI; if they decline or nobody is watching you get {ok:false, reason:"denied"}. Text is limited to 2000 characters. For talking to an agent node use send, which is safer.',
@@ -518,10 +524,10 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   prune: tool(
     'Remove finished nodes',
-    'Remove every exited node that has no live descendant (files and records). A node whose git worktree has uncommitted or unmerged work is kept and listed. Only the human may call this.',
-    {},
-    async (c) => {
-      const { removed, kept } = await c.manager.prune();
+    'Remove every exited node that has no live descendant (files and records), except roots and dormant nodes (exited without finishing, such as those resume on start left down); with nodeIds, remove only those, roots and dormant nodes included. A node whose git worktree has uncommitted or unmerged work is kept and listed. Only the human may call this.',
+    { nodeIds: z.array(z.string().min(1)).min(1).optional() },
+    async (c, a) => {
+      const { removed, kept } = await c.manager.prune(a.nodeIds);
       const keptText = kept.length ? `; kept ${kept.length} node(s) with worktree work:\n${kept.map((k) => `  ${k.id}: ${k.reason}`).join('\n')}` : '';
       return { text: `removed ${removed.length} exited node(s)${keptText}`, data: { ok: true, removed, kept } };
     }, true),

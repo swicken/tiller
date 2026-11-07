@@ -4,13 +4,13 @@ import { stripVTControlCharacters } from 'node:util';
 import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { type Profile, harnessFor, isAgentKind, NEEDS_YOU_STATES, type Harness, type ArchivedNode, type Diff, type DigestItem, type Drain, type Transcript, type GitState, type ModEvent, type NodeKind, type NodeRecord, type NodeStatus, type NodeView, type Outcome, type Effort, type Isolation, type Role, type Usage, type Worktree } from '../shared/protocol.js';
+import { type Profile, harnessFor, profileFor, isAgentKind, NEEDS_YOU_STATES, type Harness, type ArchivedNode, type Diff, type DigestItem, type Drain, type Transcript, type GitState, type ModEvent, type NodeKind, type NodeRecord, type NodeStatus, type NodeView, type Outcome, type Effort, type Isolation, type Role, type Usage, type Worktree } from '../shared/protocol.js';
 import { loadConfig, type Config } from './config.js';
 import { UsageRegistry } from './usage.js';
 import { accountForProject, claudeConfigDir, claudeHomeOf, claudeHomes } from './claude-accounts.js';
 import { homeDir } from './home.js';
 import { ensurePresets, loadPreset, type Preset } from './presets.js';
-import { projectMcpServerNames, terminalLaunch, writeNodeFiles, type LaunchInput } from './launch.js';
+import { projectMcpServerNames, roleFor, terminalLaunch, writeNodeFiles, type LaunchInput } from './launch.js';
 import { adapterFor, requireHarnessExecutable } from './harness.js';
 import { pruneIds } from '../shared/prune.js';
 import { dayKey } from '../shared/spend.js';
@@ -29,7 +29,7 @@ import { buildChildEnv, PtySession } from './pty.js';
 import { count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
 import { addWorktree, closeWorktreeNode, dropQueuedMerges, gitSettled, mergeWorktree, readClaudeJson, refreshGit, refreshGitSoon, refreshMovedTips, setMissing, setupThenLaunch, trustedForWorktree, trustPolicy, worktreeCheck, worktreeCommands, worktreeEnv, worktrees, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
-import { appendEvent, buildDigest, ensureSession, flushEvents, handoffPrompt, listSessions, markClosed, readEvents, sessionDir, sweepSessions } from './sessions.js';
+import { appendEvent, buildDigest, ensureSession, flushEvents, handoffPrompt, listSessions, markClosed, markOpen, readEvents, sessionDir, sweepSessions } from './sessions.js';
 import { archivedOf, archiveNode, findArchived, type BranchFate } from './archive.js';
 import { adoptSessionHistory, nodeTranscript, recordedSessions, transcriptFor } from './transcript.js';
 import { active, initialState, interruptKeyPressed, interruptTimeout, ptyExited, reduce, stall, sweep, turnComplete, type HookEvent } from './status.js';
@@ -508,6 +508,39 @@ export class NodeManager extends EventEmitter {
     return this.spawn({ kind: a.harness && a.harness !== 'claude' ? 'agent' : 'claude', ...(a.harness ? { harness: a.harness } : {}), title: title || a.title, cwd, prompt, model: a.model, effort: a.effort, role: a.role, profile: a.profile, parentId, isolation: 'none', byHuman: true, followup: a });
   }
 
+  /**
+   * Bring a closed root back from its archive line under the same id, exited and dormant, for tl resume to continue its
+   * session. Refused for a node that exists, a child (that is followup's job), a session that is gone or that another
+   * node already continues, and a cwd that no longer exists.
+   */
+  async restore(id: string): Promise<NodeView> {
+    if (this.registry.get(id)) throw new Error(`refused: ${id} is already a node`);
+    const a = await findArchived(this.home, id, id);
+    if (!a) throw new Error(`no archived node ${id}`);
+    if (a.parentId !== null) throw new Error(`refused: ${id} was not a root; use tl followup to continue its session`);
+    if (!a.sessionId || !a.transcriptPath) throw new Error(`${id} never started a session to restore`);
+    if (!existsSync(a.transcriptPath)) throw new Error(`the transcript of ${id} is gone (${a.transcriptPath})`);
+    const twin = this.registry.list().find((n) => n.followupOf === id || n.sessionId === a.sessionId);
+    if (twin) throw new Error(`refused: ${twin.id} already continues the session of ${id}`);
+    const cwd = usableCwd(a.cwd);
+    if (!cwd) throw new Error(`refused: ${a.cwd} no longer exists`);
+    const kind: NodeKind = a.harness && a.harness !== 'claude' ? 'agent' : 'claude';
+    // archivedOf stored the resolved role and profile; keeping a root's defaults would turn them into overrides.
+    const role = a.role === roleFor(undefined, null) ? undefined : a.role;
+    const profile = a.profile === profileFor(undefined, null, role) ? undefined : a.profile;
+    this.registry.insert({
+      id, kind, parentId: null, title: a.title, cwd, ...(a.harness ? { harness: a.harness } : {}), model: a.model, effort: a.effort, explicit: a.explicit,
+      account: a.account, role, profile, prompt: a.prompt, sessionId: a.sessionId, previousSessions: a.previousSessions, sessionHistory: a.sessionHistory,
+      transcriptPath: a.transcriptPath, spentUsd: a.spentUsd, spentIncomplete: a.spentIncomplete, lastCost: a.lastCost, createdAt: a.createdAt,
+      lastActiveAt: a.closedAt, dormant: true,
+    });
+    this.runtimes.set(id, { status: { state: initialState(kind), exited: true, changedAt: Date.now() } });
+    markOpen(this.home, id);
+    this.logEvent(id, 'restore');
+    refreshGit(this, id).catch(logError);
+    return this.emitNode(id)!;
+  }
+
   /** A live or archived agent node's conversation in one of its sessions (default: the current one). */
   async transcript(id: string, sessionId?: string): Promise<Transcript> {
     const n = await this.transcriptNode(id);
@@ -766,13 +799,16 @@ export class NodeManager extends EventEmitter {
     return s;
   }
 
-  /** Close every exited node with no live descendant. A node whose worktree is not safe to remove is kept, with the reason. */
-  async prune(): Promise<{ removed: string[]; kept: { id: string; reason: string }[] }> {
+  /**
+   * Close every exited child node with no live descendant, or only the listed `ids` (see pruneIds): roots and dormant
+   * nodes are closed only when listed. A node whose worktree is not safe to remove is kept, with the reason.
+   */
+  async prune(ids?: string[]): Promise<{ removed: string[]; kept: { id: string; reason: string }[] }> {
     const removed: string[] = [], kept: { id: string; reason: string }[] = [];
     const depth = (id: string) => this.registry.lineage(id).length;
-    for (const id of pruneIds(this.list()).sort((a, b) => depth(b) - depth(a))) { // children first
+    for (const id of pruneIds(this.list(), ids).sort((a, b) => depth(b) - depth(a))) { // children first
       try {
-        await this.close(id, true); // exited only, so never a live orchestrator
+        await this.close(id, true); // exited only, so never a live orchestrator; a listed root needs the force
         removed.push(id);
       } catch (err) {
         kept.push({ id, reason: (err as Error).message });
@@ -959,8 +995,8 @@ export class NodeManager extends EventEmitter {
 
   /**
    * Resume the nodes that were live when the daemon last went away, parents first. Skips nodes that no longer exist, have
-   * lost their worktree or have been idle longer than resumeMaxAgeDays; then forgets the set, so it holds only nodes that
-   * come up again. Returns a one-line summary.
+   * lost their worktree or have been idle longer than resumeMaxAgeDays, marking each one it leaves exited dormant (so
+   * prune keeps it); then forgets the set, so it holds only nodes that come up again. Returns a one-line summary.
    */
   async resumeLive(): Promise<string> {
     const ids = this.pendingResume;
@@ -986,6 +1022,10 @@ export class NodeManager extends EventEmitter {
       // Into the inbox at once: the resumed node's mod picks it up behind any message already queued for it.
       for (const id of cutOff) deliver(this, DAEMON, id, cutOffText(this.lastStop), { fromLabel: 'tiller (daemon restarted)', replyTo: null, inbox: true }).catch(logError);
       summary = `resumed ${resumed}, skipped ${skipped.length}${skipped.length ? `: ${skipped.join(', ')}` : ''}${cutOff.length ? `; told ${count(cutOff.length, 'node')} their turn was cut off` : ''}`;
+    }
+    for (const id of ids) {
+      const n = this.registry.get(id);
+      if (n && !n.pending && !this.session(id) && this.registry.update(id, { dormant: true })) this.emitNode(id);
     }
     this.pendingResume = new Set();
     this.liveChanged();
@@ -1194,7 +1234,7 @@ export class NodeManager extends EventEmitter {
     rt.session = s;
     rt.launchedPreset = input.preset ?? {};
     if (adapter && prompt) rt.starting = true;
-    this.registry.update(id, { lastActiveAt: Date.now(), forkSession: undefined });
+    this.registry.update(id, { lastActiveAt: Date.now(), forkSession: undefined, dormant: undefined });
     this.liveChanged();
     const native = adapter !== undefined && adapter.id !== 'claude';
     let outputTail = ''; // native bridge failures are printed in the terminal
