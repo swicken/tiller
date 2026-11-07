@@ -5,6 +5,7 @@
 // history, transcript, followup and spawn with fork answer from the fake archive below; tl-d and the archived "auth refactor" have two sessions.
 // conversations and conversation answer from the same tree (see conversationFor); tl-test and tl-ui exchange peer messages.
 // claudeAccounts answers with three accounts (one logged out); a root claude spawn takes its chosen or project-mapped account, children inherit it.
+// retention lists two closed sessions due for deletion (one restorable, one on its last day); sessionKeep, sessionDelete, restore and retentionDismiss update it.
 // spawn with isolation "worktree" fakes a worktree; a plain close of a worktree node whose title contains "dirty" is refused, as the daemon would.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -209,6 +210,14 @@ setInterval(() => {
 // Children inherit their parent's Claude account, as the daemon does (parents are added first).
 for (const n of nodes.values()) if (n.kind !== 'terminal' && n.parentId && nodes.get(n.parentId)?.account) n.account = nodes.get(n.parentId).account;
 
+// Closed sessions the daemon would delete soon, soonest first.
+const DAY = 86_400_000;
+let retention = [
+  { rootId: 'old-spike', title: 'old spike', cwd: '/Users/scott/workspace/spike', closedAt: Date.now() - 13.5 * DAY, deleteAt: Date.now() + 0.5 * DAY, stage: 1, dismissed: false, restorable: false },
+  { rootId: 'docs-pass', title: 'docs pass', cwd: '/Users/scott/workspace/tiller', closedAt: Date.now() - 12 * DAY, deleteAt: Date.now() + 2 * DAY, stage: 3, dismissed: false, restorable: true },
+];
+const dropRetention = (rootId) => { retention = retention.filter((s) => s.rootId !== rootId); broadcast({ t: 'retention', sessions: retention }); };
+
 const http = createServer(async (req, res) => {
   const path = normalize(new URL(req.url, 'http://x').pathname).replace(/^(\.\.[/\\])+/, '');
   try {
@@ -229,7 +238,7 @@ wss.on('connection', (ws) => {
       if (m.t !== 'auth' || m.token !== 'mock') return ws.close();
       authed = true;
       clients.add(client);
-      send({ t: 'snapshot', nodes: [...nodes.values()], dnd, sessionOrder: tabOrder(), ...(updateStatus ? { update: updateStatus } : {}) });
+      send({ t: 'snapshot', nodes: [...nodes.values()], dnd, sessionOrder: tabOrder(), retention, ...(updateStatus ? { update: updateStatus } : {}) });
       if (!updateScenario) setTimeout(() => ws.readyState === 1 && send({ t: 'confirm', confirmId: 'c1', text: 'ui polish wants to close node "shell".\nIt has been idle for 40 minutes.' }), 15_000);
       return;
     }
@@ -272,6 +281,19 @@ wss.on('connection', (ws) => {
       case 'close': if (n?.worktree && !m.worktree && n.title.includes('dirty')) send({ t: 'error', id: m.id, message: 'worktree has 2 uncommitted files and 1 unmerged commit; close with keep or discard' });
         else if (n) { nodes.delete(m.id); broadcast({ t: 'removed', id: m.id }); } break;
       case 'prune': for (const id of pruneIds([...nodes.values()], m.ids)) { nodes.delete(id); broadcast({ t: 'removed', id }); } break;
+      case 'sessionKeep': case 'sessionDelete': dropRetention(m.rootId); break;
+      case 'restore': {
+        const s = retention.find((x) => x.rootId === m.id);
+        if (!s?.restorable) { send({ t: 'error', id: m.id, message: `${m.id} cannot be restored` }); break; }
+        add(s.rootId, null, s.title, s.cwd, 'claude', { exited: true, state: 'none' }, { dormant: true });
+        broadcast({ t: 'node', node: nodes.get(s.rootId) });
+        dropRetention(s.rootId);
+        break;
+      }
+      case 'retentionDismiss':
+        retention = retention.map((s) => (m.rootIds.includes(s.rootId) ? { ...s, dismissed: true } : s));
+        broadcast({ t: 'retention', sessions: retention });
+        break;
       case 'claudeAccounts': send({ t: 'claudeAccounts', accounts }); break;
       case 'spawn': {
         if (m.fork) console.log(`spawn ${m.title} forked from ${m.fork}`);

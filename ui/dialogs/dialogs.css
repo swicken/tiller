@@ -4,4 +4,8 @@
 .account-login { display: grid; gap: 4px; font-size: 12px; color: var(--dim); }
 .account-login p, .account-inherited { margin: 0; }
 .account-inherited { font-size: 12px; color: var(--dim); }
+.retention-list { max-height: 50vh; overflow-y: auto; margin: 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
+.retention-list li { display: grid; gap: 4px; padding: 10px 0; border-top: 1px solid var(--line); }
+.retention-list .retention-dates { color: var(--dim); font-size: 12px; }
+.retention-list .btns { justify-content: flex-start; margin-top: 4px; }
 .prune-list { max-height: 40vh; overflow-y: auto; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }

@@ -7,6 +7,7 @@ import { openDialog, useStore } from './store';
 import { selectedUsage, usageScope, usageStale, usageToolName } from '../src/shared/usage';
 import { refreshUsage, send } from './conn';
 import { UsagePanel, UsageWindows } from './UsagePanel';
+import { RetentionNotice } from './RetentionNotice';
 
 export function StatusBar() {
   const connected = useStore((s) => s.connected);
@@ -56,6 +57,7 @@ export function StatusBar() {
         {drain.force || !waiting ? 'Restarting Tiller…' : `Waiting for ${waiting} agent${waiting === 1 ? '' : 's'} to finish their turn`}
         {!drain.force && waiting > 0 && <button className="restart-now" onClick={() => send({ t: 'restartNow' })}>Restart now</button>}
       </span>}
+      <RetentionNotice />
       {available && <button className="update-available" onClick={() => openDialog({ kind: 'update' })} aria-haspopup="dialog">{runtimeBehindCheckout && update!.sha === update!.target!.sha ? 'Restart to finish update' : 'Update available'}</button>}
       {!!notes?.releases.length && <button className="whats-new" onClick={() => openDialog({ kind: 'whatsNew', notes })} aria-haspopup="dialog">What’s new</button>}
     </footer>
