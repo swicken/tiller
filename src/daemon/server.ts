@@ -197,7 +197,10 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
   manager.on('usageSources', (sources) => broadcast({ t: 'usageSources', sources }));
   manager.on('usage', (usage: Usage) => broadcast({ t: 'usage', usage }));
   manager.on('sessionOrder', (ids: string[]) => broadcast({ t: 'sessionOrder', ids }));
-  manager.on('retention', (sessions: ExpiringSession[]) => broadcast({ t: 'retention', sessions }));
+  manager.on('retention', (sessions: ExpiringSession[]) => {
+    broadcast({ t: 'retention', sessions });
+    if ([...clients].some((c) => c.authed)) manager.noteDelivered(sessions);
+  });
   // While a restart drains, every node change may change who it waits for.
   let lastDrain = '';
   const syncDrain = () => {
@@ -342,6 +345,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
           syncUpdateChecks();
           clearTimeout(authTimer);
           sendTo(c, { t: 'snapshot', update: updates.status(), nodes: manager.list().map(forUi), usage: manager.usage, usageSources: manager.usageRegistry.sources, dnd, drain: manager.drainView(), sessionOrder: manager.sessionOrder(), retention: manager.retention });
+          manager.noteDelivered(manager.retention);
         } else {
           ws.close(4401, 'auth required');
         }

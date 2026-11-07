@@ -5,7 +5,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import { appendFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { closeSync, existsSync, openSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { promisify } from 'node:util';
 import type { Diff, DiffFile, Worktree } from '../shared/protocol.js';
 import type { MergeStyle } from './config.js';
@@ -16,6 +16,13 @@ const GIT_TIMEOUT_MS = 30_000;
 /** Checkout and copy can be slow on a large repo. */
 const SLOW_TIMEOUT_MS = 5 * 60_000;
 export const WORKTREES_DIR = join('.claude', 'worktrees');
+
+/** `cwd`, or the main checkout when it was a worktree since removed; undefined when neither exists. */
+export function usableCwd(cwd: string): string | undefined {
+  if (existsSync(cwd)) return cwd;
+  const at = cwd.indexOf(`${sep}${WORKTREES_DIR}${sep}`), repo = at >= 0 ? cwd.slice(0, at) : undefined;
+  return repo && existsSync(repo) ? repo : undefined;
+}
 const EXCLUDE_LINE = '/.claude/worktrees/';
 const MARKER = 'tl-node';
 
