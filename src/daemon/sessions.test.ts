@@ -1,9 +1,9 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NodeManager } from './manager.js';
-import { buildDigest, expiringSessions, flushEvents, markDismissed, markKept, parseSince, readEvents, readNewEvents, sessionDir, sweepSessions, type SessionEvent } from './sessions.js';
+import { buildDigest, expiringSessions, flushEvents, markClosed, markDismissed, markKept, markOpen, markWarned, parseSince, readEvents, readNewEvents, sessionDir, sweepSessions, type SessionEvent } from './sessions.js';
 
 const DAY = 86_400_000;
 const read = (f: string) => { try { return readFileSync(f, 'utf8'); } catch { return ''; } };
@@ -114,7 +114,7 @@ describe('sweepSessions', () => {
     make('gone-quiet', null, now - 20 * DAY);                            // no meta, root gone, nothing written for 20 days
     make('gone-active', null, now - DAY);
     make('live-old', {}, now - 90 * DAY);                                // root still registered: never swept
-    expect(sweepSessions(home, new Set(['live-old']), 14, now).sort()).toEqual(['closed-old', 'gone-quiet']);
+    expect(sweepSessions(home, new Set(['live-old']), 14, now, false).sort()).toEqual(['closed-old', 'gone-quiet']);
     for (const id of ['closed-recent', 'gone-active', 'live-old']) expect(existsSync(sessionDir(home, id))).toBe(true);
     expect(existsSync(sessionDir(home, 'closed-old'))).toBe(false);
   });
@@ -132,20 +132,60 @@ describe('retention warnings', () => {
     writeFileSync(join(dir, 'meta.json'), JSON.stringify({ rootId: id, title: id, cwd: '/', createdAt: now - 30 * DAY, closedAt: now - daysAgo * DAY }));
     writeFileSync(join(dir, 'archive.jsonl'), archive.map((a) => `${JSON.stringify(a)}\n`).join(''));
   };
-  const rootLine = (id: string, extra: object = {}) => ({ id, parentId: null, sessionId: 's', transcriptPath: '/t.jsonl', closedAt: now, ...extra });
+  const rootLine = (id: string, extra: object = {}) => ({ id, parentId: null, sessionId: 's', transcriptPath: join(home, 't.jsonl'), cwd: home, closedAt: now, ...extra });
+  const meta = (id: string) => JSON.parse(readFileSync(join(sessionDir(home, id), 'meta.json'), 'utf8'));
 
   it('lists unprotected, unkept directories within 7 days of deletion, soonest first, with their stage', () => {
     home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
     // keepDays 14: deletion 8, 6, 2 and 0.5 days away.
-    make('d8', 6); make('d6', 8); make('d2', 12); make('h12', 13.5); make('overdue', 20);
+    make('d8', 6); make('d6', 8); make('d2', 12); make('h12', 13.5);
     make('protected', 13); make('kept', 13);
     markKept(home, 'kept');
+    markWarned(home, 'h12', now - DAY / 2); // already warned, so the deadline itself decides
     const list = expiringSessions(home, new Set(['protected']), 14, now);
-    expect(list.map((s) => [s.rootId, s.stage])).toEqual([['overdue', 1], ['h12', 1], ['d2', 3], ['d6', 7]]);
+    expect(list.map((s) => [s.rootId, s.stage])).toEqual([['h12', 1], ['d2', 3], ['d6', 7]]);
     expect(list.find((s) => s.rootId === 'd2')).toMatchObject({ title: 'd2', cwd: '/', closedAt: now - 12 * DAY, deleteAt: now + 2 * DAY, dismissed: false });
-    expect(sweepSessions(home, new Set(['protected']), 14, now)).toEqual(['overdue']);
+    expect(sweepSessions(home, new Set(), 0, now, false).sort()).toEqual(['d2', 'd6', 'd8', 'h12', 'protected']); // kept survives keepDays 0
     expect(existsSync(sessionDir(home, 'kept'))).toBe(true);
-    expect(sweepSessions(home, new Set(), 0, now).sort()).toEqual(['d2', 'd6', 'd8', 'h12', 'protected']); // kept survives keepDays 0
+  });
+
+  it('holds an overdue directory until a day after its last-day warning reached a client', () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
+    make('never', 20); make('long', 20); make('recent', 20);
+    markWarned(home, 'long', now - 25 * 3_600_000);
+    markWarned(home, 'recent', now - 2 * 3_600_000);
+    expect(markWarned(home, 'recent', now)).toBe(false); // the first delivery counts
+    const list = Object.fromEntries(expiringSessions(home, new Set(), 14, now).map((s) => [s.rootId, s]));
+    expect(list.never).toMatchObject({ stage: 1, deleteAt: now + DAY });
+    expect(list.recent).toMatchObject({ stage: 1, deleteAt: now + 22 * 3_600_000 });
+    expect(sweepSessions(home, new Set(), 14, now)).toEqual(['long']);
+    expect(sweepSessions(home, new Set(), 14, now, false).sort()).toEqual(['never', 'recent']); // tl sessions clean does not hold
+  });
+
+  it('starts warnings over when a root is restored or closed again', () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
+    make('r', 13.5);
+    markWarned(home, 'r', now - 2 * 3_600_000);
+    markDismissed(home, 'r', 1);
+    expect(expiringSessions(home, new Set(), 14, now)[0]).toMatchObject({ stage: 1, dismissed: true });
+    markOpen(home, 'r');
+    expect(meta('r')).not.toHaveProperty('dismissedStage');
+    markClosed(home, 'r', now - 13.5 * DAY);
+    expect(meta('r')).not.toHaveProperty('warnedAt');
+    expect(expiringSessions(home, new Set(), 14, now)[0]).toMatchObject({ stage: 1, dismissed: false, deleteAt: now + DAY });
+  });
+
+  it('never writes or reads through a symlinked meta.json', () => {
+    home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
+    const dir = sessionDir(home, 'evil'), target = join(home, 'target.json');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(target, '{"title":"secret","closedAt":1}');
+    symlinkSync(target, join(dir, 'meta.json'));
+    expect(() => markKept(home, 'evil')).toThrow(/not a regular file/);
+    markClosed(home, 'evil');
+    markOpen(home, 'evil');
+    expect(readFileSync(target, 'utf8')).toBe('{"title":"secret","closedAt":1}');
+    expect(expiringSessions(home, new Set(), 0, now)[0]).toMatchObject({ rootId: 'evil', title: undefined, closedAt: undefined });
   });
 
   it('counts a dismissal only at the stage it was made, keeping a meta-less directory\'s age', () => {
@@ -167,13 +207,16 @@ describe('retention warnings', () => {
 
   it('is restorable only when the root\'s newest archive line has a session and no worktree', () => {
     home = mkdtempSync(join(tmpdir(), 'tl-ret-'));
+    writeFileSync(join(home, 't.jsonl'), '');
     make('ok', 10, [rootLine('ok'), rootLine('child', { parentId: 'ok' })]);
+    make('notranscript', 10, [rootLine('notranscript', { transcriptPath: join(home, 'gone.jsonl') })]);
+    make('nocwd', 10, [rootLine('nocwd', { cwd: join(home, 'gone') })]);
     make('none', 10, [rootLine('child', { parentId: 'none' })]);
     make('worktree', 10, [rootLine('worktree', { branch: 'tl/x' })]);
     make('nosession', 10, [rootLine('nosession', { sessionId: undefined })]);
     make('later', 10, [rootLine('later', { closedAt: now }), rootLine('later', { closedAt: now - 1, branch: 'tl/x' })]);
     const r = Object.fromEntries(expiringSessions(home, new Set(), 14, now).map((s) => [s.rootId, s.restorable]));
-    expect(r).toEqual({ ok: true, none: false, worktree: false, nosession: false, later: true });
+    expect(r).toEqual({ ok: true, none: false, worktree: false, nosession: false, later: true, notranscript: false, nocwd: false });
   });
 
   it('manager deletes, keeps and dismisses, refusing protected trees and names outside sessions', async () => {
@@ -187,6 +230,9 @@ describe('retention warnings', () => {
     const n = await m.spawn({ kind: 'terminal', title: 't', cwd: tmpdir() });
     mkdirSync(sessionDir(home, n.id), { recursive: true });
     await expect(m.deleteSession(n.id)).rejects.toThrow(/still has a node/);
+    const restoring = m.restore('gone').catch((e: Error) => e.message); // reads the archive asynchronously
+    await expect(m.deleteSession('gone')).rejects.toThrow(/still has a node/);
+    expect(await restoring).toMatch(/no archived node/);
     for (const bad of ['..', '../tl-x', 'a/b', '.', 'missing']) await expect(m.deleteSession(bad)).rejects.toThrow(/no session directory/);
     await m.keepSession('keepme');
     await m.dismissRetention(['gone']);

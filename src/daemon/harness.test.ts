@@ -232,7 +232,7 @@ describe('Pi node integration', () => {
     const oldMeta = join(manager!.sessionDirOf(n.id), 'meta.json');
     const meta = JSON.parse(readFileSync(oldMeta, 'utf8'));
     writeFileSync(oldMeta, JSON.stringify({ ...meta, closedAt: Date.now() - 100 * 86_400_000 }));
-    expect(manager!.sweepSessions()).toContain(n.id);
+    expect(manager!.sweepSessions(false)).toContain(n.id);
     expect(existsSync(path)).toBe(false);
     expect(existsSync(adopted)).toBe(true);
     expect(manager!.restart(next.id).ok).toBe(true); await ready(next.id);
@@ -240,7 +240,7 @@ describe('Pi node integration', () => {
     expect(record.previousSessions).toContain(n.sessionId);
     expect((await manager!.transcript(next.id, n.sessionId)).entries).toHaveLength(2);
     await manager!.close(next.id, true);
-    expect(manager!.sweepSessions()).not.toContain(next.id);
+    expect(manager!.sweepSessions(false)).not.toContain(next.id);
     expect((await manager!.transcript(next.id, n.sessionId)).entries).toHaveLength(2);
     const again = await manager!.followup(next.id, 'again'); await ready(again.id);
     expect(again.previousSessions).toContain(n.sessionId);

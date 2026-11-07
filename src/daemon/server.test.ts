@@ -72,6 +72,8 @@ describe('websocket', () => {
     await connect();
     const snapshot = await until(() => seen.find((m) => m.t === 'snapshot'));
     expect(snapshot.t === 'snapshot' && snapshot.retention).toMatchObject([{ rootId: 'old', stage: 1, dismissed: false, restorable: false }]);
+    // Delivering the last-day warning starts the day's hold.
+    await until(() => JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')).warnedAt);
     send({ t: 'sessionDelete', rootId: '..' });
     await until(() => seen.find((m) => m.t === 'error' && m.message === 'no session directory ..'));
     send({ t: 'sessionKeep', rootId: 'old' });

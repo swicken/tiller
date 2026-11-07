@@ -29,7 +29,7 @@ import { buildChildEnv, PtySession } from './pty.js';
 import { count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
 import { addWorktree, closeWorktreeNode, dropQueuedMerges, gitSettled, mergeWorktree, readClaudeJson, refreshGit, refreshGitSoon, refreshMovedTips, setMissing, setupThenLaunch, trustedForWorktree, trustPolicy, worktreeCheck, worktreeCommands, worktreeEnv, worktrees, type MergeResult, type WorktreeCheck, type WorktreeReport } from './worktree-lifecycle.js';
-import { appendEvent, buildDigest, ensureSession, expiringSessions, flushEvents, handoffPrompt, listSessions, markClosed, markDismissed, markKept, markOpen, readEvents, sessionDir, sweepSessions } from './sessions.js';
+import { appendEvent, buildDigest, ensureSession, expiringSessions, flushEvents, handoffPrompt, listSessions, markClosed, markDismissed, markKept, markOpen, markWarned, readEvents, sessionDir, sweepSessions } from './sessions.js';
 import { archivedOf, archiveNode, findArchived, type BranchFate } from './archive.js';
 import { adoptSessionHistory, nodeTranscript, recordedSessions, transcriptFor } from './transcript.js';
 import { active, initialState, interruptKeyPressed, interruptTimeout, ptyExited, reduce, stall, sweep, turnComplete, type HookEvent } from './status.js';
@@ -59,13 +59,6 @@ const SHUTDOWN_WAIT_MS = 7000;
 
 /** The daemon's message to a resumed node whose turn the restart cut off. */
 export const cutOffText = (reason: string) => `The tiller daemon restarted (${reason}) while your turn was running, so that turn was cut off. Your conversation is intact, but the last tool call may not have finished. Check where you were, for example with git status and the commands you last ran, then continue the task.`;
-
-/** `cwd`, or the main checkout when it was a worktree since removed; undefined when neither exists. */
-function usableCwd(cwd: string): string | undefined {
-  if (existsSync(cwd)) return cwd;
-  const at = cwd.indexOf(`${sep}${wt.WORKTREES_DIR}${sep}`), repo = at >= 0 ? cwd.slice(0, at) : undefined;
-  return repo && existsSync(repo) ? repo : undefined;
-}
 
 /**
  * A Claude worktree record's transcript paths that name a missing file where the worktree's project dir holds it: from
@@ -213,6 +206,8 @@ export class NodeManager extends EventEmitter {
   /** The session directories the sweep deletes within a week, soonest first; see refreshRetention. */
   retention: ExpiringSession[] = [];
   private retentionAt = 0;
+  /** Roots restore is reading the archive of, so their session directory cannot be deleted meanwhile. */
+  private readonly restoring = new Set<string>();
   /** repoAccountOf per node, computed on first view; refreshRepoAccounts recomputes it after a config change. */
   private repoAccounts = new Map<string, string | null | undefined>();
 
@@ -344,9 +339,12 @@ export class NodeManager extends EventEmitter {
     return buildDigest(listSessions(this.home).filter((x) => x.newest >= since).flatMap((x) => readEvents(x.dir, since)));
   }
 
-  /** Delete the session directories that daemon.sessionsKeepDays has expired; returns their root ids. */
-  sweepSessions(): string[] {
-    const removed = sweepSessions(this.home, this.protectedRoots(), this.keepDays());
+  /**
+   * Delete the session directories that daemon.sessionsKeepDays has expired; returns their root ids. With `hold` (the
+   * automatic sweep), only those whose last-day warning reached a client a day ago or more.
+   */
+  sweepSessions(hold = true): string[] {
+    const removed = sweepSessions(this.home, this.protectedRoots(), this.keepDays(), Date.now(), hold);
     this.refreshRetention().catch(logError);
     return removed;
   }
@@ -362,6 +360,16 @@ export class NodeManager extends EventEmitter {
     if (JSON.stringify(next) === JSON.stringify(this.retention)) return;
     this.retention = next;
     this.emit('retention', next);
+  }
+
+  /** These entries reached a connected client: a last-day one starts the day the sweep holds it for. */
+  noteDelivered(sessions: ExpiringSession[]): void {
+    let changed = false;
+    for (const s of sessions) {
+      if (s.stage !== 1) continue;
+      try { changed = markWarned(this.home, s.rootId) || changed; } catch (err) { logError(err); } // deleted meanwhile, or a planted meta.json
+    }
+    if (changed) this.refreshRetention().catch(logError);
   }
 
   /** The session directory of `rootId`, which must be a plain directory name under <home>/sessions. */
@@ -393,9 +401,9 @@ export class NodeManager extends EventEmitter {
     await this.refreshRetention();
   }
 
-  /** Roots whose session directory must stay: every node's tree, and trees a node's transcript lives in. */
+  /** Roots whose session directory must stay: every node's tree, trees a node's transcript lives in, and roots being restored. */
   private protectedRoots(): Set<string> {
-    const protectedRoots = new Set<string>();
+    const protectedRoots = new Set<string>(this.restoring);
     const sessionsRoot = resolve(this.home, 'sessions');
     for (const n of this.registry.list()) {
       protectedRoots.add(n.id);
@@ -541,7 +549,7 @@ export class NodeManager extends EventEmitter {
     if ((src.harness ?? 'claude') !== harnessFor(req)) throw new Error('cannot fork a session across harnesses');
     // transcriptPath comes with SessionStart: without it the session has not started and there is nothing to fork.
     if (!src.sessionId || !src.transcriptPath) throw new Error(`refused: ${req.fork} has no session yet to fork`);
-    const want = req.cwd || src.cwd, cwd = usableCwd(want);
+    const want = req.cwd || src.cwd, cwd = wt.usableCwd(want);
     if (!cwd) throw new Error(`refused: ${want} no longer exists`);
     return { sessionId: src.sessionId, cwd, account: src.account };
   }
@@ -559,7 +567,7 @@ export class NodeManager extends EventEmitter {
     if (!existsSync(a.transcriptPath)) throw new Error(`the transcript of ${id} is gone (${a.transcriptPath})`);
     const twin = this.registry.list().find((n) => n.followupOf === id || n.sessionId === a.sessionId);
     if (twin) throw new Error(`refused: ${twin.id} already continues the session of ${id}; send it the prompt instead`);
-    const cwd = usableCwd(a.cwd);
+    const cwd = wt.usableCwd(a.cwd);
     if (!cwd) throw new Error(`refused: ${a.cwd} no longer exists`);
     const parentId = a.parentId && this.registry.get(a.parentId) ? a.parentId : null;
     return this.spawn({ kind: a.harness && a.harness !== 'claude' ? 'agent' : 'claude', ...(a.harness ? { harness: a.harness } : {}), title: title || a.title, cwd, prompt, model: a.model, effort: a.effort, role: a.role, profile: a.profile, parentId, isolation: 'none', byHuman: true, followup: a });
@@ -572,6 +580,12 @@ export class NodeManager extends EventEmitter {
    */
   async restore(id: string): Promise<NodeView> {
     if (this.registry.get(id)) throw new Error(`refused: ${id} is already a node`);
+    if (this.restoring.has(id)) throw new Error(`refused: ${id} is already being restored`);
+    this.restoring.add(id);
+    try { return await this.restoreArchived(id); } finally { this.restoring.delete(id); }
+  }
+
+  private async restoreArchived(id: string): Promise<NodeView> {
     const a = await findArchived(this.home, id, id);
     if (!a) throw new Error(`no archived node ${id}`);
     if (a.parentId !== null) throw new Error(`refused: ${id} was not a root; use tl followup to continue its session`);
@@ -580,7 +594,7 @@ export class NodeManager extends EventEmitter {
     if (!existsSync(a.transcriptPath)) throw new Error(`the transcript of ${id} is gone (${a.transcriptPath})`);
     const twin = this.registry.list().find((n) => n.followupOf === id || n.sessionId === a.sessionId);
     if (twin) throw new Error(`refused: ${twin.id} already continues the session of ${id}`);
-    const cwd = usableCwd(a.cwd);
+    const cwd = wt.usableCwd(a.cwd);
     if (!cwd) throw new Error(`refused: ${a.cwd} no longer exists`);
     const kind: NodeKind = a.harness && a.harness !== 'claude' ? 'agent' : 'claude';
     // archivedOf stored the resolved role and profile; keeping a root's defaults would turn them into overrides.
