@@ -354,6 +354,12 @@ export default function tillerPiExtension(
     await sendMeasure();
   });
 
+  // A compaction keeps the session; the daemon reads SessionStart with source "compact" as "point this node at its note".
+  pi.on("session_compact", async (_event, ctx) => {
+    currentCtx = ctx;
+    if (client) await forwardHook({ ...sessionStartHook(info(ctx)), source: "compact" });
+  });
+
   pi.on("session_shutdown", async (event, ctx) => {
     currentCtx = ctx;
     runActive = false;

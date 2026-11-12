@@ -173,6 +173,17 @@ describe('Codex daemon gap', () => {
   });
 });
 
+describe('Codex compaction', () => {
+  it('reports a completed contextCompaction item as SessionStart with source compact', async () => {
+    const { client } = await setup([]);
+    bridge.handle({ method: 'item/started', params: { item: { type: 'contextCompaction' } } });
+    bridge.handle({ method: 'item/completed', params: { item: { type: 'contextCompaction' } } });
+    await bridge.stop();
+    const compacts = vi.mocked(client.hook).mock.calls.filter(([e]) => e.hook_event_name === 'SessionStart' && e.source === 'compact');
+    expect(compacts).toHaveLength(1);
+  });
+});
+
 describe('Codex shutdown', () => {
   it('drains accepted user, tool, answer and lifecycle events and rejects later events/polls', async () => {
     const { client, fatal } = await setup([]);

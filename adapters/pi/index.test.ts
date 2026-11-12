@@ -145,6 +145,18 @@ describe("tiller pi extension", () => {
     await pi.emit("session_shutdown", { reason: "quit" });
   });
 
+  it("reports a compaction as SessionStart with source compact", async () => {
+    setBaseEnv();
+    const calls = stubFetch();
+    const pi = fakePi();
+    nativeExtension(pi.api, { getVersion: async () => "1.3.0" });
+    await pi.emit("session_start", { reason: "startup" }, fakeContext());
+    await pi.emit("session_compact", { reason: "manual" }, fakeContext());
+    const starts = calls.filter((call) => call.body?.hook_event_name === "SessionStart");
+    expect(starts.map((call) => call.body?.source)).toEqual([undefined, "compact"]);
+    await pi.emit("session_shutdown", { reason: "quit" });
+  });
+
   it("fails closed when on() accepts unknown event names but the host event contract is unsupported", async () => {
     setBaseEnv();
     const calls = stubFetch();

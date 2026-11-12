@@ -180,6 +180,10 @@ When the user asks for workers or subagents in this Tiller session, use the ${na
     } else if (p.method === 'item/started' || p.method === 'item/completed') {
       const item = v.item;
       if (!item || typeof item.type !== 'string') return;
+      if (item.type === 'contextCompaction' && p.method === 'item/completed') { // the daemon reads this like Claude's SessionStart after /compact
+        await this.report(() => this.client.hook({ hook_event_name: 'SessionStart', source: 'compact', session_id: this.o.sessionId,
+          transcript_path: this.o.transcriptPath, model: this.model }));
+      }
       if (item.type === 'userMessage' && p.method === 'item/completed' && Array.isArray(item.content)) {
         this.append('user', item.content.filter((c: any) => c?.type === 'text' && typeof c.text === 'string'));
       }
