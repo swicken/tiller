@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
+import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, Question, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
 import type { ReviewComment } from './diff';
 import { arrange, besideSession, pickInitial, rootOf } from './sidebar/sessions';
 import { insertSorted, type Nodes } from './sidebar/tree';
@@ -43,6 +43,10 @@ export interface State {
   confirms: Confirm[];
   activity: Activity[];
   activityOpen: boolean;
+  /** Questions agents raised for the human, by id, as the snapshot and question messages gave them. */
+  questions: Record<string, Question>;
+  /** The Needs you drawer is open; focusId is the question to scroll to and focus. */
+  needs: { open: boolean; focusId?: string };
   connected: boolean;
   /** Reconnect attempts since the last successful connection. */
   retry: number;
@@ -98,7 +102,7 @@ const storedTools = readPref('tl.showTools') === '1';
 
 let state: State = {
   nodes: {}, order: [], sessionOrder: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
-  connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
+  questions: {}, needs: { open: false }, connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
   transcriptOpen: false, shellOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
 };
 const subs = new Set<() => void>();
@@ -132,7 +136,9 @@ export const setActivityOpen = (activityOpen: boolean) => update((s) => ({
   activityOpen,
   ...(activityOpen ? { activity: allRead(s.activity) } : {}),
 }));
-export const dismissToast = (id: number) => update((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+export const openNeeds = (focusId?: string) => update(() => ({ needs: { open: true, focusId } }));
+export const closeNeeds = () => update(() => ({ needs: { open: false } }));
+export const dismissToast =(id: number) => update((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
 export const dropConfirm = (confirmId: string) => update((s) => ({ confirms: s.confirms.filter((c) => c.confirmId !== confirmId) }));
 export const setConnected = (connected: boolean, retry = 0) => update(() => ({ connected, retry, ...(!connected ? { usageScanning: false } : {}) }));
 export const openDialog = (dialog: Dialog | null) => update(() => ({ dialog }));
@@ -204,7 +210,8 @@ export function applyServer(m: ServerMessage) {
         order = arrange(nodes, order, sessionOrder);
         const base = { ...s, order, opened: s.opened.filter((id) => nodes[id]) };
         const sel = s.selected && nodes[s.selected] ? s.selected : pickInitial(nodes, order, s.selected ? undefined : wantedNode);
-        return { confirms: [], order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
+        const questions = Object.fromEntries((m.questions ?? []).map((q) => [q.id, q]));
+        return { confirms: [], questions, order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
       });
     case 'update':
       if (m.update.failed && m.update.failed !== state.update?.failed) toast(m.update.failed, undefined, 'bad');
@@ -233,6 +240,8 @@ export function applyServer(m: ServerMessage) {
         if (isNew && s.awaitSpawn) return { order, awaitSpawn: false, archived: null, ...choose(s, nodes, m.node.id) };
         return { nodes, order };
       });
+    case 'question':
+      return update((s) => ({ questions: { ...s.questions, [m.question.id]: m.question } }));
     case 'removed':
       return update((s) => {
         const { [m.id]: gone, ...nodes } = s.nodes;

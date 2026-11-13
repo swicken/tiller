@@ -2,6 +2,7 @@
 //   node ui/mock-server.mjs            ws on :7789; also serves ui/dist at http://127.0.0.1:7789/?k=mock when it has been built
 // Mutations (spawn, close, restart, rename, resume, prune, select, merge, mute, dnd) work in memory; a confirm request arrives
 // 15 s after connecting. diff on a worktree node returns a made-up diff; send logs the text and replies queued.
+// questions: two open, one answered and one withdrawn at connect, plus a new one 20 s in; a question message answers or dismisses one in memory.
 // history, transcript, followup and spawn with fork answer from the fake archive below; tl-d and the archived "auth refactor" have two sessions.
 // conversations and conversation answer from the same tree (see conversationFor); tl-test and tl-ui exchange peer messages.
 // claudeAccounts answers with three accounts (one logged out); a root claude spawn takes its chosen or project-mapped account, children inherit it.
@@ -196,8 +197,36 @@ function conversationsFor(id) {
   return { items: [row(id, undefined, 'parent', n.parentId && known(n.parentId) ? n.parentId : 'human'), ...children, ...peers] };
 }
 
+// Questions for the human (ask_human), kept in memory. Answers and dismissals are applied and broadcast as the daemon does;
+// nothing is delivered to a node.
+const questions = new Map();
+const askQuestion = (id, nodeId, extra) => {
+  const rootId = (() => { let n = nodes.get(nodeId); while (n?.parentId) n = nodes.get(n.parentId); return n?.id ?? nodeId; })();
+  const q = { id, rootId, nodeId, askedBy: { id: nodeId, title: nodes.get(nodeId)?.title ?? nodeId }, state: 'open', askedAt: Date.now(), ...extra };
+  questions.set(id, q);
+  return q;
+};
+askQuestion('q-1a2b3c4d', 'tl', { question: 'Should /v2 keep the /v1 alias?', context: 'The v1 routes are used by two internal clients.\nRemoving the alias breaks them until they are updated.', choices: ['Keep the alias', 'Drop it'], askedAt: now - 4 * MIN });
+askQuestion('q-9f8e7d6c', 'dc-mig', { question: 'Which region is the staging bucket in?', assumption: 'assuming eu-west-1', askedAt: now - 12 * MIN });
+askQuestion('q-3c4d5e6f', 'tl', { question: 'Should the release notes mention the new drawer?', choices: ['Yes', 'No'], state: 'answered', askedAt: now - 30 * MIN, resolvedAt: now - 20 * MIN,
+  answer: { choice: 'Yes', text: 'Under Improvements.', at: now - 20 * MIN }, delivery: { state: 'queued', messageId: 'm-mock-1', at: now - 20 * MIN } });
+askQuestion('q-55aa01bc', 'tl-ui', { question: 'May I delete the legacy fixtures?', state: 'withdrawn', askedAt: now - 3 * 3600_000, resolvedAt: now - 2 * 3600_000, withdrawn: { by: 'tl-ui', reason: 'answered in chat' } });
+
 const clients = new Set();
 const broadcast = (m) => clients.forEach((c) => c.ws.send(JSON.stringify(m)));
+function respondToQuestion(m, send) {
+  const q = questions.get(m.id);
+  const fail = (message) => send({ t: 'error', id: q?.nodeId, message });
+  if (!q) return fail(`no such question: ${m.id}`);
+  if (q.state !== 'open') return fail(`${q.id} was already ${q.state}`);
+  if (m.action === 'answer') {
+    if (m.choice === undefined && m.text === undefined) return fail('an answer needs a choice or text');
+    if (m.choice !== undefined && !q.choices?.includes(m.choice)) return fail(`${m.choice} is not one of the choices`);
+    Object.assign(q, { state: 'answered', answer: { ...(m.choice !== undefined && { choice: m.choice }), ...(m.text !== undefined && { text: m.text }), at: Date.now() }, delivery: { state: 'delivered', at: Date.now() } });
+  } else Object.assign(q, { state: 'dismissed' });
+  q.resolvedAt = Date.now();
+  broadcast({ t: 'question', question: q });
+}
 const touch = (n, patch) => { Object.assign(n.status, patch, { changedAt: Date.now() }); broadcast({ t: 'node', node: n }); };
 
 // Light life: the working node's context creeps up.
@@ -229,7 +258,12 @@ wss.on('connection', (ws) => {
       if (m.t !== 'auth' || m.token !== 'mock') return ws.close();
       authed = true;
       clients.add(client);
-      send({ t: 'snapshot', nodes: [...nodes.values()], dnd, sessionOrder: tabOrder(), ...(updateStatus ? { update: updateStatus } : {}) });
+      send({ t: 'snapshot', nodes: [...nodes.values()], dnd, sessionOrder: tabOrder(), questions: [...questions.values()], ...(updateStatus ? { update: updateStatus } : {}) });
+      // A new question 20 s in, to exercise the toast.
+      setTimeout(() => {
+        if (ws.readyState !== 1 || questions.has('q-7b8c9d0e')) return;
+        broadcast({ t: 'question', question: askQuestion('q-7b8c9d0e', 'tl-test', { question: 'Is it fine to run the suite against the shared database?', choices: ['Fine', 'Use a copy'] }) });
+      }, 20_000);
       if (!updateScenario) setTimeout(() => ws.readyState === 1 && send({ t: 'confirm', confirmId: 'c1', text: 'ui polish wants to close node "shell".\nIt has been idle for 40 minutes.' }), 15_000);
       return;
     }
@@ -319,6 +353,7 @@ wss.on('connection', (ws) => {
         broadcast({ t: 'node', node: n });
         break;
       }
+      case 'question': respondToQuestion(m, send); break;
       case 'mute': if (n) { n.muted = m.muted || undefined; broadcast({ t: 'node', node: n }); } break;
       case 'dnd': dnd = m.on ? { on: true, ...(m.minutes && { until: Date.now() + m.minutes * MIN }) } : { on: false }; broadcast({ t: 'dnd', ...dnd }); break;
       case 'sessionOrder': sessionOrder = m.ids; broadcast({ t: 'sessionOrder', ids: sessionOrder }); break;
