@@ -7,7 +7,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
-import { APPROVAL_ID, HARNESSES, shellNodeId, shellStreamId, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type ServerMessage, type Usage } from '../shared/protocol.js';
+import { APPROVAL_ID, HARNESSES, shellNodeId, shellStreamId, type ClientMessage, type Dnd, type NativeNotification, type NodeView, type Question, type ServerMessage, type Usage } from '../shared/protocol.js';
 import { loadConfig } from './config.js';
 import { DEFAULT_PORT } from './home.js';
 import type { NodeManager, NotifyEvent } from './manager.js';
@@ -59,6 +59,8 @@ const clientMessage = z.discriminatedUnion('t', [
     .refine((m) => !m.binary || /^[\x00-\xff]*$/.test(m.data)),
   z.object({ t: z.literal('resize'), id, cols: size, rows: size }),
   z.object({ t: z.literal('select'), id }),
+  z.object({ t: z.literal('question'), id: z.string().regex(/^q-[0-9a-f]{8}$/), action: z.enum(['answer', 'dismiss']), choice: z.string().min(1).max(120).optional(), text: z.string().min(1).max(8000).optional() })
+    .refine((m) => (m.action === 'answer' ? m.choice !== undefined || m.text !== undefined : m.choice === undefined && m.text === undefined)),
   z.object({ t: z.literal('spawn'), ...SPAWN_FIELDS, parentId: z.string().nullable().optional() }),
   z.object({ t: z.literal('close'), id, force: z.boolean().optional(), worktree: z.enum(['keep', 'discard']).optional() }),
   z.object({ t: z.literal('merge'), id }),
@@ -203,6 +205,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
   manager.on('usageSources', (sources) => broadcast({ t: 'usageSources', sources }));
   manager.on('usage', (usage: Usage) => broadcast({ t: 'usage', usage }));
   manager.on('sessionOrder', (ids: string[]) => broadcast({ t: 'sessionOrder', ids }));
+  manager.on('question', (question: Question) => broadcast({ t: 'question', question }));
   // While a restart drains, every node change may change who it waits for.
   let lastDrain = '';
   const syncDrain = () => {
@@ -266,7 +269,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
         if (regained && wasAway && awaySince !== undefined) {
           const since = awaySince;
           if (Date.now() - since > loadConfig(null, manager.home).daemon.digestAfterMinutes * 60_000) {
-            const items = await manager.digest(since);
+            const items = [...manager.questions.digest(since), ...(await manager.digest(since))];
             if (items.length) sendTo(c, { t: 'digest', since, items });
           }
         }
@@ -274,6 +277,13 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
         return;
       }
       case 'select': c.selected = m.id; manager.select(m.id); return;
+      case 'question':
+        // The question broadcast is the reply. A refusal names the owner node in `id` (the UI reads error ids as nodes) and the question in `questionId`.
+        try {
+          if (m.action === 'dismiss') manager.questions.dismiss(m.id);
+          else manager.questions.answer(m.id, m);
+        } catch (err) { sendTo(c, { t: 'error', message: (err as Error).message, id: manager.questions.get(m.id)?.nodeId, questionId: m.id }); }
+        return;
       case 'spawn': {
         const { t: _, ...req } = m;
         await manager.spawn({ ...req, byHuman: true });
@@ -354,7 +364,7 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
           c.kind = msg.client;
           syncUpdateChecks();
           clearTimeout(authTimer);
-          sendTo(c, { t: 'snapshot', update: updates.status(), nodes: manager.list().map(forUi), usage: manager.usage, usageSources: manager.usageRegistry.sources, dnd, drain: manager.drainView(), sessionOrder: manager.sessionOrder() });
+          sendTo(c, { t: 'snapshot', update: updates.status(), nodes: manager.list().map(forUi), usage: manager.usage, usageSources: manager.usageRegistry.sources, dnd, drain: manager.drainView(), sessionOrder: manager.sessionOrder(), questions: manager.questions.recent() });
           for (const [confirmId, { text }] of pendingConfirms) sendTo(c, { t: 'confirm', confirmId, text });
         } else {
           ws.close(4401, 'auth required');

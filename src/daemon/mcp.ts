@@ -7,7 +7,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { dndActive, EFFORTS, finished, ISOLATIONS, NODE_KINDS, ROLES, type ArchivedNode, type Diff, type Dnd, type NodeView, type Outcome } from '../shared/protocol.js';
+import { dndActive, EFFORTS, finished, ISOLATIONS, NODE_KINDS, ROLES, type ArchivedNode, type Diff, type Dnd, type NodeView, type Outcome, type Question } from '../shared/protocol.js';
 import { updateLine, type Updater } from './update.js';
 import { fmtUsd, subtreeSpend } from '../shared/spend.js';
 import { treeOrder } from '../shared/tree.js';
@@ -29,6 +29,14 @@ const MAX_WRITE_CHARS = 2000;
  * could rewrite the line) and no invisible format characters (bidi overrides could show the human another command).
  */
 const PRINTABLE_LINE = /^[^\p{Cc}\p{Cf}\u2028\u2029]*$/u; // empty passes: command has min(1), and an empty why means none
+/** PRINTABLE_LINE that also allows line breaks and tabs, for the background of a question. */
+const PRINTABLE_TEXT = /^(?:[^\p{Cc}\p{Cf}\u2028\u2029]|[\n\t])*$/u;
+const QUESTION_ID = /^q-[0-9a-f]{8}$/;
+const ASK_DESCRIPTION = 'Put a question or decision in front of the human in tiller\'s Needs you list, where it stays until they deal with it, however much chat scrolls past. It does not wait: the reply gives the question\'s id at once, and the answer arrives later as a message from "human (answer to <id>)". '
+  + 'Use it for something only the human can settle when they may not be reading along; not for status updates, not for what you can find out yourself, and (if you have a parent) not for questions about your brief, which go to your parent with send. '
+  + '`question` is one line the human can answer without opening your chat (up to 500 characters); background goes in `context`. `choices` (2 to 6 short labels) become buttons, and the human may also type a free answer. '
+  + '`assumption` says what you will do meanwhile if nobody answers; leave it out only when your work cannot continue without the answer. One decision per call, at most 5 open at a time. `replaces` withdraws an earlier question of yours in favour of this one. '
+  + 'If the human answers in chat instead, call withdraw_question. Asking the same open question again returns the same id.';
 const IDEMPOTENCY_MS = 24 * 3600_000;
 const TRANSCRIPT_CAP = 200_000;
 const HISTORY_LINES = 50;
@@ -190,6 +198,36 @@ async function runGate(m: NodeManager, id: string, gate: NonNullable<Config['gat
   const text = left ? `${head}\nFix it and call report_outcome again.` : `${head}\nNo attempts left: your outcome is recorded as failed${v.parentId ? ' and your parent was told' : ''}.`;
   if (late()) deliver(m, DAEMON, id, text, { fromLabel: 'tiller (completion gate)', replyTo: null }).catch(logError);
   return { text, data: { ok: false, gate: 'failed', attemptsLeft: left } };
+}
+
+/** list_questions output: one block per question, as the caller sees it. */
+function questionsText(qs: Question[], caller: string, now: number): string {
+  const age = (at: number) => { const a = fmtAge(now - at); return a === 'now' ? 'just now' : a; };
+  return qs.map((q) => {
+    const open = q.state === 'open';
+    const when = open ? `open ${age(q.askedAt)}` : `${q.state} ${age(q.resolvedAt ?? q.askedAt)} ago${q.state === 'withdrawn' && q.withdrawn ? ` by ${q.withdrawn.by}` : ''}`;
+    const owner = q.nodeId === caller ? 'you' : `${q.askedBy.id} "${q.askedBy.title}"`;
+    const answer = [q.answer?.choice, q.answer?.text].filter((x) => x !== undefined).join(' - ');
+    return [
+      `${q.id} ${when} · ${owner}`, `  ${q.question}`,
+      q.choices && `  choices: ${q.choices.join(' | ')}`, q.assumption && `  meanwhile: ${q.assumption}`,
+      q.state === 'answered' && `  answer: ${answer}${q.delivery ? ` (${q.delivery.state})` : ''}`,
+      q.withdrawn?.reason && `  reason: ${q.withdrawn.reason}`, q.replacedBy && `  replaced by ${q.replacedBy}`,
+    ].filter(Boolean).join('\n');
+  }).join('\n') || '(no questions)';
+}
+
+/** What answer_question says about the answer's trip to its owner. */
+function deliveryText(q: Question, m: NodeManager): string {
+  const who = m.view(q.nodeId)?.title ?? q.nodeId;
+  const d = q.delivery;
+  switch (d?.state) {
+    case 'delivered': return `delivered to ${who}`;
+    case 'queued': return `queued for ${who} (it is working)`;
+    case 'unconfirmed': return `sent to ${who}, but delivery is unconfirmed; it can still read the answer with list_questions`;
+    case 'dropped': return `not delivered: ${d.detail ?? 'the node was closed'}`;
+    default: return `waiting to tell ${who}${d?.detail ? `: ${d.detail}` : ''}`;
+  }
 }
 
 type CloseResult = { closed: string[]; gone: string[]; notes: string[]; errors: string[] };
@@ -678,6 +716,69 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
       c.manager.suggest(c.caller, a.command, a.why);
       return { text: 'Suggested in the human\'s Terminal tab. They may run it, edit it or ignore it, and you will not see the output.', data: { ok: true } };
     }),
+
+  ask_human: tool(
+    'Ask the human',
+    ASK_DESCRIPTION,
+    {
+      question: z.string().min(1).max(500).regex(PRINTABLE_LINE, 'must be one line of printable characters'),
+      context: z.string().max(4000).regex(PRINTABLE_TEXT, 'must be printable text').optional(),
+      choices: z.array(z.string().min(1).max(120).regex(PRINTABLE_LINE, 'must be one line of printable characters')).min(2).max(6).optional(),
+      assumption: z.string().min(1).max(300).regex(PRINTABLE_LINE, 'must be one line of printable characters').optional(),
+      replaces: z.string().regex(QUESTION_ID).optional(),
+    },
+    async (c, a) => {
+      if (c.caller === HUMAN) throw new Error('ask_human is only for agent nodes');
+      if (c.manager.registry.get(c.caller)?.kind === 'terminal') throw new Error('refused: a terminal node cannot ask the human');
+      const { question, replayed } = c.manager.questions.ask(c.caller, a);
+      const { id } = question;
+      return {
+        text: `${replayed ? `That question is already open as ${id}. ` : `Recorded as ${id} and shown to the human in tiller's Needs you list. `}This call does not wait: carry on or end your turn. `
+          + `The answer arrives later as a message from "human (answer to ${id})". list_questions shows your open questions and recent answers.`,
+        data: { id, state: question.state, ...(replayed ? { replayed: true } : {}) },
+      };
+    }),
+
+  withdraw_question: tool(
+    'Withdraw a question',
+    'Take back a question you put in front of the human with ask_human, because it no longer matters (for instance they answered in chat) or you found the answer yourself. Its owner, or an ancestor of its owner, may. Not an error when the human got there first: the reply says what happened, including their answer when there is one.',
+    { id: z.string().regex(QUESTION_ID), reason: z.string().max(300).regex(PRINTABLE_LINE, 'must be one line of printable characters').optional() },
+    async (c, a) => {
+      const q = c.manager.questions.withdraw(c.caller, a.id, a.reason);
+      if (q.state === 'withdrawn' && q.withdrawn?.by === c.caller) return { text: `${q.id} withdrawn`, data: { ok: true, state: q.state } };
+      const answer = [q.answer?.choice, q.answer?.text].filter((x) => x !== undefined).join(' - ');
+      return { text: `${q.id} was already ${q.state}${answer ? `: ${answer}` : ''}`, data: { ok: false, state: q.state, ...(q.answer ? { answer: q.answer } : {}) } };
+    }),
+
+  list_questions: tool(
+    'List questions for the human',
+    'List the questions you and your descendants put in front of the human with ask_human, open ones first, then those answered, dismissed or withdrawn in the last 24 hours (`all`: everything still kept, 7 days), with each answer and whether it reached its owner. Use it after a restart or a compaction to find what is still open and what was answered.',
+    { all: z.boolean().optional() },
+    async (c, a) => {
+      const qs = c.manager.questions.visibleTo(c.caller, a.all);
+      return { text: questionsText(qs, c.caller, Date.now()), data: qs };
+    }),
+
+  answer_question: tool(
+    'Answer a question',
+    'Answer or dismiss a question an agent asked with ask_human: give `choice` (one of its choices, verbatim), `text`, or both; or `dismiss` true to drop it without telling the agent. The answer is sent to the asking node as a message. Only the human may call this.',
+    {
+      id: z.string().regex(QUESTION_ID),
+      choice: z.string().min(1).max(120).optional(),
+      text: z.string().min(1).max(8000).optional(),
+      dismiss: z.boolean().optional(),
+    },
+    async (c, a) => {
+      const qs = c.manager.questions;
+      if (a.dismiss) {
+        if (a.choice !== undefined || a.text !== undefined) throw new Error('dismiss takes no choice or text');
+        return { text: `dismissed ${qs.dismiss(a.id).id}; the agent is not told`, data: { ok: true } };
+      }
+      const answered = qs.answer(a.id, a);
+      await qs.delivered(a.id);
+      const q = qs.get(a.id) ?? answered;
+      return { text: `answered ${q.id}; ${deliveryText(q, c.manager)}`, data: q };
+    }, true),
 
   report_outcome: tool(
     'Report task outcome',

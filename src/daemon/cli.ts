@@ -19,7 +19,7 @@ import { buildChildEnv, loginShellPath } from './pty.js';
 import { formatEvent, listSessions, parseSince, readEvents, readNewEvents, sessionDir, type EventCursor, type SessionEvent } from './sessions.js';
 import { fmtAge } from '../shared/format.js';
 import { fmtUsd } from '../shared/spend.js';
-import { HARNESSES, type Harness, type NodeKind } from '../shared/protocol.js';
+import { HARNESSES, type Harness, type NodeKind, type Question } from '../shared/protocol.js';
 import { carry, mainCheckout, protectedBranches, runCommands, WORKTREES_DIR } from './worktree.js';
 import { cancelDrain, drainDaemon, restartDaemon, findDaemon, humanEnv, pickOrchestrator, spawnReload, startDaemon, upDir, type OrchestratorCandidate } from './up.js';
 
@@ -65,6 +65,11 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl diff <id> [--stat]                               what a worktree node changed since it branched, committed or not
   tl send [--now] <id> "text"                         --now interrupts the target's turn if it is working (a steer)
   tl withdraw <messageId>                             take back a queued message that has not been delivered yet
+  tl questions [--all]                                what agents asked the human with ask_human: open ones, with numbered choices
+                                                      (--all adds those resolved in the last 7 days)
+  tl answer <id> [TEXT] [--choice N|LABEL]            answer a question (human only); N is the choice's number in tl questions;
+                                                      the answer reaches the asking node as a message
+  tl dismiss <id>                                     drop a question without answering it; the agent is not told
   tl read <id> [outcome|summary|transcript|terminal] [--lines N]   (all but terminal also read a closed node)
   tl history [--root ID] [QUERY]                      closed Claude nodes, newest first, of one tree or all; QUERY filters by
                                                       title, first prompt or last message
@@ -147,6 +152,7 @@ const { values: f, positionals: pos } = parseArgs({
     worktree: { type: 'boolean' }, 'no-app': { type: 'boolean' }, since: { type: 'string' }, follow: { type: 'boolean' }, 'keep-branch': { type: 'boolean' }, discard: { type: 'boolean' }, detached: { type: 'boolean' }, check: { type: 'boolean' }, close: { type: 'boolean' }, 'when-idle': { type: 'boolean' }, stat: { type: 'boolean' }, preset: { type: 'string' },
     after: { type: 'string', multiple: true }, 'after-success': { type: 'string', multiple: true }, now: { type: 'boolean' },
     fork: { type: 'string' }, root: { type: 'string' }, session: { type: 'string' }, base: { type: 'string' }, account: { type: 'string' },
+    all: { type: 'boolean' }, choice: { type: 'string' },
   },
 });
 /** `--after a,b --after c` as [a, b, c]; undefined when absent. */
@@ -277,6 +283,38 @@ switch (cmd) {
   case 'withdraw':
     if (!pos[0]) fail(usage());
     await call('withdraw', { messageId: pos[0] });
+    break;
+  case 'questions': {
+    const now = Date.now();
+    const qs = ((await call('list_questions', { all: f.all }, false)).data ?? []) as Question[];
+    const age = (at: number) => fmtAge(now - at).replace(/^now$/, 'just now');
+    for (const q of qs) {
+      console.log(`${q.id}  ${q.state === 'open' ? `open ${age(q.askedAt)}` : `${q.state} ${age(q.resolvedAt ?? q.askedAt)} ago`}  ${q.askedBy.id} "${q.askedBy.title}"`);
+      console.log(`  ${q.question}`);
+      if (q.choices) console.log(`  ${q.choices.map((c, i) => `${i + 1}) ${c}`).join('   ')}`);
+      if (q.state === 'open') console.log(q.assumption ? `  meanwhile: ${q.assumption}` : '  waiting on you');
+      if (q.answer) console.log(`  answer: ${[q.answer.choice, q.answer.text].filter((x) => x !== undefined).join(' - ')}${q.delivery ? ` (${q.delivery.state})` : ''}`);
+      if (q.withdrawn?.reason) console.log(`  withdrawn by ${q.withdrawn.by}: ${q.withdrawn.reason}`);
+    }
+    if (!qs.length) console.log('(no questions)');
+    break;
+  }
+  case 'answer': {
+    if (!pos[0] || (pos.length < 2 && !f.choice)) fail(usage());
+    let choice = f.choice;
+    if (choice !== undefined) {
+      // A label wins; otherwise a number is the choice's place in `tl questions`. The API only takes labels.
+      const q = (((await call('list_questions', { all: true }, false)).data ?? []) as Question[]).find((x) => x.id === pos[0]);
+      if (!q) fail(`no such question: ${pos[0]}`);
+      if (!q?.choices?.includes(choice)) choice = /^\d+$/.test(choice) ? q?.choices?.[Number(choice) - 1] : undefined;
+      if (choice === undefined) fail(q?.choices ? `${f.choice} is not one of the choices of ${pos[0]}; see tl questions` : `${pos[0]} has no choices`);
+    }
+    await call('answer_question', { id: pos[0], choice, text: pos.slice(1).join(' ') || undefined });
+    break;
+  }
+  case 'dismiss':
+    if (!pos[0]) fail(usage());
+    await call('answer_question', { id: pos[0], dismiss: true });
     break;
   case 'read':
     if (!pos[0]) fail(usage());

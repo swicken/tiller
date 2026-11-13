@@ -139,6 +139,63 @@ describe('createNotifier', () => {
     expect([silent.calls, dnd.calls, watched.calls]).toEqual([[], [], []]);
   });
 
+  describe('a question for the human', () => {
+    const q = { nodeId: 'n1', question: 'Should /v2 keep the /v1 alias?' };
+
+    it('posts at the needsYou level with the question as body, and the session title as subtitle when it differs', () => {
+      const s = setup(0, { nodes: [node('tiller', {}, { id: 'r' }), node('api worker', {}, { parentId: 'r' })] });
+      s.notify.question(q, true);
+      expect(s.calls).toEqual([[
+        '-title', 'api worker', '-subtitle', 'tiller', '-message', 'Asks: Should /v2 keep the /v1 alias?', '-group', 'n1', '-sound', 'default', '-execute', 'n1',
+      ]]);
+      expect(s.logs).toEqual(['notify n1 question: sent sound (kinds.needsYou)']);
+      const own = setup(0, { nodes: [node('api')] });
+      own.notify.question(q, true);
+      expect(own.calls[0]).not.toContain('-subtitle');
+    });
+
+    it('cuts the question at 120 characters', () => {
+      const s = setup();
+      s.notify.question({ nodeId: 'n1', question: 'x'.repeat(200) }, true);
+      expect(s.calls[0][s.calls[0].indexOf('-message') + 1]).toBe(`Asks: ${'x'.repeat(120)}`);
+    });
+
+    it('follows the needsYou level: nothing for silent, muted, watched or do not disturb, a banner in quiet hours', () => {
+      const cases = [
+        setup(0, { cfg: { kinds: { ...DEFAULTS.kinds, needsYou: 'silent' } } }),
+        setup(0, { nodes: [node('muted', {}, { muted: true })] }),
+        setup(1), setup(0, { dnd: { on: true } }),
+      ];
+      for (const s of cases) { s.notify.question(q, true); expect(s.calls).toEqual([]); }
+      const quiet = setup(0, { cfg: { quietHours: '00:00-23:59' } });
+      quiet.notify.question(q, true);
+      expect(quiet.calls).toHaveLength(1);
+      expect(quiet.calls[0]).not.toContain('-sound');
+      expect(quiet.logs).toEqual(['notify n1 question: sent banner (quietHours)']);
+    });
+
+    it('a changed question posts nothing, and one for a node that is gone posts nothing', () => {
+      const s = setup();
+      s.notify.question(q, false);
+      s.notify.question({ nodeId: 'gone', question: 'Anyone?' }, true);
+      expect(s.calls).toEqual([]);
+    });
+
+    it('is throttled to one per node every 5 s without touching the blocked-prompt notification of that node', () => {
+      const s = setup();
+      s.notify.question(q, true);
+      s.tick(4000);
+      s.notify.question({ nodeId: 'n1', question: 'A second?' }, true); // throttled
+      s.notify(ev('needsYou')); // the same node blocked on a prompt: its own key
+      expect(s.calls).toHaveLength(2);
+      s.notify(ev('needsYou')); // and that one throttles on its own
+      expect(s.calls).toHaveLength(2);
+      s.tick(1000);
+      s.notify.question({ nodeId: 'n1', question: 'A third?' }, true);
+      expect(s.calls).toHaveLength(3);
+    });
+  });
+
   it('never offers muted, watched, DND or silent notifications to native delivery', () => {
     const native = vi.fn<NonNullable<NotifierDeps['notifyNative']>>(async () => true);
     for (const s of [
