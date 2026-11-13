@@ -406,8 +406,8 @@ export class NodeManager extends EventEmitter {
    * and be trusted by Claude. Any failure removes the worktree and branch and discards the record.
    */
   async spawn(req: SpawnRequest): Promise<NodeView> {
-    // A follow-up that keeps its archived title is not asked again: titles from before the rule stay as they are.
-    const bad = req.followup && req.title === req.followup.title ? undefined : reservedTitle(req.title);
+    // Every spawn, a follow-up too: its archived title comes from archive.jsonl, which an agent can write.
+    const bad = reservedTitle(req.title);
     if (bad) throw new Error(bad);
     if (!req.byHuman && req.parentId && this.runtimes.get(req.parentId)?.busy === 'changing harness') throw new Error('parent is changing harness');
     req = spawnTarget(req, req.parentId ? this.registry.get(req.parentId) : undefined);
