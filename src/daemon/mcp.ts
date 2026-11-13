@@ -230,7 +230,7 @@ function deliveryText(q: Question, m: NodeManager): string {
   }
 }
 
-type CloseResult ={ closed: string[]; gone: string[]; notes: string[]; errors: string[] };
+type CloseResult = { closed: string[]; gone: string[]; notes: string[]; errors: string[] };
 
 /**
  * Reply to a close that waits for the human: pending now, then the decision as a notice to the caller, shaped like a

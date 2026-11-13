@@ -29,7 +29,7 @@ for (const live of [join(homedir(), '.tiller'), process.env.TL_HOME]) {
 }
 // No banners on the owner's screen from a test daemon (a question raises one at the needsYou level).
 writeFileSync(join(HOME, 'config.json'), JSON.stringify({ notifications: { kinds: { needsYou: 'silent', done: 'silent', errored: 'silent', exited: 'silent', approval: 'silent' } } }));
-const freePort =() => new Promise<number>((ok, fail) => {
+const freePort = () => new Promise<number>((ok, fail) => {
   const s = createServer().once('error', fail).listen(0, '127.0.0.1', () => { const { port } = s.address() as { port: number }; s.close(() => ok(port)); });
 });
 const PORT = String(process.env.TL_E2E_PORT ?? await freePort());

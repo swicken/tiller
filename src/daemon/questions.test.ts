@@ -99,8 +99,9 @@ beforeEach(() => {
   m.on('question', (q: Question, isNew: boolean) => changes.push([q, isNew]));
   qs = new Questions(m.manager);
 });
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await flushEvents(); // appends still pending would fail, and log, once the home is gone
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -348,6 +349,17 @@ describe('a closed owner', () => {
     expect(qs.get(answered.id)?.delivery?.state).toBe('dropped');
   });
 
+  it('sends an answer to the new owner at once when the old one closed while it was being sent', async () => {
+    m.sessions.get('g')!.ack = false; // the paste to g waits 8 s for a receipt that never comes
+    const q = ask('g', 'In flight?');
+    qs.answer(q.id, { text: 'yes' });
+    await vi.advanceTimersByTimeAsync(1000);
+    m.remove('g'); // g closes mid-push: the question moves to w
+    await vi.advanceTimersByTimeAsync(8000); // far less than the 30 s retry timer
+    expect(qs.get(q.id)).toMatchObject({ nodeId: 'w', delivery: { state: 'delivered' } });
+    expect(pasted('w')).toHaveLength(1);
+  });
+
   it('treats an owner missing at load as closed', () => {
     const q = ask('g', 'Gone?');
     const m2 = new FakeManager(home);
@@ -415,6 +427,8 @@ describe('after a daemon restart', () => {
 
   it('takes back an unclaimed queued answer and sends it again with a new message', async () => {
     const { id, messageId, m2 } = await queuedAnswer(false);
+    const shown: (string | undefined)[] = [];
+    m2.on('question', (q: Question) => shown.push(q.delivery?.detail));
     const again = new Questions(m2.manager);
     await again.ready;
     await again.delivered(id);
@@ -422,6 +436,9 @@ describe('after a daemon restart', () => {
     const { delivery } = again.get(id)!;
     expect(delivery).toMatchObject({ state: 'queued', messageId: expect.stringMatching(/^m-/) });
     expect(delivery?.messageId).not.toBe(messageId);
+    // What the human reads meanwhile is ours, not messaging's "withdrawn by the sender before delivery".
+    expect(shown).toContain('the daemon restarted; sending again');
+    expect(shown).not.toContain('withdrawn by the sender before delivery');
   });
 
   it('marks a queued answer the node had already claimed as unconfirmed, and does not send it again', async () => {

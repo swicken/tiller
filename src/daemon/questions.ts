@@ -182,7 +182,12 @@ export class Questions {
       return Promise.resolve();
     }
     q.triedAt = Date.now();
-    const p = this.send(q).catch(logError).finally(() => this.pushing.delete(id));
+    const ownerId = q.nodeId;
+    const p = this.send(q).catch(logError).finally(() => {
+      this.pushing.delete(id);
+      // The owner closed meanwhile and the question moved: its ancestor should not wait for the timer.
+      if (this.items.find((x) => x.id === id)?.nodeId !== ownerId) void this.push(id);
+    });
     this.pushing.set(id, p);
     return p;
   }
@@ -257,7 +262,10 @@ export class Questions {
       const messageId = q.delivery!.messageId!;
       await withdraw(this.m, DAEMON, messageId).catch(() => {});
       const r = messageStatus(this.m, HUMAN, messageId);
-      this.setDelivery(q, r?.outcome === 'queued' ? { ...r, outcome: 'stalled', detail: 'claimed by the node before the daemon restarted; delivery unconfirmed' } : r ?? { outcome: 'withdrawn', retryable: true, detail: 'the daemon restarted before the answer was delivered' }, false);
+      // Messaging's own words for the withdrawal ("by the sender before delivery") would read oddly to the human.
+      const result: SendResult = r?.outcome === 'queued' ? { ...r, outcome: 'stalled', detail: 'claimed by the node before the daemon restarted; delivery unconfirmed' }
+        : r && r.outcome !== 'withdrawn' ? r : { outcome: 'withdrawn', retryable: true, detail: 'the daemon restarted; sending again' };
+      this.setDelivery(q, result, false);
       if (q.delivery?.state === 'waiting') q.triedAt = undefined;
     }
     for (const q of this.items) if (q.delivery?.state === 'waiting') void this.push(q.id);
