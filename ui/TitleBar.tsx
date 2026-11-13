@@ -3,6 +3,7 @@ import { ActionButtons } from './controls/ActionButtons';
 import { NodeMeta, StateDot } from './controls/Bits';
 import { Icon } from './controls/icons';
 import { RenameInput } from './controls/RenameInput';
+import { QuestionReminder } from './questions/QuestionReminder';
 import { ancestry } from './sidebar/sessions';
 import { selectNode, showPane, togglePanel, useStore } from './store';
 import { KIND_LABEL, kindTag, statusKind } from './sidebar/tree';
@@ -64,6 +65,7 @@ export function TitleBar({ node }: { node: NodeView }) {
           </div>
         )}
         <span className="spacer" />
+        <QuestionReminder />
         <button className={`btn panel-toggle${panel ? ' on' : ''}`} title="Last response" aria-label="Toggle last response panel" aria-pressed={panel} onClick={togglePanel}>
           <Icon name="panel" size={14} /><span>Last response</span>
         </button>
