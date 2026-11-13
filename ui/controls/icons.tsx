@@ -14,6 +14,11 @@ const PATHS = {
   fork: 'M6 4v4a4 4 0 004 4h4a4 4 0 014 4v4M18 4v4a4 4 0 01-4 4M6 20v-4',
   history: 'M12 4a8 8 0 100 16 8 8 0 000-16zM12 8v4l3 2',
   bellOff: 'M6 16v-5a6 6 0 0112 0v5l2 2H4l2-2zM10 21h4M3 3l18 18',
+  inbox: 'M4 13l2.5-8h11l2.5 8v6H4v-6zM4 13h5l1 2h4l1-2h5',
+  check: 'M5 12l5 5L19 7',
+  alert: 'M12 9v4M12 17h.01M10.3 4.3L2.6 18a2 2 0 001.7 3h15.4a2 2 0 001.7-3L13.7 4.3a2 2 0 00-3.4 0z',
+  info: 'M12 4a8 8 0 100 16 8 8 0 000-16zM12 11v5M12 8h.01',
+  copy: 'M9 9h10v10H9zM5 15V5h10',
 } as const;
 
 export type IconName = keyof typeof PATHS;
