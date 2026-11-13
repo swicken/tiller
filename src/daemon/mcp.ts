@@ -695,7 +695,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   rename: tool(
     'Rename node',
-    'Change the title of yourself or one of your descendants. A title may not be "human" or start with "human (" or "tiller (", which are the labels of the human\'s and the daemon\'s messages.',
+    'Change the title of yourself or one of your descendants. A title may not be "human" or start with "human (" or "tiller (", which are the labels of the human\'s and the daemon\'s messages, and may not contain control characters (other than a tab) or line breaks.',
     { ...nodeIdArg, title: z.string().min(1) },
     async (c, a) => {
       const id = nodeId(a);

@@ -34,8 +34,8 @@ it.each([
   expect(reservedTitle(title)).toBeUndefined();
 });
 
-it.each(['tiller\n(daemon restarted)', 'a\u001b[2Kb', 'a\vb', 'a\rb', 'a\u0000b', 'a\u007fb', 'a\u0085b'])('refuses the control character in %j', (title) => {
-  expect(reservedTitle(title)).toMatch(/^refused: the title ".*" has a control character/);
+it.each(['tiller\n(daemon restarted)', 'a\u001b[2Kb', 'a\vb', 'a\rb', 'a\u0000b', 'a\u007fb', 'a\u0085b', 'a\u2028b', 'a\u2029b'])('refuses the control character or line break in %j', (title) => {
+  expect(reservedTitle(title)).toMatch(/^refused: the title "[\s\S]*" has a control character or a line break/);
 });
 
 it('allows a tab, a zero-width joiner and the lookalikes the courtesy check does not know, since the frame is the boundary', () => {

@@ -638,7 +638,7 @@ function loopNotice(m: Mgr, s: State, from: NodeView | undefined, key: string, w
 
 /** A daemon notice to `v`'s parent about `v`. */
 function childNotice(m: Mgr, v: NodeView, why: string, body: string): void {
-  if (v.parentId) deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} "${v.title}" ${why})`, replyTo: null, about: [v.id], dropOnClose: true }).catch(logError);
+  if (v.parentId) deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} ${JSON.stringify(v.title)} ${why})`, replyTo: null, about: [v.id], dropOnClose: true }).catch(logError);
 }
 
 // ---- station notices (PLAN §7) ----

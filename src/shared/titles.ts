@@ -30,7 +30,7 @@ function skeleton(title: string): string {
  * brackets do not get past it. A plain "tiller" is fine: it is the default title of a session in a folder of that name.
  */
 export function reservedTitle(title: string): string | undefined {
-  if (/[^\P{Cc}\t]/u.test(title)) return `refused: the title ${JSON.stringify(title.trim())} has a control character; use plain text`;
+  if (/[^\P{Cc}\t]|[\p{Zl}\p{Zp}]/u.test(title)) return `refused: the title ${JSON.stringify(title.trim())} has a control character or a line break; use plain text`;
   const s = skeleton(title);
   return s === 'human' || /^(human|tiller)\(/.test(s)
     ? `refused: the title "${title.trim()}" imitates the label of a message from the human or Tiller; use "human" or "tiller" only with other words, such as "human-facing" or "tiller docs"`
