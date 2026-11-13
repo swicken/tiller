@@ -53,7 +53,7 @@ export function SessionSwitcher() {
             onClick={() => open ? close() : setOpen(true)} onKeyDown={(e) => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setOpen(true); } }}>
             {cur ? <><StateDot kind={cur.kind} /><span className="session-copy"><span className="st">{cur.root.title}</span><span className="sc" title={cur.root.cwd}>{cwdBase(cur.root.cwd)}</span></span></> : <span className="sc">No session</span>}
             {(cur?.needs ?? 0) > 0 && <span className="count warn" title="needs you in this session">{cur!.needs}</span>}
-            {others > 0 && <span className="count warn" title="needs you in other sessions">+{others}</span>}
+            {others > 0 && <span className="count warn others" title="needs you in other sessions">+{others}</span>}
             {cur && <span className="rename-slot" />}
             <Icon name="updown" size={14} />
           </button>
