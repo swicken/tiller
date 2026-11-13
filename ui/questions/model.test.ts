@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { mk } from '../fixtures';
-import { ago, listing, questionsIn, reminderList, shortAge } from './model';
+import { ago, listing, questionsIn, reminderList } from './model';
 import { mkq, NOW } from './fixtures';
 
 // Two sessions: a (with its child a1) and b. Questions are listed by the node that owns them.
@@ -54,5 +54,4 @@ it('headers a group for a session that no longer exists with its rootTitle, or "
 
 it('words ages as the design does', () => {
   expect([0, 4 * 60_000, 2 * 3_600_000, 30 * 3_600_000, 5 * 86_400_000].map(ago)).toEqual(['just now', '4 min ago', '2 h ago', 'yesterday', '5 d ago']);
-  expect([4 * 60_000, 3_600_000].map(shortAge)).toEqual(['4m', '1h']);
 });

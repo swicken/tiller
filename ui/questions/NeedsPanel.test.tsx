@@ -12,7 +12,9 @@ const hooks = vi.hoisted(() => ({ states: [] as unknown[], next: 0 }));
 vi.mock('react', async (original) => ({ ...await original<typeof import('react')>(),
   useState: (init: unknown) => {
     const i = hooks.next++;
-    return [i in hooks.states ? hooks.states[i] : typeof init === 'function' ? init() : init, (v: unknown) => { hooks.states[i] = v; }];
+    // The first value is kept, as a real component keeps its state between renders.
+    if (!(i in hooks.states)) hooks.states[i] = typeof init === 'function' ? init() : init;
+    return [hooks.states[i], (v: unknown) => { hooks.states[i] = v; }];
   },
   useRef: (init: unknown) => ({ current: init ?? null }), useMemo: (fn: () => unknown) => fn(), useEffect: () => {}, useLayoutEffect: () => {} }));
 vi.mock('../store', async (original) => {
@@ -96,6 +98,43 @@ it('groups by session with the one on screen first, and lists an approval inside
   expect(at('<b>dotcms-core</b>')).toBeLessThan(at('Far question?'));
   expect(out).toContain('3 waiting');
   expect(out).toContain('Bash: rm -rf node_modules');
+});
+
+it('lists a group oldest first however the store holds it, and the first by that order is the open card', () => {
+  put(mkq('own', 'a', 3, { question: 'Newest?' }), mkq('older', 'a', 55, { question: 'Oldest?' }), mkq('far', 'a', 9, { question: 'Middle?' }), mkq('c', 'a', 80, { question: 'Carrying?', assumption: 'x' }));
+  update(() => ({ needs: { open: true } }));
+  const out = render(<NeedsPanel />);
+  const at = (s: string) => out.indexOf(s);
+  expect(at('Oldest?')).toBeLessThan(at('Middle?'));
+  expect(at('Middle?')).toBeLessThan(at('Newest?'));
+  expect(at('Newest?')).toBeLessThan(at('needs your approval'));
+  expect(at('needs your approval')).toBeLessThan(at('Carrying?'));
+  expect(out).toMatch(/<article[^>]*aria-labelledby="older-h"/);
+});
+
+it('does not open a question that arrives while the panel is open, so it cannot take the keys from the terminal', () => {
+  update(() => ({ nodes: { a: nodes.a }, order: ['a'], needs: { open: true } }));
+  expect(render(<NeedsPanel />)).toContain('Nothing needs you right now');
+  put(mkq('own', 'a', 0, { question: 'Fresh question?' }));
+  const out = render(<NeedsPanel />); // the same panel, still open: its state is kept
+  expect(out).not.toContain('<article');
+  expect(out).toMatch(/<button class="qrow"[^>]*>(?:(?!<\/button>).)*Fresh question\?/);
+  // Opened from somewhere that names a question, a card opens as before.
+  update(() => ({ needs: { open: true, focusId: 'own' } }));
+  expect(render(<NeedsPanel />)).toMatch(/<article[^>]*aria-labelledby="own-h"/);
+});
+
+it('words an approval row as the design does: no "ago", and the activity without its "needs approval:" lead', () => {
+  update((s) => ({ nodes: { ...s.nodes, a2: mk('a2', 'a', NOW - 60_000, { state: 'blocked', activity: 'needs approval: Bash: npm ci' }) }, needs: { open: true } }));
+  const out = render(<NeedsPanel />);
+  expect(out).toContain('<b>a2</b> needs your approval · 1 min</span>');
+  expect(out).toContain('<span class="qrow-sub">Bash: npm ci</span>');
+});
+
+it('shows a new question\'s row age as "now", not "0m"', () => {
+  put(mkq('own', 'a', 3), mkq('fresh', 'a', 0));
+  update(() => ({ needs: { open: true, focusId: 'own' } }));
+  expect(render(<NeedsPanel />)).toContain('>now</time>');
 });
 
 it('says nothing needs you when nothing is waiting', () => {

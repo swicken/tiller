@@ -190,6 +190,25 @@ it.each([
   expect(button(q, 'Discard text')).toBeDefined();
 });
 
+it('keeps the notice a plain element, so a card that mounts again does not announce an old refusal', () => {
+  setDraft('q-1', 'text');
+  update(() => ({ refusals: { 'q-1': 'q-1 is not yours to answer' } }));
+  expect(html(ask)).not.toContain('role="alert"');
+});
+
+it('offers a primary "OK", which focus can land on, after a refusal with no typed text', () => {
+  update(() => ({ refusals: { 'q-1': 'q-1 is not yours to answer' } }));
+  const ok = button(ask, 'OK')!;
+  expect(ok.props.className).toBe('btn primary');
+  expect(html(ask)).not.toContain('<textarea');
+  ok.props.onClick();
+  expect(getState().refusals).toEqual({});
+});
+
+it('limits the answer to what the daemon accepts, 8,000 characters', () => {
+  expect(tree(ask).find((el) => el.type === 'textarea')!.props.maxLength).toBe(8000);
+});
+
 it('shows a refusal it does not recognise in the daemon\'s own words', () => {
   setDraft('q-1', 'text');
   update(() => ({ refusals: { 'q-1': 'q-1 is not yours to answer' } }));
