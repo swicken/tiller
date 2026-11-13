@@ -13,7 +13,10 @@ React + xterm.js front-end for the tiller daemon. It speaks the WebSocket protoc
 
 The mock daemon has three sessions (one with a blocked node and a pending command, one with an errored node, one idle), an exited node, and mixed models and context usage. Spawn, rename, resume, close and prune work in memory, and a confirm request arrives 15 seconds after connecting. History has four closed nodes across two trees; every Claude node has a fake transcript ("daemon" and the closed "auth refactor" have two sessions), and follow-up and fork make new nodes. Every agent node also has conversations: a child thread has a brief, tool-call turns, a queued-then-delivered message, a message without recorded text and an outcome; exited and closed children add a daemon notice, the closed "css tokens" a merge event, working children a still-queued message, and "tests" and "ui polish" a peer exchange. The new-session dialog lists three Claude accounts (one logged out, to show its login command); the dotcms-core session runs in the "work" account and its children inherit it.
 
+The mock also holds questions for the human: two open (one with choices that the agent is waiting on, one carrying on with an assumption in another session), one answered and still queued for its agent, and one withdrawn. A new question arrives 20 seconds after connecting, to exercise the toast, and answering or dismissing works in memory. Start it with `TL_MOCK_QUESTIONS=all` to get a question in every state the UI draws: a long question with long context, six choices, a question on a stopped node, one that moved to its asker's parent, an answer in each delivery state, dismissed, replaced and withdrawn questions, one from a closed session with no `rootTitle`, and three (`q-d0000001` to `q-d0000003`) whose answer is refused as withdrawn, already answered and replaced, to show the kept draft.
+
     node ui/mock-server.mjs                                  # ws on :7789, token "mock"
+    TL_MOCK_QUESTIONS=all node ui/mock-server.mjs            # with a question in every state
     TL_WS=http://127.0.0.1:7789 npm run ui:dev               # then open the printed URL with ?k=mock
 
 After `npm run ui:build` the mock also serves the built UI: open `http://127.0.0.1:7789/?k=mock`. Set `TL_MOCK_PORT` to change the port.
@@ -29,6 +32,7 @@ Claude session measurements currently provide limits without account identity. T
 
 - `?k=<token>` is stored in localStorage and removed from the address bar. `?node=<id>` selects that node and its session; the UI keeps it in step with the selection.
 - Cmd+K jump to any node, Cmd+1..9 select the Nth row of the current session, Cmd+0 focus the sidebar tree.
+- Cmd+J opens and closes the Needs you panel (open questions and blocked nodes). In it, Up and Down move between rows, Enter opens one, Cmd+Enter sends the answer being typed and Escape closes the panel.
 - Cmd+Shift+[ and Cmd+Shift+] select the previous and next session tab, wrapping around; Cmd+Shift+1..8 select the Nth session tab and Cmd+Shift+9 the last. Cmd+Shift+Opt+[ and ] move the current tab left or right, as dragging does; the daemon saves the order. Left and right arrows move focus between tabs.
 - With the tree focused: j/k or arrows move, h/l collapse and expand.
 - Clicking terminal hyperlinks (including rendered Markdown links) opens HTTP/HTTPS URLs in your default browser in the app, or a new tab in the browser UI. File and custom-protocol links are not opened.
@@ -45,6 +49,8 @@ ui/
   dialogs/                      application spawn, lifecycle and update dialogs
   release-notes/                release rendering, parser and historical fixtures
   transcript/                   conversations between nodes, full transcripts and archived node history
+  questions/                    questions agents raise for the human: the reminder in the pane-tab row,
+                                the Needs you panel, its rows and cards, and per-question drafts
   controls/                     shared actions and their menu, metadata, rename, modal, select,
                                 Markdown, external links and inline SVG icons
   store.ts, conn.ts             shared client state and daemon connection
