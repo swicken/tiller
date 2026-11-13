@@ -26,6 +26,7 @@ import { nodeDefaults, resolveSpawn, restartSelection, spawnTarget } from './spa
 import { DAEMON, deliver, handoverInbox, holdDeliveries, HUMAN, inScope, saveInboxForRestart, submitting, waitForDeliveries } from './messaging.js';
 import { NodeRegistry } from './nodes.js';
 import { buildChildEnv, PtySession } from './pty.js';
+import { Questions } from './questions.js';
 import { Shells } from './shells.js';
 import { count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
@@ -179,6 +180,7 @@ export interface NodeRuntime {
  *   'notify'  (n: NotifyEvent)
  *   'usage'   (u: Usage)                  a node reported account-level rate limits
  *   'sessionOrder' (ids: string[])       the human rearranged the session tabs
+ *   'question' (q: Question, isNew: boolean)  an agent asked the human (isNew) or a question changed; see questions.ts
  */
 export class NodeManager extends EventEmitter {
   readonly home: string;
@@ -198,6 +200,8 @@ export class NodeManager extends EventEmitter {
   readonly path: string;
   /** The human's shell beside each agent node (the Terminal tab). */
   readonly shells: Shells;
+  /** What agents asked the human with ask_human; construct after the registry and runtimes. */
+  readonly questions: Questions;
   /** Set by shutdown: the live set is then frozen, so the PTYs' exits do not empty it. */
   private shutDown = false;
   private shell: string;
@@ -250,6 +254,7 @@ export class NodeManager extends EventEmitter {
     this.sweepTimer.unref();
     this.on('node', () => scheduleSoon(this));
     this.on('removed', (id: string) => { this.repoAccounts.delete(id); this.shells.kill(id); scheduleSoon(this); });
+    this.questions = new Questions(this);
   }
 
   // ---- tokens ----

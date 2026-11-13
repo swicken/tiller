@@ -8,6 +8,7 @@ import type { ClientMessage, NodeView, ServerMessage } from '../shared/protocol.
 import { NodeManager } from './manager.js';
 import { forUi, startServer, type DaemonServer } from './server.js';
 import { deliver, inbox, messageStatus } from './messaging.js';
+import { sessionDir } from './sessions.js';
 
 let home: string;
 let manager: NodeManager;
@@ -673,5 +674,81 @@ describe('approved native notification delivery', () => {
     await offer();
     ws!.terminate();
     expect(await delivered).toBe(true);
+  });
+});
+
+describe('questions for the human', () => {
+  /** An agent node that is not running, so an answer waits instead of reaching a process. */
+  const agent = (title: string, parentId: string | null = null) => {
+    const rec = manager.registry.create({ parentId, kind: 'claude', title, cwd: home });
+    manager.runtimes.set(rec.id, { status: { state: 'done', changedAt: Date.now(), exited: true } });
+    mkdirSync(sessionDir(home, rec.rootId ?? rec.id), { recursive: true });
+    return rec.id;
+  };
+  /** A second socket with its own message log. */
+  const open = async () => {
+    const got: ServerMessage[] = [];
+    const sock = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+    sock.on('message', (raw) => got.push(JSON.parse(raw.toString())));
+    await new Promise((ok, fail) => { sock.once('open', ok); sock.once('error', fail); });
+    sock.send(JSON.stringify({ t: 'auth', token: adminToken() } satisfies ClientMessage));
+    await until(() => got.find((m) => m.t === 'snapshot'));
+    return { got, sock, send: (m: ClientMessage) => sock.send(JSON.stringify(m)) };
+  };
+
+  it('carries open questions in the snapshot, and broadcasts each new and changed one to every client', async () => {
+    const id = agent('asker');
+    const first = manager.questions.ask(id, { question: 'Before connecting?' }).question;
+    await connect();
+    const snap = await until(() => seen.find((m) => m.t === 'snapshot'));
+    expect(snap.t === 'snapshot' && snap.questions).toEqual([first]);
+    const other = await open();
+    const second = manager.questions.ask(id, { question: 'After connecting?', choices: ['a', 'b'] }).question;
+    for (const log of [seen, other.got]) expect(await until(() => log.find((m) => m.t === 'question' && m.question.id === second.id))).toEqual({ t: 'question', question: second });
+    send({ t: 'question', id: second.id, action: 'dismiss' });
+    expect(await until(() => other.got.find((m) => m.t === 'question' && m.question.state === 'dismissed'))).toMatchObject({ question: { id: second.id, state: 'dismissed' } });
+    other.sock.terminate();
+  });
+
+  it('answers a question from one client; the second client gets an error that names the owner node, not the question', async () => {
+    const id = agent('asker');
+    const q = manager.questions.ask(id, { question: 'Which?', choices: ['red', 'blue'] }).question;
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    const other = await open();
+    send({ t: 'question', id: q.id, action: 'answer', choice: 'blue', text: 'because' });
+    await until(() => other.got.find((m) => m.t === 'question' && m.question.state === 'answered'));
+    other.send({ t: 'question', id: q.id, action: 'answer', choice: 'red' });
+    expect(await until(() => other.got.find((m) => m.t === 'error'))).toEqual({ t: 'error', message: `${q.id} was already answered`, id });
+    expect(seen.filter((m) => m.t === 'error')).toEqual([]);
+    expect(manager.questions.get(q.id)?.answer).toMatchObject({ choice: 'blue', text: 'because' });
+    other.sock.terminate();
+  });
+
+  it('refuses a choice that is not offered, naming the owner, and rejects malformed question messages', async () => {
+    const id = agent('asker');
+    const q = manager.questions.ask(id, { question: 'Which?', choices: ['red', 'blue'] }).question;
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    send({ t: 'question', id: q.id, action: 'answer', choice: 'green' });
+    expect(await until(() => seen.find((m) => m.t === 'error'))).toMatchObject({ id, message: expect.stringContaining('not one of the choices') });
+    ws!.send(JSON.stringify({ t: 'question', id: q.id, action: 'answer' })); // neither choice nor text
+    ws!.send(JSON.stringify({ t: 'question', id: q.id, action: 'dismiss', text: 'nope' })); // a dismissal takes neither
+    ws!.send(JSON.stringify({ t: 'question', id: 'not-an-id', action: 'dismiss' }));
+    await until(() => (seen.filter((m) => m.t === 'error' && m.message === 'Malformed message').length === 3 ? true : undefined));
+    expect(manager.questions.get(q.id)?.state).toBe('open');
+  });
+
+  it('puts a question asked while the human was away in the digest, naming the question', async () => {
+    const id = agent('asker');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ daemon: { digestAfterMinutes: 0 } }));
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    send({ t: 'visibility', focused: false });
+    await new Promise((r) => setTimeout(r, 50));
+    const q = manager.questions.ask(id, { question: 'While you were out?' }).question;
+    send({ t: 'visibility', focused: true });
+    const digest = await until(() => seen.find((m) => m.t === 'digest'));
+    expect(digest.t === 'digest' && digest.items).toContainEqual({ id, title: 'asker', kind: 'needsYou', text: 'Asks: While you were out?', at: q.askedAt, questionId: q.id });
   });
 });

@@ -565,7 +565,8 @@ export async function deliver(m: Mgr, fromId: string, toId: string, text: string
   const s = stateOf(m);
   const id = `m-${randomBytes(4).toString('hex')}`;
   const now = Date.now();
-  for (const [k, v] of s.status) if (now - v.at > STATUS_TTL_MS) s.status.delete(k);
+  // A message still queued keeps its status however long its target works: its onSettle and settle event depend on it.
+  for (const [k, v] of s.status) if (now - v.at > STATUS_TTL_MS && v.result.outcome !== 'queued') s.status.delete(k);
   const out = (r: SendResult): SendResult => {
     const result = { ...r, messageId: id };
     s.status.set(id, { from: fromId, to: toId, result, at: now, onSettle: opts.onSettle, ...(m.view(toId) ? { dir: m.sessionDirOf?.(toId) } : {}), ...(opts.dropOnClose && opts.about?.length ? { dropOnClose: opts.about } : {}) });
