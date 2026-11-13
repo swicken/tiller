@@ -138,7 +138,7 @@ export const setActivityOpen = (activityOpen: boolean) => update((s) => ({
 }));
 export const openNeeds = (focusId?: string) => update(() => ({ needs: { open: true, focusId } }));
 export const closeNeeds = () => update(() => ({ needs: { open: false } }));
-export const dismissToast =(id: number) => update((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+export const dismissToast = (id: number) => update((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
 export const dropConfirm = (confirmId: string) => update((s) => ({ confirms: s.confirms.filter((c) => c.confirmId !== confirmId) }));
 export const setConnected = (connected: boolean, retry = 0) => update(() => ({ connected, retry, ...(!connected ? { usageScanning: false } : {}) }));
 export const openDialog = (dialog: Dialog | null) => update(() => ({ dialog }));
