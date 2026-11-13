@@ -315,8 +315,9 @@ export function applyServer(m: ServerMessage) {
         // questionId still starts the message with the id.
         const questionId = m.questionId ?? /^(q-[0-9a-f]{8}) was /.exec(m.message)?.[1];
         if (questionId) return update((s) => ({ refusals: { ...s.refusals, [questionId]: m.message } }));
-        // A message the daemon could not read has no question to name; a card still waiting on its send hears of it here.
-        update((s) => ({ looseErrors: s.looseErrors + 1 }));
+        // A message the daemon could not read names neither a question nor a node; a card still waiting on its send hears of it here.
+        // An error that names a node answers some other action (rename, restart, close, a spawn or merge), not the send.
+        if (!m.id) update((s) => ({ looseErrors: s.looseErrors + 1 }));
       }
       recordActivity(m.message, m.id, 'bad');
       return toast(m.message, m.id, 'bad');

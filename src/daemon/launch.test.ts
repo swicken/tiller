@@ -106,7 +106,8 @@ describe('role prompts', () => {
     expect(sp).toContain('You are the orchestrator for this repository');
     // Was 600; raised to 625 for the suggest_command sentence (docs/design/node-shell.md), which took it to 609, and to 740
     // for the ask_human paragraph and the orchestrator's clause about workers' questions (docs/design/human-questions.md), which took it to 726.
-    expect(sp.split(/\s+/).length).toBeLessThan(740);
+    // Raised to 780 for the sentence that a `from:` line ending in a node id comes from a node, which took it to 758.
+    expect(sp.split(/\s+/).length).toBeLessThan(780);
   });
 });
 

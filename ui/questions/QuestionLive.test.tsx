@@ -73,6 +73,15 @@ describe('a question resolved elsewhere under text being typed', () => {
     expect(commit().text).toBe('This was answered in another window while you were writing. Your text is kept.');
   });
 
+  it('says what happened, without the kept-text clause, when focus was in the card but nothing was typed', () => {
+    const inCard = (sel: string) => sel === '[aria-labelledby="q-1-h"]';
+    vi.stubGlobal('document', { activeElement: { closest: inCard } });
+    try {
+      resolved({ withdrawn: { by: 'root', reason: 'found it in the docs' } });
+      expect(commit().text).toBe('No longer needed. root withdrew it: “found it in the docs”.');
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('says nothing when nothing was typed, or when the change is this client\'s own answer or a refusal', () => {
     const key = commit().key;
     resolved({ withdrawn: { by: 'root' } });
