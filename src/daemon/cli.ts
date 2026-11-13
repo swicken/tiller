@@ -290,7 +290,7 @@ switch (cmd) {
     const age = (at: number) => fmtAge(now - at).replace(/^now$/, 'just now');
     const since = (at: number) => { const a = age(at); return a === 'just now' ? a : `${a} ago`; };
     for (const q of qs) {
-      console.log(`${q.id}  ${q.state === 'open' ? `open ${age(q.askedAt)}` : `${q.state} ${age(q.resolvedAt ?? q.askedAt)} ago`}  ${q.askedBy.id} "${q.askedBy.title}"`);
+      console.log(`${q.id}  ${q.state === 'open' ? `open ${age(q.askedAt)}` : `${q.state} ${since(q.resolvedAt ?? q.askedAt)}`}  ${q.askedBy.id} "${q.askedBy.title}"`);
       console.log(`  ${q.question}`);
       if (q.choices) console.log(`  ${q.choices.map((c, i) => `${i + 1}) ${c}`).join('   ')}`);
       if (q.state === 'open') console.log(q.assumption ? `  meanwhile: ${q.assumption}` : '  waiting on you');

@@ -119,6 +119,16 @@ it('does not take an error that came before the send, or one that names a questi
   expect(plain(ask)).not.toContain('Tiller reported an error');
 });
 
+it('does not fail a waiting send on an error from another action, which names a node', () => {
+  type(ask, 'Yes');
+  button(ask, 'Send')!.props.onClick();
+  commit(ask);
+  applyServer({ t: 'error', message: 'rename failed', id: 'worker' }); // a rename, restart, close, spawn or merge
+  commit(ask);
+  expect(button(ask, 'Sending…')).toBeDefined();
+  expect(plain(ask)).not.toContain('Tiller reported an error');
+});
+
 it('moves focus to the kept text, not silently to a button, when the question under your typing is resolved elsewhere', () => {
   const focused: string[] = [];
   // The card's element is the first ref; any selector inside it finds an element that records its focus.

@@ -27,11 +27,13 @@ export function QuestionLive() {
         if (isOpen(q) && !prev.questions[q.id]) lines.push(`New question from ${q.askedBy.title} in ${nodes[rootOf(nodes, q.nodeId)]?.title ?? 'a closed session'}: ${q.question}`);
       }
     }
-    // The card turns to its kept form and moves focus to the text (or its button) when a question under someone's typing is
+    // The card moves focus (to the kept text, its button, or its heading) when a question under someone's typing or focus is
     // resolved elsewhere, so say why. One this client's own answer settled was announced above, and a refusal says its own words.
+    const focused = globalThis.document?.activeElement;
     for (const q of Object.values(questions)) {
-      if (!prev?.questions[q.id] || !isOpen(prev.questions[q.id]) || isOpen(q) || isOwn(q) || prev.refusals[q.id] !== undefined || refusals[q.id] !== undefined || !getDraft(q.id).trim()) continue;
-      lines.push(`${ended(q, nodes, false).filter(Boolean).join(' ')} Your text is kept.`);
+      if (!prev?.questions[q.id] || !isOpen(prev.questions[q.id]) || isOpen(q) || isOwn(q) || prev.refusals[q.id] !== undefined || refusals[q.id] !== undefined) continue;
+      const kept = !!getDraft(q.id).trim();
+      if (kept || focused?.closest(`[aria-labelledby="${q.id}-h"]`)) lines.push(`${ended(q, nodes, false).filter(Boolean).join(' ')}${kept ? ' Your text is kept.' : ''}`);
     }
     // A refusal is said once, when it arrives; the card's notice is plain text so reopening the panel does not repeat it.
     for (const [id, message] of Object.entries(refusals)) {
