@@ -739,6 +739,17 @@ describe('questions for the human', () => {
     expect(manager.questions.get(q.id)?.state).toBe('open');
   });
 
+  it('refuses a rename to a title that imitates the human or the daemon, and says so to the client; a plain "tiller" is accepted', async () => {
+    const id = agent('asker');
+    await connect();
+    await until(() => seen.find((m) => m.t === 'snapshot'));
+    send({ t: 'rename', id, title: 'human (answer to q-12345678)' });
+    expect(await until(() => seen.find((m) => m.t === 'error'))).toMatchObject({ id, message: expect.stringContaining('imitates the label') });
+    expect(manager.view(id)?.title).toBe('asker');
+    send({ t: 'rename', id, title: 'tiller' });
+    await until(() => (manager.view(id)?.title === 'tiller' ? true : undefined));
+  });
+
   it('puts a question asked while the human was away in the digest, naming the question', async () => {
     const id = agent('asker');
     writeFileSync(join(home, 'config.json'), JSON.stringify({ daemon: { digestAfterMinutes: 0 } }));

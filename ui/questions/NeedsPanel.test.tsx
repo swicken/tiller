@@ -45,16 +45,27 @@ it('draws no reminder when the session on screen has no open question, though an
 });
 
 it('reminds of the selected node\'s own question before an older one from another node in the session', () => {
-  put(mkq('older', 'a1', 40, { question: 'Older question?' }), mkq('own', 'a', 3, { question: 'Own question?' }));
+  put(mkq('older', 'a1', 40, { question: 'Older question?' }), mkq('own', 'a', 3, { question: 'Own question?', askedBy: { id: 'a', title: 'tiller' } }));
   const out = render(<QuestionReminder />);
   expect(out).toContain('Own question?');
   expect(out).not.toContain('Older question?');
   expect(out).toContain('+1 more');
-  expect(out).toContain('aria-label="Answer tiller’s question: Own question?. 1 more in this session"');
+  expect(out).toContain('aria-label="Answer tiller’s question: Own question? 1 more in this session"'); // one mark after the question, not two
+  put(mkq('own', 'a', 3, { question: 'Own question', askedBy: { id: 'a', title: 'tiller' } }), mkq('older', 'a1', 40, { question: 'Older question?' }));
+  expect(render(<QuestionReminder />)).toContain('aria-label="Answer tiller’s question: Own question. 1 more in this session"');
   // The bar form is the same button with another class; a node with no question of its own shows the oldest.
   expect(render(<QuestionReminder bar />)).toContain('q-remind q-bar');
   update(() => ({ selected: 'a1' }));
   expect(render(<QuestionReminder />)).toContain('Older question?');
+});
+
+it('names the agent that asked, not the one the question moved to', () => {
+  put(mkq('own', 'a', 3, { question: 'Keep it?', askedBy: { id: 'a1x', title: 'closed child' } })); // asked by a closed child; its parent "tiller" owns it now
+  const out = render(<QuestionReminder />);
+  expect(out).toContain('closed child asks');
+  expect(out).toContain('title="closed child asks: Keep it?"');
+  expect(out).toContain('aria-label="Answer closed child’s question: Keep it?"');
+  expect(out).not.toContain('tiller asks');
 });
 
 it('shows a question that carries on quietly, with its dot hollow', () => {

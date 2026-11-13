@@ -2,7 +2,9 @@
 //   node ui/mock-server.mjs            ws on :7789; also serves ui/dist at http://127.0.0.1:7789/?k=mock when it has been built
 // Mutations (spawn, close, restart, rename, resume, prune, select, merge, mute, dnd) work in memory; a confirm request arrives
 // 15 s after connecting. diff on a worktree node returns a made-up diff; send logs the text and replies queued.
-// questions: two open, one answered and one withdrawn at connect, plus a new one 20 s in; a question message answers or dismisses one in memory.
+// questions: two open, one answered and one withdrawn at connect, plus a new one 20 s in; a question message answers or dismisses one in memory,
+// and an answer follows the real daemon's delivery: waiting, then queued, then delivered (queued for 5 s while the owner is working, and
+// waiting for good when it has exited). Closing a node moves its questions to its parent, or withdraws them when it has none.
 // history, transcript, followup and spawn with fork answer from the fake archive below; tl-d and the archived "auth refactor" have two sessions.
 // conversations and conversation answer from the same tree (see conversationFor); tl-test and tl-ui exchange peer messages.
 // claudeAccounts answers with three accounts (one logged out); a root claude spawn takes its chosen or project-mapped account, children inherit it.
@@ -259,7 +261,39 @@ const clients = new Set();
 const broadcast = (m) => clients.forEach((c) => c.ws.send(JSON.stringify(m)));
 // The daemon's wording for a response to a question that is no longer open (closedReason in src/daemon/questions.ts).
 const refusal = (q) => q.state !== 'withdrawn' ? `${q.id} was already ${q.state}` : q.replacedBy ? `${q.id} was replaced by ${q.replacedBy}`
-  : `${q.id} was withdrawn by ${q.withdrawn?.by === 'tiller' ? 'tiller' : 'the agent'}${q.withdrawn?.reason ? `: ${q.withdrawn.reason}` : ''}`;
+  : `${q.id} was withdrawn by ${q.withdrawn?.by === 'tiller' ? 'tiller' : q.withdrawn?.by === q.askedBy.id || q.withdrawn?.by === q.nodeId ? 'the agent' : q.withdrawn?.by}${q.withdrawn?.reason ? `: ${q.withdrawn.reason}` : ''}`;
+// How an answer reaches its owner (src/daemon/questions.ts): not sent yet, then queued in the node's inbox (even when it is idle, since a
+// Claude node reads its inbox through the mod), then delivered. An owner that has exited keeps the answer waiting until it runs again.
+const sending = new Map(); // question id -> the send in progress, so a moved or re-answered question drops the old one's steps
+const deliver = (q, detail = 'not sent yet') => {
+  const owner = nodes.get(q.nodeId), id = `m-mock-${q.id}-${Date.now()}`, at = () => Date.now();
+  const step = (state, ms, then) => setTimeout(() => {
+    if (sending.get(q.id) !== id || q.state !== 'answered') return;
+    q.delivery = { state, messageId: id, at: at() };
+    broadcast({ t: 'question', question: q });
+    then?.();
+  }, ms);
+  sending.set(q.id, id);
+  q.delivery = { state: 'waiting', detail, at: at() };
+  if (!owner || owner.status.exited) return setTimeout(() => {
+    if (sending.get(q.id) !== id) return;
+    q.delivery = { state: 'waiting', detail: 'the node is not running', at: at() };
+    broadcast({ t: 'question', question: q });
+  }, 300);
+  step('queued', 300, () => step('delivered', owner.status.state === 'working' ? 5000 : 1000));
+};
+// A closed node's questions go to its parent, else open ones are withdrawn by tiller and answers dropped (ownerClosed in the daemon).
+function ownerClosed(id, parentId) {
+  for (const q of questions.values()) {
+    if (q.nodeId !== id || (q.state === 'dismissed' || q.state === 'withdrawn' || (q.state === 'answered' && q.delivery?.state === 'delivered'))) continue;
+    if (parentId && nodes.has(parentId)) {
+      q.nodeId = parentId;
+      if (q.state === 'answered') { q.delivery = { state: 'waiting', detail: `${id} was closed`, at: Date.now() }; broadcast({ t: 'question', question: q }); deliver(q, q.delivery.detail); continue; }
+    } else if (q.state === 'open') Object.assign(q, { state: 'withdrawn', resolvedAt: Date.now(), withdrawn: { by: 'tiller', reason: 'the node that asked was closed' } });
+    else q.delivery = { state: 'dropped', detail: 'the node that asked was closed and no ancestor is left', at: Date.now() };
+    broadcast({ t: 'question', question: q });
+  }
+}
 function respondToQuestion(m, send) {
   const q = questions.get(m.id);
   const fail = (message) => send({ t: 'error', id: q?.nodeId, questionId: m.id, message });
@@ -270,9 +304,10 @@ function respondToQuestion(m, send) {
   if (m.action === 'answer') {
     if (m.choice === undefined && m.text === undefined) return fail('an answer needs a choice or text');
     if (m.choice !== undefined && !q.choices?.includes(m.choice)) return fail(`${m.choice} is not one of the choices`);
-    Object.assign(q, { state: 'answered', answer: { ...(m.choice !== undefined && { choice: m.choice }), ...(m.text !== undefined && { text: m.text }), at: Date.now() }, delivery: { state: 'delivered', at: Date.now() } });
+    Object.assign(q, { state: 'answered', answer: { ...(m.choice !== undefined && { choice: m.choice }), ...(m.text !== undefined && { text: m.text }), at: Date.now() } });
   } else Object.assign(q, { state: 'dismissed' });
   q.resolvedAt = Date.now();
+  if (q.state === 'answered') deliver(q);
   broadcast({ t: 'question', question: q });
 }
 const touch = (n, patch) => { Object.assign(n.status, patch, { changedAt: Date.now() }); broadcast({ t: 'node', node: n }); };
@@ -359,7 +394,7 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'close': if (n?.worktree && !m.worktree && n.title.includes('dirty')) send({ t: 'error', id: m.id, message: 'worktree has 2 uncommitted files and 1 unmerged commit; close with keep or discard' });
-        else if (n) { nodes.delete(m.id); broadcast({ t: 'removed', id: m.id }); } break;
+        else if (n) { nodes.delete(m.id); broadcast({ t: 'removed', id: m.id }); ownerClosed(m.id, n.parentId); } break;
       case 'prune': for (const id of pruneIds([...nodes.values()])) { nodes.delete(id); broadcast({ t: 'removed', id }); } break;
       case 'claudeAccounts': send({ t: 'claudeAccounts', accounts }); break;
       case 'spawn': {

@@ -1,8 +1,9 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Question } from '../../src/shared/protocol';
 import { mk } from '../fixtures';
 import { getState, update } from '../store';
 import { elements } from '../test-tree';
-import { clearDraft, noteSent } from './drafts';
+import { clearDraft, noteSent, setDraft } from './drafts';
 import { mkq, NOW } from './fixtures';
 import { QuestionLive } from './QuestionLive';
 
@@ -42,8 +43,47 @@ beforeEach(() => {
 it('announces a new open question, but not one that arrives with a snapshot', () => {
   update(() => ({ questions: { 'q-1': mkq('q-1', 'root', 0, { question: 'Keep it?' }) } }));
   expect(commit().text).toBe('New question from root in tiller: Keep it?');
-  update(() => ({ nodes: { root: { ...root } }, questions: { 'q-2': mkq('q-2', 'root', 0) } })); // nodes replaced too: a snapshot
+  update((s) => ({ snapshots: s.snapshots + 1, questions: { 'q-2': mkq('q-2', 'root', 0) } })); // a snapshot
   expect(commit().text).toBe('New question from root in tiller: Keep it?'); // unchanged
+});
+
+it('announces a new question even when a node update lands in the same batch', () => {
+  update(() => ({ nodes: { root: { ...root, unread: true } }, questions: { 'q-1': mkq('q-1', 'root', 0, { question: 'Keep it?' }) } }));
+  expect(commit().text).toBe('New question from root in tiller: Keep it?');
+});
+
+describe('a question resolved elsewhere under text being typed', () => {
+  const resolved = (extra: Partial<Question>) => update((s) => ({ questions: { ...s.questions, 'q-1': { ...s.questions['q-1'], state: 'withdrawn', resolvedAt: NOW, ...extra } } }));
+  beforeEach(() => { update(() => ({ questions: { 'q-1': mkq('q-1', 'root', 5) } })); commit(); });
+
+  it('is announced with what happened, and that the text is kept', () => {
+    setDraft('q-1', 'Keep it until March');
+    resolved({ withdrawn: { by: 'root', reason: 'found it in the docs' } });
+    expect(commit().text).toBe('No longer needed. root withdrew it: “found it in the docs”. Your text is kept.');
+  });
+
+  it('says so for a replaced question and one answered in another window', () => {
+    setDraft('q-1', 'Keep it');
+    resolved({ replacedBy: 'q-2' });
+    expect(commit().text).toBe('Replaced by a newer question. root asked again. Your text is kept.');
+    update(() => ({ questions: { 'q-3': mkq('q-3', 'root', 5) } }));
+    commit();
+    setDraft('q-3', 'Something');
+    update((s) => ({ questions: { ...s.questions, 'q-3': { ...s.questions['q-3'], state: 'answered', resolvedAt: NOW, answer: { text: 'other', at: NOW } } } }));
+    expect(commit().text).toBe('This was answered in another window while you were writing. Your text is kept.');
+  });
+
+  it('says nothing when nothing was typed, or when the change is this client\'s own answer or a refusal', () => {
+    const key = commit().key;
+    resolved({ withdrawn: { by: 'root' } });
+    expect(commit().key).toBe(key); // no draft
+    update(() => ({ questions: { 'q-4': mkq('q-4', 'root', 5) } }));
+    commit();
+    setDraft('q-4', 'mine');
+    noteSent('q-4', { text: 'mine' });
+    update((s) => ({ questions: { ...s.questions, 'q-4': { ...s.questions['q-4'], state: 'answered', resolvedAt: NOW, answer: { text: 'mine', at: NOW } } } }));
+    expect(commit().text).toBe('Answer sent to tiller.'); // the one line, not also "Your text is kept"
+  });
 });
 
 it('says the same outcome twice when two answers to one owner are accepted in a row', () => {

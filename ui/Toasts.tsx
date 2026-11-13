@@ -13,8 +13,10 @@ function ToastItem({ t }: { t: Toast }) {
   }, [t.id]);
   const nodes = useStore((s) => s.nodes);
   const onScreen = useStore((s) => s.session);
+  const asked = useStore((s) => (t.questionId ? s.questions[t.questionId] : undefined));
   if (t.questionId) {
-    const owner = (t.nodeId && nodes[t.nodeId]?.title) || 'An agent', root = t.nodeId ? rootOf(nodes, t.nodeId) : undefined;
+    // The asker's name, even when the question has since moved to an agent above it.
+    const owner = asked?.askedBy.title || (t.nodeId && nodes[t.nodeId]?.title) || 'An agent', root = t.nodeId ? rootOf(nodes, t.nodeId) : undefined;
     return (
       <button className={`toast ${t.tone} qtoast`} aria-label={`Answer ${owner}’s question`} onClick={() => { openNeeds(t.questionId); dismissToast(t.id); }}>
         <span className="q-toast-who">{owner} asks{root && root !== onScreen && <span> · in {nodes[root]?.title}</span>}</span>

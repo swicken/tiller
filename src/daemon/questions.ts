@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isAgentKind, type AnswerDelivery, type DigestItem, type NodeView, type Question, type SendResult } from '../shared/protocol.js';
-import { isOpen, sortQuestions } from '../shared/questions.js';
+import { isOpen, NOT_TRIED, sortQuestions } from '../shared/questions.js';
 import type { NodeManager } from './manager.js';
 import { DAEMON, deliver, HUMAN, isDescendant, messageStatus, withdraw } from './messaging.js';
 import { appendEvent, sessionDir } from './sessions.js';
@@ -151,7 +151,7 @@ export class Questions {
     const now = Date.now();
     this.commit(() => Object.assign(q, {
       state: 'answered', resolvedAt: now, answer: { ...(a.choice !== undefined ? { choice: a.choice } : {}), ...(a.text !== undefined ? { text: a.text } : {}), at: now },
-      delivery: { state: 'waiting', detail: 'not sent yet', at: now },
+      delivery: { state: 'waiting', detail: NOT_TRIED, at: now },
     }));
     this.log(q, 'ask_answer', { ...(a.choice !== undefined ? { choice: a.choice } : {}), ...(a.text !== undefined ? { text: a.text } : {}) });
     this.announce(q);

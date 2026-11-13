@@ -1,5 +1,8 @@
 import { needsYou, type NodeView, type Question } from './protocol.js';
 
+/** The detail of an answer's first `waiting` delivery: nothing has been tried yet, so the send is still in progress. */
+export const NOT_TRIED = 'not sent yet';
+
 export const isOpen = (q: Question): boolean => q.state === 'open';
 
 /** Open questions a node owns. */

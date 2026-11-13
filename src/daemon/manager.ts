@@ -27,6 +27,7 @@ import { DAEMON, deliver, handoverInbox, holdDeliveries, HUMAN, inScope, saveInb
 import { NodeRegistry } from './nodes.js';
 import { buildChildEnv, PtySession } from './pty.js';
 import { Questions } from './questions.js';
+import { reservedTitle } from '../shared/titles.js';
 import { Shells } from './shells.js';
 import { count, inside, logError } from './util.js';
 import * as wt from './worktree.js';
@@ -405,6 +406,9 @@ export class NodeManager extends EventEmitter {
    * and be trusted by Claude. Any failure removes the worktree and branch and discards the record.
    */
   async spawn(req: SpawnRequest): Promise<NodeView> {
+    // Every spawn, a follow-up too: its archived title comes from archive.jsonl, which an agent can write.
+    const bad = reservedTitle(req.title);
+    if (bad) throw new Error(bad);
     if (!req.byHuman && req.parentId && this.runtimes.get(req.parentId)?.busy === 'changing harness') throw new Error('parent is changing harness');
     req = spawnTarget(req, req.parentId ? this.registry.get(req.parentId) : undefined);
     const adapter = isAgentKind(req.kind) ? adapterFor(req) : undefined;
@@ -810,6 +814,8 @@ export class NodeManager extends EventEmitter {
   }
 
   rename(id: string, title: string): void {
+    const bad = reservedTitle(title);
+    if (bad) throw new Error(bad);
     if (this.registry.update(id, { title })) this.emitNode(id);
   }
 

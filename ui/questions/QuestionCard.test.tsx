@@ -1,23 +1,26 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { Question } from '../../src/shared/protocol';
 import { send } from '../conn';
 import { mk } from '../fixtures';
-import { getState, update } from '../store';
+import { applyServer, getState, update } from '../store';
 import { elements } from '../test-tree';
 import { clearDraft, getDraft, setDraft, settleSent } from './drafts';
+import { NOT_TRIED } from '../../src/shared/questions';
 import { mkq, NOW } from './fixtures';
 import { QuestionCard } from './QuestionCard';
 
-// useState keeps each call's value by its position in a render, so a test can set state and render again.
-const hooks = vi.hoisted(() => ({ states: [] as unknown[], next: 0 }));
+// useState and useRef keep each call's value by its position in a render, so a test can set state and render again.
+// Effects are collected by a render and run by commit(), as after a real commit.
+const hooks = vi.hoisted(() => ({ states: [] as unknown[], refs: [] as { current: unknown }[], effects: [] as (() => unknown)[], next: 0, nextRef: 0 }));
 vi.mock('react', async (original) => ({ ...await original<typeof import('react')>(),
   useState: (init: unknown) => {
     const i = hooks.next++;
     return [i in hooks.states ? hooks.states[i] : typeof init === 'function' ? init() : init, (v: unknown) => { hooks.states[i] = v; }];
   },
-  useRef: (init: unknown) => ({ current: init ?? null }), useEffect: () => {}, useLayoutEffect: () => {} }));
+  useRef: (init: unknown) => (hooks.refs[hooks.nextRef] ??= { current: init ?? null }) && hooks.refs[hooks.nextRef++],
+  useEffect: (fn: () => unknown) => { hooks.effects.push(fn); }, useLayoutEffect: () => {} }));
 vi.mock('../store', async (original) => {
   const store = await original<typeof import('../store')>();
   return { ...store, useStore: (select: (state: ReturnType<typeof store.getState>) => unknown) => select(store.getState()) };
@@ -30,8 +33,11 @@ const worker = mk('worker', 'root', 0);
 const go = vi.fn();
 const put = (...qs: Question[]) => update(() => ({ questions: Object.fromEntries(qs.map((q) => [q.id, q])) }));
 const props = (q: Question) => ({ q: getState().questions[q.id] ?? q, focus: false, go });
-const tree = (q: Question) => { hooks.next = 0; return elements(QuestionCard(props(q))); };
-const html = (q: Question) => { hooks.next = 0; return renderToStaticMarkup(<QuestionCard {...props(q)} />); };
+const begin = () => { hooks.next = 0; hooks.nextRef = 0; hooks.effects.length = 0; };
+const tree = (q: Question) => { begin(); return elements(QuestionCard(props(q))); };
+const html = (q: Question) => { begin(); return renderToStaticMarkup(<QuestionCard {...props(q)} />); };
+/** Render the card and run its effects, as a commit does; a later render sees the state they set. */
+const commit = (q: Question, focus = false) => { begin(); elements(QuestionCard({ ...props(q), focus })); hooks.effects.splice(0).forEach((fn) => fn()); };
 /** The visible words of a card: tags dropped, entities decoded. */
 const plain = (q: Question) => html(q).replace(/<[^>]*>/g, '').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, '&');
 const textOf = (n: ReactNode): string => Array.isArray(n) ? n.map(textOf).join('') : typeof n === 'string' || typeof n === 'number' ? String(n) : n && typeof n === 'object' && 'props' in n ? textOf((n.props as { children?: ReactNode }).children) : '';
@@ -42,11 +48,13 @@ const type = (q: Question, value: string) => tree(q).find((el) => el.type === 't
 const ask = mkq('q-1', 'worker', 4, { choices: ['Keep it', 'Drop it'], askedBy: { id: 'worker', title: 'worker' } });
 
 beforeEach(() => {
-  vi.clearAllMocks(); hooks.states.length = 0;
-  update(() => ({ nodes: { root, worker }, questions: {}, refusals: {}, connected: true }));
+  vi.clearAllMocks(); hooks.states.length = 0; hooks.refs.length = 0;
+  vi.stubGlobal('document', { activeElement: null, body: {} }); // commit() runs the focus effect
+  update(() => ({ nodes: { root, worker }, questions: {}, refusals: {}, connected: true, looseErrors: 0 }));
   put(ask);
   clearDraft('q-1'); clearDraft('q-2');
 });
+afterEach(() => vi.unstubAllGlobals());
 
 it('shows choices as buttons; a choice answers at once with the choice and whatever is typed', () => {
   expect(tree(ask).filter((el) => el.props.className === 'q-choice').map(textOf)).toEqual(['Keep it', 'Drop it']);
@@ -86,6 +94,51 @@ it('while an answer is in flight Send reads "Sending…" and nothing can be sent
   expect(send).toHaveBeenCalledOnce();
 });
 
+it('stops saying "Sending…" when the daemon rejects the message itself, and keeps the text', () => {
+  type(ask, 'Yes');
+  button(ask, 'Send')!.props.onClick();
+  expect(button(ask, 'Sending…')!.props.disabled).toBe(true);
+  applyServer({ t: 'error', message: 'Malformed message' }); // no questionId: nothing says which card
+  commit(ask);
+  expect(button(ask, 'Send')!.props.disabled).toBe(false);
+  expect(plain(ask)).toContain('Not sent. Tiller reported an error; try again. Your text is kept.');
+  expect(getDraft('q-1')).toBe('Yes');
+  button(ask, 'Send')!.props.onClick(); // and it can be tried again
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(plain(ask)).not.toContain('Not sent. Tiller reported');
+});
+
+it('does not take an error that came before the send, or one that names a question, for the send\'s reply', () => {
+  applyServer({ t: 'error', message: 'Malformed message' });
+  type(ask, 'Yes');
+  button(ask, 'Send')!.props.onClick();
+  commit(ask);
+  expect(button(ask, 'Sending…')).toBeDefined();
+  applyServer({ t: 'error', message: 'q-1 was already answered', id: 'worker', questionId: 'q-1' });
+  commit(ask);
+  expect(plain(ask)).not.toContain('Tiller reported an error');
+});
+
+it('moves focus to the kept text, not silently to a button, when the question under your typing is resolved elsewhere', () => {
+  const focused: string[] = [];
+  // The card's element is the first ref; any selector inside it finds an element that records its focus.
+  hooks.refs[0] = { current: { contains: () => false, querySelector: (sel: string) => ({ focus: () => focused.push(sel) }) } };
+  commit(ask);
+  type(ask, 'Keep it until March');
+  put({ ...ask, state: 'withdrawn', resolvedAt: NOW, withdrawn: { by: 'worker' } });
+  commit(ask);
+  expect(focused).toEqual(['.q-input']);
+});
+
+it('opens a card that is already in its kept form on its button, as before', () => {
+  const focused: string[] = [];
+  hooks.refs[0] = { current: { contains: () => false, querySelector: (sel: string) => ({ focus: () => focused.push(sel) }) } };
+  setDraft('q-1', 'Keep it until March');
+  put({ ...ask, state: 'withdrawn', resolvedAt: NOW, withdrawn: { by: 'worker' } });
+  commit(ask, true);
+  expect(focused).toEqual(['.qcard-foot .primary']);
+});
+
 it('dismisses with the dismiss action', () => {
   button(ask, 'Dismiss')!.props.onClick();
   expect(send).toHaveBeenCalledWith({ t: 'question', id: 'q-1', action: 'dismiss' });
@@ -118,7 +171,7 @@ it('clears the draft when this client\'s own answer is accepted, and then shows 
   type(ask, 'Keep it until March');
   button(ask, 'Send')!.props.onClick();
   // Another client's identical-looking answer would not match what was sent; this one does.
-  put({ ...ask, state: 'answered', resolvedAt: NOW, answer: { text: 'Keep it until March', at: NOW }, delivery: { state: 'queued' } });
+  put({ ...ask, state: 'answered', resolvedAt: NOW, answer: { text: 'Keep it until March', at: NOW }, delivery: { state: 'queued' } }); // worker is working
   expect(plain(ask)).toContain('You answered');
   expect(settleSent(getState().questions, () => 'worker')).toEqual(['Answer sent to worker.']);
   expect(getDraft('q-1')).toBe('');
@@ -140,6 +193,19 @@ it.each([
   put(q);
   expect(plain(q)).toContain(sentence);
   expect(plain(q)).toContain('You answered');
+});
+
+it('says an answer is on its way, not that the agent is busy, while the owner is not working', () => {
+  update((s) => ({ nodes: { ...s.nodes, worker: mk('worker', 'root', 0, { state: 'done' }) } }));
+  for (const delivery of [{ state: 'queued' }, { state: 'waiting', detail: NOT_TRIED }] as const) {
+    const q = answered('waiting', { delivery: { ...delivery, at: NOW } });
+    put(q);
+    expect(plain(q)).toContain('Sending to worker…');
+    expect(plain(q)).not.toMatch(/Waiting until|Not sent yet|current turn/);
+  }
+  const retried = answered('waiting', { delivery: { state: 'waiting', detail: 'rate limited, retry in 3 s', at: NOW } }); // a try that failed
+  put(retried);
+  expect(plain(retried)).toContain('Not sent yet. Tiller will keep trying.');
 });
 
 it('says an answer is not sent yet because the owner is not running, with a way to go to it', () => {

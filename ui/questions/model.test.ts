@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { mk } from '../fixtures';
-import { ago, listing, questionsIn, reminderList } from './model';
+import { ago, ended, listing, questionsIn, quoted, reminderList, sentence } from './model';
 import { mkq, NOW } from './fixtures';
 
 // Two sessions: a (with its child a1) and b. Questions are listed by the node that owns them.
@@ -54,4 +54,14 @@ it('headers a group for a session that no longer exists with its rootTitle, or "
 
 it('words ages as the design does', () => {
   expect([0, 4 * 60_000, 2 * 3_600_000, 30 * 3_600_000, 5 * 86_400_000].map(ago)).toEqual(['just now', '4 min ago', '2 h ago', 'yesterday', '5 d ago']);
+});
+
+it('ends a sentence once: a quoted reason or answer that ends in a mark brings its own, and a question gets one only when it has none', () => {
+  expect([quoted('found it'), quoted('Done.'), quoted('why?'), quoted('wait…')]).toEqual(['“found it”.', '“Done.”', '“why?”', '“wait…”']);
+  expect([sentence('Keep it?'), sentence('Keep it'), sentence('Done. ')]).toEqual(['Keep it?', 'Keep it.', 'Done.']);
+  const withdrawn = (reason?: string) => mkq('q', 'a', 5, { state: 'withdrawn', withdrawn: { by: 'a', ...(reason ? { reason } : {}) } });
+  expect(ended(withdrawn('found it in the docs.'), nodes, false)[1]).toBe('a withdrew it: “found it in the docs.”');
+  expect(ended(withdrawn('found it'), nodes, false)[1]).toBe('a withdrew it: “found it”.');
+  expect(ended(withdrawn(), nodes, true)[1]).toBe('a withdrew this just before your answer arrived.');
+  expect(ended(mkq('q', 'a', 5, { state: 'answered', answer: { text: 'Yes.', at: NOW } }), nodes, true)[1]).toBe('This was already answered, in another window or from the shell: “Yes.”');
 });
