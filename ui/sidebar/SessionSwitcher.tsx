@@ -15,7 +15,8 @@ export function SessionSwitcher() {
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const pencil = useRef<HTMLButtonElement>(null);
-  const list = useMemo(() => sessions(nodes, order), [nodes, order]);
+  const questions = useStore((s) => s.questions);
+  const list = useMemo(() => sessions(nodes, order, Object.values(questions)), [nodes, order, questions]);
   const cur = list.find((s) => s.root.id === session);
   const others = list.filter((s) => s !== cur && s.needs > 0).reduce((a, s) => a + s.needs, 0);
   const renaming = useStore((s) => s.renaming?.at === 'session' && s.renaming.id === cur?.root.id);
@@ -52,7 +53,7 @@ export function SessionSwitcher() {
             onClick={() => open ? close() : setOpen(true)} onKeyDown={(e) => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setOpen(true); } }}>
             {cur ? <><StateDot kind={cur.kind} /><span className="session-copy"><span className="st">{cur.root.title}</span><span className="sc" title={cur.root.cwd}>{cwdBase(cur.root.cwd)}</span></span></> : <span className="sc">No session</span>}
             {(cur?.needs ?? 0) > 0 && <span className="count warn" title="needs you in this session">{cur!.needs}</span>}
-            {others > 0 && <span className="count warn" title="needs you in other sessions">+{others}</span>}
+            {others > 0 && <span className="count warn others" title="needs you in other sessions">+{others}</span>}
             {cur && <span className="rename-slot" />}
             <Icon name="updown" size={14} />
           </button>

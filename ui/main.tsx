@@ -7,6 +7,7 @@ import './layout.css';
 import './sidebar/sidebar.css';
 import './controls/controls.css';
 import './activity.css';
+import './questions/questions.css';
 
 startTheme();
 createRoot(document.getElementById('root')!).render(<App />);

@@ -11,7 +11,7 @@ import { RenameInput } from '../controls/RenameInput';
 import { getState, setRenaming, update } from '../store';
 import { send } from '../conn';
 import { mk } from '../fixtures';
-import type { NodeView } from '../../src/shared/protocol';
+import type { NodeView, Question } from '../../src/shared/protocol';
 import { flattenSession } from './tree';
 
 const hooks = vi.hoisted(() => ({ open: false, setOpen: vi.fn(), effects: [] as (() => unknown)[], refs: [] as { current: unknown }[] }));
@@ -34,7 +34,7 @@ const b = { ...mk('b', null, 2), cwd: '/other/root' };
 const child = { ...mk('child', 'a', 3), cwd: '/child/worktree' };
 beforeEach(() => {
   vi.clearAllMocks(); hooks.setOpen.mockReset(); hooks.open = false; hooks.effects.length = 0; hooks.refs.length = 0;
-  update(() => ({ nodes: { a, b, child }, order: ['a', 'child', 'b'], selected: 'child', session: 'a', collapsed: [], opened: [], historyOpen: false, renaming: null, dialog: null }));
+  update(() => ({ nodes: { a, b, child }, order: ['a', 'child', 'b'], selected: 'child', session: 'a', collapsed: [], opened: [], historyOpen: false, renaming: null, dialog: null, questions: {} }));
 });
 
 it('offers a single New session action with the current root cwd, even when a child is selected', () => {
@@ -440,4 +440,23 @@ it('keeps Cmd+0 as the tree entry point without selecting or opening node action
   expect(getState().selected).toBe('child');
   expect(getState().dialog).toBeNull();
   vi.unstubAllGlobals();
+});
+
+it('says "Question for you" on a node that owns open questions, with the first as its tooltip, and counts hidden ones on a collapsed parent', () => {
+  const question = (id: string, nodeId: string, extra: Partial<Question> = {}): Question =>
+    ({ id, rootId: 'a', nodeId, askedBy: { id: nodeId, title: nodeId }, question: `Question ${id}?`, state: 'open', askedAt: 1, ...extra });
+  const html = (collapsed: boolean, row = 0) => renderToStaticMarkup(<NodeRow row={flattenSession(getState().nodes, getState().order, 'a', collapsed ? ['a'] : [])[row]} />);
+  expect(html(false)).not.toContain('for you');
+  update(() => ({ questions: { q1: question('q1', 'child') } }));
+  expect(html(false, 1)).toContain('<span class="count warn q-chip" title="Question q1?">Question for you</span>');
+  // A waiting question comes before one that carries on, so it is the tooltip even though it is newer.
+  update(() => ({ questions: { q1: question('q1', 'a', { assumption: 'Go on' }), q2: question('q2', 'a', { askedAt: 5 }), q3: question('q3', 'a', { state: 'dismissed' }) } }));
+  expect(html(false)).toContain('title="Question q2?">2 questions for you</span>');
+  // Collapsed, the parent counts what its hidden descendants own, in words.
+  update(() => ({ questions: { q1: question('q1', 'child'), q2: question('q2', 'child') } }));
+  expect(html(true)).toContain('>2 questions below</span>');
+  expect(html(true)).not.toContain('for you');
+  update(() => ({ questions: { q1: question('q1', 'child') } }));
+  expect(html(true)).toContain('>1 question below</span>');
+  expect(html(false)).not.toContain('below');
 });

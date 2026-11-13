@@ -1,7 +1,7 @@
 import type { ClientMessage, ServerMessage } from '../src/shared/protocol';
 import { applyServer, getState, setConnected, update } from './store';
 import { getTerm } from './terminals';
-import { armOnFirstClick, handleNativeNotification, handleNotify, initializeNativeNotifications } from './notify';
+import { armOnFirstClick, handleNativeNotification, handleNotify, handleQuestion, initializeNativeNotifications } from './notify';
 import { IN_APP, token } from './url';
 
 let ws: WebSocket | undefined;
@@ -52,7 +52,10 @@ function open() {
     if (m.t === 'data') getTerm(m.id)?.term.write(m.data);
     else if (m.t === 'notify') handleNotify(m);
     else if (m.t === 'nativeNotify') void handleNativeNotification(m, send);
-    else applyServer(m);
+    else {
+      if (m.t === 'question') handleQuestion(m.question);
+      applyServer(m);
+    }
   };
   sock.onclose = () => {
     if (ws !== sock) return;

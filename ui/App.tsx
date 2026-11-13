@@ -8,6 +8,9 @@ import { ArchivePane } from './transcript/History';
 import { useDocumentSync } from './hooks';
 import { LastMessagePanel } from './LastMessagePanel';
 import { Palette } from './Palette';
+import { NeedsPanel } from './questions/NeedsPanel';
+import { QuestionLive } from './questions/QuestionLive';
+import { QuestionReminder } from './questions/QuestionReminder';
 import { moveSession, nthSession, SessionTabs, stepSession } from './SessionTabs';
 import { Sidebar, useRows } from './sidebar/Sidebar';
 import { StatusBar } from './StatusBar';
@@ -15,7 +18,7 @@ import { TerminalPane } from './TerminalPane';
 import { TitleBar } from './TitleBar';
 import { TranscriptPane } from './transcript/TranscriptPane';
 import { ConfirmModal, DigestCard, Toasts } from './Toasts';
-import { getState, openDialog, selectNode, useStore } from './store';
+import { closeNeeds, getState, openDialog, openNeeds, selectNode, useStore } from './store';
 import { IN_APP } from './url';
 import { SettingsPanel } from './settings/SettingsPanel';
 
@@ -49,6 +52,7 @@ export function App() {
         return;
       }
       if (e.key === 'k') { e.preventDefault(); openDialog(getState().dialog?.kind === 'palette' ? null : { kind: 'palette' }); }
+      else if (e.key === 'j') { e.preventDefault(); if (getState().needs.open) closeNeeds(); else openNeeds(); }
       else if (e.key === '0') { e.preventDefault(); document.querySelector<HTMLElement>('.tree')?.focus(); }
       else if (/^[1-9]$/.test(e.key)) {
         const row = rows[Number(e.key) - 1];
@@ -79,6 +83,9 @@ export function App() {
                 <p>Choose New session in the sidebar to get started.</p>
               </div>
             )}
+            {/* The suggestion strip owns the top of the stage on the Terminal tab; the bar would cover it. */}
+            {!(shell && node?.suggestion) && <QuestionReminder bar />}
+            <NeedsPanel />
           </div>
           {panel && <LastMessagePanel />}
         </div>
@@ -86,6 +93,7 @@ export function App() {
       <StatusBar />
       <ActivityDrawer />
       <Toasts />
+      <QuestionLive />
       <ConfirmModal />
       <DigestCard />
       <Dialogs />

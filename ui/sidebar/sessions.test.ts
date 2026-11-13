@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ancestry, arrange, besideSession, pickInitial, rootOf, sessions } from './sessions';
 import { mk } from '../fixtures';
+import type { Question } from '../../src/shared/protocol';
 
 const nodes = Object.fromEntries([
   mk('r1', null, 100), mk('c', 'r1', 500, { state: 'blocked' }), mk('g', 'c', 50),
@@ -20,6 +21,15 @@ describe('sessions', () => {
     expect([s1.root.id, s1.size, s1.needs, s1.kind]).toEqual(['r1', 3, 1, 'needs']);
     expect([s2.root.id, s2.size, s2.needs, s2.kind]).toEqual(['r2', 1, 0, 'working']);
     expect(s3.kind).toBe('exited');
+  });
+
+  it('open questions count toward their session and give it the needs colour even when every node is done', () => {
+    const done = Object.fromEntries([mk('d', null, 1, { state: 'done' }), mk('dc', 'd', 2, { state: 'done' })].map((n) => [n.id, n]));
+    const q = (id: string, nodeId: string, state: Question['state'] = 'open'): Question =>
+      ({ id, rootId: 'd', nodeId, askedBy: { id: nodeId, title: nodeId }, question: 'Which one?', state, askedAt: 1 });
+    expect(sessions(done, ['d', 'dc'])[0]).toMatchObject({ needs: 0, kind: 'done' });
+    const [s] = sessions(done, ['d', 'dc'], [q('q-00000001', 'd'), q('q-00000002', 'dc'), q('q-00000003', 'dc', 'dismissed')]);
+    expect([s.needs, s.kind]).toEqual([2, 'needs']);
   });
 
   it('default session: ?node wins (even deep), else newest live root, else first root', () => {
