@@ -47,6 +47,8 @@ export interface State {
   questions: Record<string, Question>;
   /** The Needs you drawer is open; focusId is the question to scroll to and focus. */
   needs: { open: boolean; focusId?: string };
+  /** Answers and dismissals the daemon refused, by question id: its message. The card shows why and keeps the typed text. */
+  refusals: Record<string, string>;
   connected: boolean;
   /** Reconnect attempts since the last successful connection. */
   retry: number;
@@ -102,7 +104,7 @@ const storedTools = readPref('tl.showTools') === '1';
 
 let state: State = {
   nodes: {}, order: [], sessionOrder: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
-  questions: {}, needs: { open: false }, connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
+  questions: {}, needs: { open: false }, refusals: {}, connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
   transcriptOpen: false, shellOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
 };
 const subs = new Set<() => void>();
@@ -132,11 +134,14 @@ export const recordActivity = (text: string, nodeId?: string, tone: Tone = 'info
 const allRead = (items: Activity[]) => items.map((item) => item.read ? item : { ...item, read: true });
 export const markActivityRead = () => update((s) => ({ activity: allRead(s.activity) }));
 export const clearActivity = () => update(() => ({ activity: [] }));
+// The Activity drawer and the Needs you panel share the right-hand side: opening one closes the other.
 export const setActivityOpen = (activityOpen: boolean) => update((s) => ({
   activityOpen,
+  ...(activityOpen ? { needs: { open: false } } : {}),
   ...(activityOpen ? { activity: allRead(s.activity) } : {}),
 }));
-export const openNeeds = (focusId?: string) => update(() => ({ needs: { open: true, focusId } }));
+export const openNeeds = (focusId?: string) => update(() => ({ needs: { open: true, focusId }, activityOpen: false }));
+export const clearRefusal = (id: string) => update((s) => { const { [id]: _, ...refusals } = s.refusals; return { refusals }; });
 export const closeNeeds = () => update(() => ({ needs: { open: false } }));
 export const dismissToast = (id: number) => update((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
 export const dropConfirm = (confirmId: string) => update((s) => ({ confirms: s.confirms.filter((c) => c.confirmId !== confirmId) }));
@@ -300,6 +305,12 @@ export function applyServer(m: ServerMessage) {
       if (state.usageScanning) update(() => ({ usageScanning: false }));
       // A spawn or follow-up that failed answers only with an error: stop waiting, or the next node anyone spawns gets selected.
       if (state.awaitSpawn) update(() => ({ awaitSpawn: false }));
+      {
+        // A refused answer or dismissal belongs on its question's card, not in a toast. A daemon that predates
+        // questionId still starts the message with the id.
+        const questionId = m.questionId ?? /^(q-[0-9a-f]{8}) was /.exec(m.message)?.[1];
+        if (questionId) return update((s) => ({ refusals: { ...s.refusals, [questionId]: m.message } }));
+      }
       recordActivity(m.message, m.id, 'bad');
       return toast(m.message, m.id, 'bad');
     case 'digest':

@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { claudeAccounts, conversation, mk } from './fixtures';
 import type { Question } from '../src/shared/protocol';
-import { applyServer, closeNeeds, conversationRequested, conversationsRequested, diffRequested, expectSpawn, getState, openNeeds, selectSession, toggleShowTools, update, transcriptRequested } from './store';
+import { applyServer, clearRefusal, closeNeeds, conversationRequested, conversationsRequested, diffRequested, expectSpawn, getState, openNeeds, selectSession, setActivityOpen, toggleShowTools, update, transcriptRequested } from './store';
 import { roots } from './sidebar/sessions';
 
 it('the diff panel shows the diff reply\'s own failure, not another error for the same node', () => {
@@ -206,4 +206,26 @@ it('openNeeds and closeNeeds toggle the drawer and its focus', () => {
   expect(getState().needs).toEqual({ open: true, focusId: 'q-0000000a' });
   closeNeeds();
   expect(getState().needs).toEqual({ open: false });
+});
+
+it('a refused answer is kept against its question and raises no toast, with or without questionId', () => {
+  update(() => ({ toasts: [], refusals: {} }));
+  applyServer({ t: 'error', id: 'r', questionId: 'q-0000000a', message: 'q-0000000a was already answered' });
+  applyServer({ t: 'error', id: 'r', message: 'q-0000000b was replaced by q-0000000c' }); // an older daemon
+  expect(getState().refusals).toEqual({ 'q-0000000a': 'q-0000000a was already answered', 'q-0000000b': 'q-0000000b was replaced by q-0000000c' });
+  expect(getState().toasts).toEqual([]);
+  clearRefusal('q-0000000a');
+  expect(Object.keys(getState().refusals)).toEqual(['q-0000000b']);
+  applyServer({ t: 'error', id: 'r', message: 'no such node: r' });
+  expect(getState().toasts).toHaveLength(1);
+});
+
+it('the Needs you panel and the Activity drawer close each other', () => {
+  setActivityOpen(true);
+  openNeeds('q-0000000a');
+  expect(getState().activityOpen).toBe(false);
+  expect(getState().needs).toEqual({ open: true, focusId: 'q-0000000a' });
+  setActivityOpen(true);
+  expect(getState().needs).toEqual({ open: false });
+  setActivityOpen(false);
 });
