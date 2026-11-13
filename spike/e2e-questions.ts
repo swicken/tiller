@@ -126,7 +126,7 @@ async function main(): Promise<void> {
   d = await startDaemon();
   c = await connect();
   check(c.snapshot()?.questions?.some((q) => q.id === asked.id && q.state === 'open') === true, 'the snapshot after the restart still carries the open question');
-  await waitFor('the node running again', 120_000, () => c.nodes.get(id)?.status.exited === false);
+  await waitFor('the node running again', 120_000, () => c.nodes.has(id) && !c.nodes.get(id)!.status.exited); // a running node has no `exited` flag at all
 
   const answerFile = join(HOME, 'sessions', asked.rootId, 'answer.txt');
   c.send({ t: 'question', id: asked.id, action: 'answer', choice: 'blue', text: `Write the colour to ${answerFile}` });
