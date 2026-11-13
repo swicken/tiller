@@ -1,0 +1,177 @@
+/* Questions for the human: the reminder, the Needs you panel, its cards and rows, and the counts on existing surfaces.
+   Existing tokens only; tints are color-mix of --needs, --accent and --bad, as layout.css and sidebar.css do.
+   Load after activity.css (main.tsx order). */
+
+/* The main column is the size container that decides where the reminder goes (section 4 of design.md). */
+.main { container: main / inline-size; }
+
+/* ---------- The reminder ---------- */
+/* One button. In the pane-tab row (.tb-views, always 42px tall) when the main column is 720px or wider;
+   otherwise the same button as a 40px bar laid over the top of the stage. Neither changes the stage's size. */
+.q-remind { flex: 0 1 auto; min-width: 0; max-width: 600px; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px 0 10px; border: 1px solid color-mix(in srgb, var(--needs) 45%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--needs) 10%, var(--surface)); color: var(--fg); text-align: left; animation: q-fade 160ms ease-out; }
+.q-remind:hover { background: color-mix(in srgb, var(--needs) 16%, var(--surface)); }
+.q-remind[aria-expanded='true'] { background: color-mix(in srgb, var(--needs) 20%, var(--surface)); }
+.q-remind:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.q-remind .q-who { flex: none; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.q-remind .q-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-remind .q-carry { flex: none; color: var(--dim); }
+.q-remind .q-more { flex: none; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.q-remind .q-go { flex: none; display: flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 4px; color: var(--accent); font-weight: 600; }
+.q-remind:hover .q-go { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* Carrying on: nothing is held up, so the reminder is quieter and its dot is hollow. */
+.q-remind.carrying { border-color: var(--line); background: var(--surface-2); }
+.q-remind.carrying:hover { background: var(--hover); }
+@container titlebar (max-width: 780px) {
+  .q-remind .q-who, .q-remind .q-carry { display: none; }
+}
+/* The overlay form: over the top of the stage, below its panes' z-index ceiling (Diff and Transcript are 6). */
+.q-remind.q-bar { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 7; max-width: none; height: 40px; gap: 10px; padding: 0 8px 0 16px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--needs) 40%, var(--line)); border-radius: 0; }
+.q-remind.q-bar.carrying { border-bottom-color: var(--line); }
+.q-remind.q-bar .q-who, .q-remind.q-bar .q-carry { display: none; }
+.q-remind.q-bar .q-go { height: 28px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); }
+.q-remind.q-bar:focus-visible { outline-offset: -2px; }
+@container main (max-width: 719px) {
+  .tb-views .q-remind { display: none; }
+  .q-remind.q-bar { display: flex; }
+  /* The open panel sits below the bar, so the bar that opened it stays visible. */
+  .stage:has(> .q-bar) > .qpanel:not(.qpanel-modal) { top: 48px; max-height: calc(100% - 56px); }
+}
+
+/* Hollow ring: a question whose agent carries on meanwhile. The filled amber dot is the existing .dot.needs. */
+.qring { flex: none; display: inline-block; width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--dim); }
+
+/* ---------- The Needs you panel: anchored to the top right of the stage, over the terminal, below the title bar ---------- */
+.qpanel { position: absolute; top: 8px; right: 12px; z-index: 12; width: min(440px, calc(100% - 24px)); max-height: calc(100% - 16px); display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); animation: q-enter 140ms ease-out; }
+.qpanel:focus { outline: none; }
+.qpanel-head { flex: none; display: flex; align-items: baseline; gap: 10px; padding: 12px 12px 12px 16px; border-bottom: 1px solid var(--line); }
+.qpanel-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.qpanel-head .qpanel-count { color: var(--dim); font-size: 12px; }
+.qpanel-head .btn { align-self: center; height: 28px; }
+.qpanel-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 2px 0 12px; scrollbar-color: var(--line) var(--surface); }
+.qpanel ::selection { background: var(--sel); color: var(--fg); }
+/* The full-window form, used when the stage is narrower than 480px. */
+.qpanel-modal { position: fixed; inset: 0 0 24px 0; margin: 0; padding: 0; width: 100%; height: calc(100% - 24px); max-width: none; max-height: none; border: 0; border-radius: 0; box-shadow: none; color: var(--fg); }
+[data-app] .qpanel-modal { top: 38px; height: calc(100% - 62px); }
+.qpanel-modal::backdrop { background: var(--bg); }
+
+/* Session group: "tiller · this session", sentence case, count at the right. */
+.qgroup { display: flex; align-items: baseline; gap: 6px; margin: 0; padding: 14px 16px 6px; font-size: 13px; font-weight: 400; color: var(--dim); }
+.qgroup b { color: var(--fg); font-weight: 600; }
+.qgroup .qgroup-n { margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+.qlist { margin: 0; padding: 0; list-style: none; }
+/* Session sub-headings inside "Not delivered" and "Done in the last day". */
+.qsection .qsub { padding: 8px 16px 4px; font-size: 12px; }
+
+/* A question not in focus, and an approval prompt: one button, the question (at most two lines) and one line beneath. */
+.qrow { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 16px; border: 0; background: none; color: var(--fg); text-align: left; }
+.qrow:hover { background: var(--hover); }
+.qrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.qrow > .dot, .qrow > .qring { margin-top: 5px; }
+.qrow-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.qrow-q { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.45; }
+.qrow-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px; }
+.qrow-sub .qstate { font-weight: 600; }
+.qrow-sub .qstate.waiting { color: var(--needs); }
+.qrow-sub .qstate.carrying { color: var(--fg); }
+.qrow time { flex: none; margin-top: 1px; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.qrow .q-open { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 2px; color: var(--accent); font-size: 12px; font-weight: 600; }
+
+/* The question in focus. */
+.qcard { margin: 4px 12px 8px; padding: 14px 16px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: inset 3px 0 var(--needs); }
+.qcard.carrying, .qcard.resolved { box-shadow: none; }
+.qcard.resolved { padding: 12px 14px; }
+.qcard-q { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; user-select: text; }
+/* Over 140 characters, bold 15px reads as shouting; long questions step down but stay the strongest text. */
+.qcard-q.long { font-size: 14px; font-weight: 500; line-height: 1.5; }
+.qcard.resolved .qcard-q { font-size: 14px; }
+/* The heading takes focus only so a screen reader starts there; it is not operable, so it draws no ring. */
+.qcard-q:focus { outline: none; }
+.qcard-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px; margin-top: 4px; color: var(--dim); font-size: 12px; }
+.qcard-meta time { font-variant-numeric: tabular-nums; }
+.q-owner { display: inline-flex; align-items: center; gap: 1px; max-width: 100%; padding: 0 3px; margin: 0 -1px; border: 0; border-radius: 4px; background: none; color: var(--fg); font-weight: 600; }
+.q-owner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-owner svg { flex: none; color: var(--dim); }
+.q-owner:hover { background: var(--hover); }
+.q-owner:hover svg { color: var(--fg); }
+.q-owner:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.qcard-meta .q-gone { color: var(--fg); font-weight: 600; }
+
+/* The two kinds of open question, told apart by words, a filled or hollow dot, and the card's edge. */
+.qcard-state { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin: 10px 0 0; font-size: 12px; line-height: 1.45; color: var(--dim); overflow-wrap: anywhere; }
+.qpill { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 11px; font-size: 12px; font-weight: 600; }
+.qpill.waiting { background: color-mix(in srgb, var(--needs) 16%, var(--bg)); color: var(--needs); }
+.qpill.waiting::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--needs); }
+.qpill.carrying { background: var(--surface-2); color: var(--fg); }
+.qpill.carrying::before { content: ''; width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--dim); }
+.qcard-state .q-meanwhile { min-width: 0; color: var(--fg); }
+
+/* A note about the asker or owner, and every outcome line: a bold lead phrase, one sentence, maybe a next step. */
+.qnote { display: flex; gap: 8px; margin: 10px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); font-size: 12px; line-height: 1.5; color: var(--dim); overflow-wrap: anywhere; }
+.qnote > svg { flex: none; margin-top: 2px; color: var(--dim); }
+.qnote b, .qoutcome b { color: var(--fg); font-weight: 600; }
+.qnote .btn, .qoutcome .btn { height: 28px; margin-top: 6px; }
+.qoutcome { display: flex; gap: 8px; margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: var(--dim); overflow-wrap: anywhere; }
+.qoutcome > svg { flex: none; margin-top: 2px; }
+.qoutcome.delivered > svg { color: var(--done); }
+.qoutcome.unconfirmed > svg { color: var(--needs); }
+.qoutcome.dropped > svg { color: var(--bad); }
+.btns-inline { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.qcard-ctx { margin-top: 10px; }
+.qcard-ctx summary { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; margin-left: -4px; border-radius: 4px; color: var(--dim); font-size: 12px; cursor: pointer; list-style: none; }
+.qcard-ctx summary::-webkit-details-marker { display: none; }
+.qcard-ctx summary svg { transition: transform 0.12s; }
+.qcard-ctx[open] summary svg { transform: rotate(90deg); }
+.qcard-ctx summary:hover { color: var(--fg); background: var(--hover); }
+.qcard-ctx summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.qcard-ctx-body { margin-top: 6px; max-height: 15em; overflow: auto; padding: 8px 12px; border-radius: 6px; background: var(--surface); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; user-select: text; scrollbar-color: var(--line) var(--surface); }
+
+.qcard-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.q-choice { max-width: 100%; min-height: 32px; padding: 6px 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: 6px; background: var(--surface-2); color: var(--fg); font-weight: 500; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+.q-choice:hover:not(:disabled), .q-choice.is-hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); }
+.q-choice:focus-visible, .q-choice.is-focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.q-input { display: block; width: 100%; min-height: 60px; margin-top: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); line-height: 1.45; resize: vertical; }
+.q-input::placeholder { color: var(--dim); }
+.q-input:focus, .q-input.is-focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.q-input[readonly] { background: var(--surface-2); }
+.qcard-hint { margin: 6px 0 0; color: var(--dim); font-size: 12px; }
+.qcard-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.qcard-foot .q-hint { color: var(--dim); font-size: 12px; }
+.qcard-foot .btn { height: 32px; padding: 0 14px; }
+.q-quiet { height: 32px; padding: 0 10px; margin-left: -10px; border: 0; border-radius: 6px; background: none; color: var(--dim); }
+.q-quiet:hover { background: var(--hover); color: var(--fg); }
+.q-quiet:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* After answering: what you said. */
+.q-answer { margin-top: 10px; padding: 8px 10px; border-radius: 6px; background: var(--surface-2); line-height: 1.5; overflow-wrap: anywhere; }
+.q-answer .q-answer-label { display: block; color: var(--dim); font-size: 12px; }
+.q-answer .q-answer-choice { font-weight: 600; }
+.q-answer .q-answer-text { margin: 2px 0 0; white-space: pre-wrap; user-select: text; }
+.qcard-next { display: flex; justify-content: flex-end; margin-top: 10px; }
+.qcard-next .btn { height: 28px; }
+
+/* An answer that was not sent: why, and the text kept. */
+.q-refused { display: flex; gap: 8px; margin-top: 10px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--bad) 8%, var(--bg)); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.q-refused > svg { flex: none; margin-top: 2px; color: var(--bad); }
+.q-refused p { margin: 0; color: var(--fg); }
+.q-refused p b { color: var(--bad); }
+.q-refused p + p { margin-top: 2px; color: var(--dim); }
+
+/* "Not delivered" (open when not empty) and "Done in the last day" (closed). */
+.qsection { margin-top: 6px; border-top: 1px solid var(--line); }
+.qsection > summary { display: flex; align-items: center; gap: 6px; padding: 12px 16px 6px; color: var(--dim); font-size: 13px; cursor: pointer; list-style: none; }
+.qsection > summary b { color: var(--fg); font-weight: 600; }
+.qsection > summary::-webkit-details-marker { display: none; }
+.qsection > summary svg { transition: transform 0.12s; }
+.qsection[open] > summary svg { transform: rotate(90deg); }
+.qsection > summary:hover { color: var(--fg); }
+.qsection > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.qempty { padding: 28px 24px 20px; color: var(--dim); }
+.qempty h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--fg); }
+.qempty p { margin: 0; line-height: 1.5; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+@keyframes q-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes q-enter { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .q-remind, .qpanel { animation: none; } .qcard-ctx summary svg, .qsection > summary svg { transition: none; } }

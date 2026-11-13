@@ -4,7 +4,7 @@ import { StateDot } from './controls/Bits';
 import { cwdBase } from './format';
 import { Modal } from './controls/Modal';
 import { ancestry } from './sidebar/sessions';
-import { activityUnread, openDialog, selectNode, setActivityOpen, showPane, toggleHistory, useStore, type Dialog } from './store';
+import { activityUnread, openDialog, openNeeds, selectNode, setActivityOpen, showPane, toggleHistory, useStore, type Dialog } from './store';
 import { getTerm } from './terminals';
 import { toggleDnd, useNow } from './hooks';
 import { send } from './conn';
@@ -32,6 +32,7 @@ export function Palette() {
   // Commands follow the nodes; each opens its own view or dialog in place of the palette.
   const cmds = [
     { key: 'cmd:activity', title: 'Activity', sub: `recent agent events${unread ? ` · ${unread} unread` : ''}`, run: () => { close(); requestAnimationFrame(() => setActivityOpen(true)); } },
+    { key: 'cmd:needs', title: 'Needs you', sub: 'questions and approvals waiting for you · ⌘J', run: () => { close(); requestAnimationFrame(() => openNeeds()); } },
     { key: 'cmd:dnd', title: quiet ? 'Turn off do not disturb' : 'Do not disturb for 1 hour', sub: 'toggle OS notifications', run: () => { toggleDnd(); close(); } },
     { key: 'cmd:updates', title: 'Manage updates…', sub: 'available releases and installation', run: () => replace({ kind: 'update' }) },
     { key: 'cmd:check-updates', title: 'Check for updates', sub: 'check releases and open update management', run: () => { send({ t: 'updateCheck' }); replace({ kind: 'update' }); } },
