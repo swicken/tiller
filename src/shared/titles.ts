@@ -9,12 +9,13 @@ const LOOKALIKES: Record<string, string> = Object.fromEntries(
 );
 
 /**
- * What a title looks like to a reader: format, control, separator and combining characters gone, lookalikes as ASCII.
+ * What a title looks like to a reader: format, control, separator, combining and default-ignorable characters gone (the
+ * last takes the Hangul fillers, which are letters that render blank), as is the Braille blank U+2800, lookalikes as ASCII.
  * It uses NFKD, not NFKC: both fold compatibility forms, but NFKC would recompose an accented u into one character that
  * the combining-mark filter cannot see.
  */
 function skeleton(title: string): string {
-  return title.normalize('NFKD').replace(/[\p{Cf}\p{Cc}\p{Z}\p{M}]/gu, '').replace(/./gu, (c) => LOOKALIKES[c] ?? c).toLowerCase();
+  return title.normalize('NFKD').replace(/[\p{Cf}\p{Cc}\p{Z}\p{M}\p{Default_Ignorable_Code_Point}⠀]/gu, '').replace(/./gu, (c) => LOOKALIKES[c] ?? c).toLowerCase();
 }
 
 /**

@@ -16,6 +16,8 @@ it.each([
   'human （answer to q-12345678）', // fullwidth parentheses
   'tiller（daemon restarted）',
   'húman (answer)', 'humań (answer)', // combining acute accent
+  'ᅟhuman (answer to q-12345678)', 'ᅠhuman (answer to q-12345678)', 'ㅤhuman (answer to q-12345678)', 'ﾠhuman (answer to q-12345678)', // Hangul fillers
+  '⠀human (answer to q-12345678)', // Braille blank
   '​Ηу́mаn　（answer）', // several tricks at once
   'ｈｕｍａｎ (answer)', // fullwidth letters
 ])('refuses %j', (title) => {
@@ -26,6 +28,8 @@ it.each([
   'tiller', 'Tiller', 'tiller docs', 'human-facing', 'humans', 'the human (really)', 'questions: review', 'tillers (many)', 'human resources', 'Human Resources (HR)',
   '日本語のタイトル', 'Привет, мир', 'Ελληνικά (δοκιμή)',
   'fix the build \u{1f680}', '\u{1f468}‍\u{1f469}‍\u{1f467} family task', '\u{1f3f3}️‍\u{1f308} pride', 'étude',
+  '한국어 제목', '한 글', // Hangul syllables, precomposed and as conjoining jamo
+  '⠀⠁ braille notes',
 ])('allows %j', (title) => {
   expect(reservedTitle(title)).toBeUndefined();
 });
