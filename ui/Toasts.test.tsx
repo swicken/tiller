@@ -48,23 +48,28 @@ it('a digest row for a question reads "Asked you" with its state and opens the p
   update(() => ({
     questions: { 'q-00000001': question('q-00000001'), 'q-00000002': question('q-00000002', { assumption: 'Go on' }) },
     digest: { since: 0, items: [
-      { id: 'api', title: 'api worker', kind: 'needsYou', text: 'Keep the alias?', at: 1, questionId: 'q-00000001' },
-      { id: 'api', title: 'api worker', kind: 'needsYou', text: 'Which port?', at: 2, questionId: 'q-00000002' },
+      { id: 'api', title: 'api worker', kind: 'needsYou', text: 'Asks: Keep the alias?', at: 1, questionId: 'q-00000001' },
+      { id: 'api', title: 'api worker', kind: 'needsYou', text: 'Asks: Which port?', at: 2, questionId: 'q-00000002' },
+      { id: 'api', title: 'api worker', kind: 'needsYou', text: 'Asks: Gone from the store?', at: 4, questionId: 'q-00000009' },
       { id: 'deep', title: 'deep', kind: 'needsYou', text: 'Needs approval', at: 3 },
     ] },
   }));
   const rows = drawn(DigestCard(), 'DigestRow');
   // The same node can ask twice, so the key is the node plus the question.
-  expect(rows.map((r) => r.key)).toEqual(['apiq-00000001', 'apiq-00000002', 'deep']);
+  expect(rows.map((r) => r.key)).toEqual(['apiq-00000001', 'apiq-00000002', 'apiq-00000009', 'deep']);
   expect(html(rows[0].tree)).toContain('<span class="kind">Asked you</span> <strong>api worker</strong><span class="kind q-kind-state waiting"> · waiting on you</span><span class="text">Keep the alias?</span>');
   expect(html(rows[1].tree)).toContain('<span class="kind q-kind-state"> · carrying on meanwhile</span>');
-  expect(html(rows[2].tree)).toContain('<span class="kind">Needs you</span>');
+  // The text is the question itself, never "Asks: ..." under "Asked you"; with the question not in the store it is cut from the daemon's text.
+  expect(html(rows[0].tree)).not.toContain('Asks:');
+  expect(html(rows[2].tree)).toContain('<span class="text">Gone from the store?</span>');
   expect(html(rows[2].tree)).not.toContain('q-kind-state');
+  expect(html(rows[3].tree)).toContain('<span class="kind">Needs you</span>');
+  expect(html(rows[3].tree)).not.toContain('q-kind-state');
   click(rows[1].tree);
   expect(getState().needs).toEqual({ open: true, focusId: 'q-00000002' });
   expect(getState().digest).toBeUndefined();
   update(() => ({ needs: { open: false } }));
-  click(rows[2].tree);
+  click(rows[3].tree);
   expect(getState().selected).toBe('deep');
   expect(getState().needs.open).toBe(false);
 });

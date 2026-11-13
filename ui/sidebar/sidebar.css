@@ -118,5 +118,7 @@ body:has(.sidebar-resize[data-resizing]) { cursor: col-resize; user-select: none
   .sidefoot { padding-top: 5px; padding-bottom: 5px; }
 }
 @media (max-width: 640px) {
+  /* The session tabs above show each session's count and the entry button the total, so the title keeps the room. */
+  .current .count.others { display: none; }
   .sidefoot .btn { flex: 1 1 auto; }
 }

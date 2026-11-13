@@ -54,12 +54,14 @@ const DIGEST_LABEL = { needsYou: 'Needs you', errored: 'Errored', finished: 'Fin
 /** One away-digest row. A question row reads "Asked you" and opens the Needs you panel on its question; the others select their node. */
 function DigestRow({ i }: { i: DigestItem }) {
   const q = useStore((s) => (i.questionId ? s.questions[i.questionId] : undefined));
+  // The daemon words a question's digest text "Asks: <question>"; the row already says "Asked you".
+  const text = i.questionId ? (q?.question ?? i.text?.replace(/^Asks: /, '')) : i.text;
   return (
     <li>
       <button className={`row ${i.kind}`} onClick={() => { if (i.questionId) openNeeds(i.questionId); else selectNode(i.id); dismissDigest(); }}>
         <span className="kind">{i.questionId ? 'Asked you' : DIGEST_LABEL[i.kind]}</span> <strong>{i.title}</strong>
         {q && <span className={`kind q-kind-state${q.assumption ? '' : ' waiting'}`}> · {q.assumption ? 'carrying on meanwhile' : 'waiting on you'}</span>}
-        {i.text && <span className="text">{i.text}</span>}
+        {text && <span className="text">{text}</span>}
       </button>
     </li>
   );

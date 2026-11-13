@@ -28,4 +28,12 @@ describe('trayState', () => {
     expect(both.items).toEqual([['b', 'api'], ['a', 'tiller: Keep the alias?']]);
     expect(both.items).toHaveLength(attention([owner, blocked], qs));
   });
+
+  it('cuts a long question to one line for the native menu', () => {
+    const owner = { ...mk('a', null, 1), title: 'tiller' };
+    const [[, label]] = trayState([owner], [question('q-00000001', 'a', { question: `Line one\nline two ${'x'.repeat(500)}` })]).items;
+    expect(label).toHaveLength(60);
+    expect(label.startsWith('tiller: Line one line two xxx')).toBe(true);
+    expect(label.endsWith('…')).toBe(true);
+  });
 });
