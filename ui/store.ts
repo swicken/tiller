@@ -7,7 +7,8 @@ import { readPref, writePref } from './prefs';
 import { wantedNode } from './url';
 
 export type Tone = 'info' | 'ok' | 'warn' | 'bad';
-export interface Toast { id: number; text: string; nodeId?: string; tone: Tone }
+/** questionId: a new-question toast (text is the question); it opens the Needs you panel on that question. */
+export interface Toast { id: number; text: string; nodeId?: string; tone: Tone; questionId?: string }
 export interface Activity { id: number; nodeId?: string; nodeName: string; at: number; text: string; tone: Tone; read: boolean }
 export const ACTIVITY_LIMIT = 200;
 /** Newest first; the oldest events expire, including their unread state. */
@@ -125,8 +126,8 @@ const without = <T,>(xs: T[], x: T) => xs.filter((y) => y !== x);
 /** A reply slot's payload: its error, or the data. */
 const settled = <T extends object,>(d: T | { error: string }) => ('error' in d ? { error: d.error } : { data: d });
 
-export const toast = (text: string, nodeId?: string, tone: Tone = 'info') =>
-  update((s) => ({ toasts: [...s.toasts, { id: ++toastSeq, text, nodeId, tone }] }));
+export const toast = (text: string, nodeId?: string, tone: Tone = 'info', questionId?: string) =>
+  update((s) => ({ toasts: [...s.toasts, { id: ++toastSeq, text, nodeId, tone, questionId }] }));
 export const recordActivity = (text: string, nodeId?: string, tone: Tone = 'info', at = Date.now()) =>
   update((s) => ({ activity: appendActivity(s.activity, {
     id: ++activitySeq, nodeId, nodeName: (nodeId && s.nodes[nodeId]?.title) || nodeId || 'Tiller', at, text, tone, read: false,

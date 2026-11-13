@@ -15,7 +15,8 @@ export function SessionSwitcher() {
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const pencil = useRef<HTMLButtonElement>(null);
-  const list = useMemo(() => sessions(nodes, order), [nodes, order]);
+  const questions = useStore((s) => s.questions);
+  const list = useMemo(() => sessions(nodes, order, Object.values(questions)), [nodes, order, questions]);
   const cur = list.find((s) => s.root.id === session);
   const others = list.filter((s) => s !== cur && s.needs > 0).reduce((a, s) => a + s.needs, 0);
   const renaming = useStore((s) => s.renaming?.at === 'session' && s.renaming.id === cur?.root.id);

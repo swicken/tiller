@@ -3,9 +3,10 @@ import { send } from './conn';
 import { ActionMenu, actionsFor } from './controls/ActionButtons';
 import { StateDot } from './controls/Bits';
 import { Icon } from './controls/icons';
+import { attention } from '../src/shared/questions';
 import { RenameInput } from './controls/RenameInput';
 import { roots, sessions } from './sidebar/sessions';
-import { arrangeSessions, getState, openDialog, selectSession, setRenaming, useStore } from './store';
+import { arrangeSessions, closeNeeds, getState, openDialog, openNeeds, selectSession, setRenaming, useStore } from './store';
 
 /** How far a pressed tab moves before it is dragged rather than clicked, in pixels. */
 const DRAG_START = 5;
@@ -51,7 +52,10 @@ export function SessionTabs() {
   const order = useStore((s) => s.order);
   const session = useStore((s) => s.session);
   const renaming = useStore((s) => (s.renaming?.at === 'tab' ? s.renaming.id : null));
-  const list = useMemo(() => sessions(nodes, order), [nodes, order]);
+  const questions = useStore((s) => s.questions);
+  const waiting = useStore((s) => attention(Object.values(s.nodes), Object.values(s.questions)));
+  const needsOpen = useStore((s) => s.needs.open);
+  const list = useMemo(() => sessions(nodes, order, Object.values(questions)), [nodes, order, questions]);
   const tabs = useRef<HTMLDivElement>(null);
   /** The current press became a drag, so the click that ends it does not select. */
   const dragged = useRef(false);
@@ -139,9 +143,10 @@ export function SessionTabs() {
               {renaming === s.root.id ? (
                 <span className="stab-main"><StateDot kind={s.kind} /><RenameInput id={s.root.id} title={s.root.title} /></span>
               ) : (
-                <button className="stab-main" aria-current={on} title={s.root.title} onClick={() => selectSession(s.root.id)}
-                  onDoubleClick={() => setRenaming({ id: s.root.id, at: 'tab' })}>
+                <button className="stab-main" aria-current={on} title={s.root.title} aria-label={s.needs ? `${s.root.title}, ${s.needs} need you` : undefined}
+                  onClick={() => selectSession(s.root.id)} onDoubleClick={() => setRenaming({ id: s.root.id, at: 'tab' })}>
                   <StateDot kind={s.kind} /><span className="stab-title">{s.root.title}</span>
+                  {s.needs > 0 && <span className="count warn stab-count" title={`${s.needs} need you in this session`}>{s.needs}</span>}
                 </button>
               )}
               {close && (
@@ -155,6 +160,13 @@ export function SessionTabs() {
       </div>
       <button className="stab-new" title="New session" aria-label="New session" onClick={() => openDialog({ kind: 'spawn', parentId: null, cwd: cur?.root.cwd ?? '' })}>
         <Icon name="plus" size={14} />
+      </button>
+      <button className={`needs-btn${waiting ? ' has' : ''}`} aria-haspopup="dialog" aria-expanded={needsOpen} aria-controls="qpanel"
+        title={waiting ? `${waiting} ${waiting === 1 ? 'thing needs' : 'things need'} you (⌘J)` : 'Nothing needs you right now (⌘J)'}
+        aria-label={`Needs you: ${waiting ? `${waiting} waiting` : 'nothing waiting'}`}
+        onClick={() => (needsOpen ? closeNeeds() : openNeeds())}>
+        <Icon name="inbox" size={15} /><span className="needs-label">Needs you</span>
+        {waiting > 0 && <span className="count warn" aria-hidden="true">{waiting}</span>}
       </button>
       {menu && menuRoot && <ActionMenu label={`Actions for ${menuRoot.title}`} actions={actionsFor(menuRoot, 'tab')} at={menu.at} onClose={() => setMenu(null)} />}
     </div>

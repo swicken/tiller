@@ -7,6 +7,7 @@ import { Icon } from '../controls/icons';
 import { RenameInput } from '../controls/RenameInput';
 import { selectNode, toggleCollapsed, useStore } from '../store';
 import { isAgentKind, needsYou } from '../../src/shared/protocol';
+import { isOpen, openFor, sortQuestions } from '../../src/shared/questions';
 import { accountMismatch, kindTag, KIND_LABEL, statusKind, type Row } from './tree';
 
 export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
@@ -20,6 +21,9 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
   const effort = s.effort ?? node.effort;
   const branch = node.worktree?.branch ?? s.git?.branch;
   const needs = descendants.filter((d) => needsYou(d.status)).length;
+  const questions = useStore((s) => s.questions);
+  const asked = sortQuestions(openFor(Object.values(questions), node.id));
+  const below = collapsed ? Object.values(questions).filter((q) => isOpen(q) && descendants.some((d) => d.id === q.nodeId)).length : 0;
   const blocked = s.state === 'blocked' && !s.exited;
   const kind = statusKind(node);
   const state = kind === 'needs' ? s.state : KIND_LABEL[kind];
@@ -50,7 +54,8 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
           <span className={`row-state ${kind}`}>{node.kind === 'terminal' ? `terminal · ${state}` : state}</span>
           {s.activity && <span className={`row-activity${blocked ? ' warn' : ''}`} title={s.activity}>{s.activity}</span>}
         </div>
-        {(node.gate || node.outcome || node.repoAccount !== undefined || node.worktree?.missing || s.git?.conflicts || hasChanges(node) || collapsed || (s.stalled && !s.exited)) && <div className="row-signals">
+        {(node.gate || node.outcome || node.repoAccount !== undefined || node.worktree?.missing || s.git?.conflicts || hasChanges(node) || collapsed || asked.length > 0 || (s.stalled && !s.exited)) && <div className="row-signals">
+          {asked.length > 0 && <span className="count warn q-chip" title={asked[0].question}>{asked.length === 1 ? 'Question' : `${asked.length} questions`} for you</span>}
           {node.outcome && <span role="note" className={`count${node.outcome.outcome === 'failed' ? ' bad' : ''}`}
             aria-label={`Reported task outcome: ${outcome}`}
             title={`Reported task outcome: ${outcome}${node.outcome.summary ?? node.outcome.note ? ` · ${node.outcome.summary ?? node.outcome.note}` : ''}`}>
@@ -65,6 +70,7 @@ export function NodeRow({ row, tabStop }: { row: Row; tabStop?: boolean }) {
           {collapsed && descendants.some((d) => d.unread) && <span className="count" title="Hidden nodes have unread activity">unread</span>}
           {collapsed && descendants.some((d) => d.suggestion) && <span className="count suggested" title="Hidden nodes have a suggested command">suggested command</span>}
           {collapsed && descendants.some((d) => d.status.stalled && !d.status.exited) && <span className="count warn">stalled below</span>}
+          {below > 0 && <span className="count warn q-chip">{below === 1 ? '1 question' : `${below} questions`} below</span>}
           {collapsed && needs > 0 && <span className="count warn">{needs} needs you</span>}
           {s.stalled && !s.exited && <span className="count warn" title="working with no hook event">no activity {fmtAge(now - s.changedAt)}</span>}
         </div>}

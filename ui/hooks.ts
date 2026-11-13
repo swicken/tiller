@@ -25,14 +25,14 @@ export const toggleDnd = () => send(dndActive(getState().dnd, Date.now()) ? { t:
 };
 
 /**
- * "(2) tiller" in the document title (and the Dock badge and menu bar item in the app) while nodes need you; keeps
+ * "(2) tiller" in the document title (and the Dock badge and menu bar item in the app) while nodes or questions need you; keeps
  * ?node= in step with the selection.
  */
 export function useDocumentSync() {
   const selected = useStore((s) => s.selected);
   const now = useNow();
   // A string, so the store re-renders only when the tray actually changes.
-  const tray = useStore((s) => JSON.stringify({ ...trayState(s.order.map((id) => s.nodes[id]!)), dnd: dndActive(s.dnd, now) }));
+  const tray = useStore((s) => JSON.stringify({ ...trayState(s.order.map((id) => s.nodes[id]!), Object.values(s.questions)), dnd: dndActive(s.dnd, now) }));
   useEffect(() => {
     const t: ReturnType<typeof trayState> = JSON.parse(tray), needs = t.items.length, tauri = (window as TauriWindow).__TAURI_INTERNALS__;
     document.title = titleFor(needs);
