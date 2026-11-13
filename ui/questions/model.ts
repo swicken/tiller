@@ -22,6 +22,12 @@ export function ago(ms: number): string {
   return m < 2880 ? 'yesterday' : `${Math.floor(m / 1440)} d ago`;
 }
 
+/** `“text”` closing a sentence: the full stop goes after it, unless the text brings its own (“Done.” not “Done.”.). */
+export const quoted = (text: string) => `“${text}”${/[.!?…]$/.test(text) ? '' : '.'}`;
+
+/** A sentence's closing mark, so text can be followed by more ("Keep it? 2 more", not "Keep it?. 2 more"). */
+export const sentence = (text: string) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+
 /** The clock time in a tooltip: "02:14 PM". */
 export const stamp = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -87,10 +93,10 @@ export function ended(q: Question, nodes: Nodes, refused: boolean): [string, str
     const lead = refused ? 'Not sent.' : 'No longer needed.';
     if (who === 'tiller') return [lead, 'The agent that asked was closed, with no agent above it.'];
     const tail = refused ? 'this just before your answer arrived' : 'it';
-    const reason = q.withdrawn?.reason ? `: “${q.withdrawn.reason}”` : '';
-    return [lead, `${who === 'asker' ? name : `${name}, the agent above it,`} withdrew ${tail}${reason}.`];
+    const reason = q.withdrawn?.reason?.trim();
+    return [lead, `${who === 'asker' ? name : `${name}, the agent above it,`} withdrew ${tail}${reason ? `: ${quoted(reason)}` : '.'}`];
   }
-  return refused ? ['Not sent.', `This was already answered, in another window or from the shell: “${answerText(q).replace('\n', ' · ')}”.`] : ['', 'This was answered in another window while you were writing.'];
+  return refused ? ['Not sent.', `This was already answered, in another window or from the shell: ${quoted(answerText(q).replace('\n', ' · '))}`] : ['', 'This was answered in another window while you were writing.'];
 }
 
 /** The notice for a refused answer or dismissal: the daemon's own words while the question is open, else why it is no longer open. */

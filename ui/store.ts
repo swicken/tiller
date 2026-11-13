@@ -50,6 +50,10 @@ export interface State {
   needs: { open: boolean; focusId?: string };
   /** Answers and dismissals the daemon refused, by question id: its message. The card shows why and keeps the typed text. */
   refusals: Record<string, string>;
+  /** Snapshots received: a change in the questions that comes with one is a reload of what we know, not news. */
+  snapshots: number;
+  /** Errors that name no question, counted: a card that is waiting for its send's reply gives up when one arrives. */
+  looseErrors: number;
   connected: boolean;
   /** Reconnect attempts since the last successful connection. */
   retry: number;
@@ -105,7 +109,7 @@ const storedTools = readPref('tl.showTools') === '1';
 
 let state: State = {
   nodes: {}, order: [], sessionOrder: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
-  questions: {}, needs: { open: false }, refusals: {}, connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
+  questions: {}, needs: { open: false }, refusals: {}, snapshots: 0, looseErrors: 0, connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
   transcriptOpen: false, shellOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
 };
 const subs = new Set<() => void>();
@@ -217,7 +221,7 @@ export function applyServer(m: ServerMessage) {
         const base = { ...s, order, opened: s.opened.filter((id) => nodes[id]) };
         const sel = s.selected && nodes[s.selected] ? s.selected : pickInitial(nodes, order, s.selected ? undefined : wantedNode);
         const questions = Object.fromEntries((m.questions ?? []).map((q) => [q.id, q]));
-        return { confirms: [], questions, order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
+        return { confirms: [], questions, snapshots: s.snapshots + 1, order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
       });
     case 'update':
       if (m.update.failed && m.update.failed !== state.update?.failed) toast(m.update.failed, undefined, 'bad');
@@ -311,6 +315,8 @@ export function applyServer(m: ServerMessage) {
         // questionId still starts the message with the id.
         const questionId = m.questionId ?? /^(q-[0-9a-f]{8}) was /.exec(m.message)?.[1];
         if (questionId) return update((s) => ({ refusals: { ...s.refusals, [questionId]: m.message } }));
+        // A message the daemon could not read has no question to name; a card still waiting on its send hears of it here.
+        update((s) => ({ looseErrors: s.looseErrors + 1 }));
       }
       recordActivity(m.message, m.id, 'bad');
       return toast(m.message, m.id, 'bad');

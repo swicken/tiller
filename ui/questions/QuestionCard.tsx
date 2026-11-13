@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Question } from '../../src/shared/protocol';
-import { isOpen } from '../../src/shared/questions';
+import { isOpen, NOT_TRIED } from '../../src/shared/questions';
 import { send } from '../conn';
 import { Icon, type IconName } from '../controls/icons';
 import { useNow } from '../hooks';
@@ -36,9 +36,12 @@ export function QuestionCard({ q, focus, go, next }: Props) {
   const questions = useStore((s) => s.questions);
   const refusal = useStore((s) => s.refusals[q.id]);
   const connected = useStore((s) => s.connected);
+  const looseErrors = useStore((s) => s.looseErrors);
   const now = useNow();
   const [text, setText] = useState(() => getDraft(q.id));
-  const [busy, setBusy] = useState(false);
+  // While a send waits for its reply: the count of unattributed errors when it went out. One more means the daemon refused the message itself.
+  const [busy, setBusy] = useState<number | undefined>(undefined);
+  const [failed, setFailed] = useState(false);
   const card = useRef<HTMLElement>(null);
   const head = useRef<HTMLHeadingElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -52,21 +55,27 @@ export function QuestionCard({ q, focus, go, next }: Props) {
   const draft = getDraft(q.id);
   const kept = !!refusal || (!open && !isOwn(q) && !!draft.trim());
   const form = kept ? 'kept' : open ? 'open' : 'resolved';
-  const sending = busy && open && !refusal;
+  const sending = busy !== undefined && open && !refusal;
   const blocked = !connected || sending;
   const ownerStopped = !!nodes[q.nodeId]?.status.exited;
+  const working = nodes[q.nodeId]?.status.state === 'working';
   const goId = nodes[q.askedBy.id] ? q.askedBy.id : nodes[q.nodeId] ? q.nodeId : undefined;
   const replacement = q.replacedBy && questions[q.replacedBy] && isOpen(questions[q.replacedBy]) ? q.replacedBy : undefined;
 
-  useEffect(() => { if (refusal || !connected) setBusy(false); }, [refusal, connected]);
+  useEffect(() => { if (refusal || !connected) setBusy(undefined); }, [refusal, connected]);
+  // The daemon answers every question message with the question's broadcast or an error; an error that names no question is the reply to this send.
+  useEffect(() => { if (busy !== undefined && looseErrors !== busy) { setBusy(undefined); setFailed(true); } }, [looseErrors]);
   // Focus goes where the person needs it next (design 7); after the first render only when the focused control has just gone.
+  // A card that turns to its kept form under someone who was typing keeps them on their text: its textarea is the one they were in.
   useEffect(() => {
     const a = document.activeElement;
     const lost = !a || a === document.body || !!card.current?.contains(a);
-    const want = first.current ? focus : lost;
+    const initial = first.current;
+    const want = initial ? focus : lost;
     first.current = false;
     if (!want) return;
-    const target = form === 'kept' ? card.current?.querySelector<HTMLElement>('.qcard-foot .primary') : form === 'open' && !(q.choices && !text) ? input.current : head.current;
+    const inKept = card.current?.querySelector<HTMLElement>(!initial && draft ? '.q-input' : '.qcard-foot .primary');
+    const target = form === 'kept' ? inKept : form === 'open' && !(q.choices && !text) ? input.current : head.current;
     target?.focus();
   }, [form]);
 
@@ -75,13 +84,15 @@ export function QuestionCard({ q, focus, go, next }: Props) {
     const t = text.trim();
     if (blocked || (!choice && !t)) return;
     noteSent(q.id, { choice, text: t || undefined });
-    setBusy(true);
+    setBusy(looseErrors);
+    setFailed(false);
     send({ t: 'question', id: q.id, action: 'answer', ...(choice ? { choice } : {}), ...(t ? { text: t } : {}) });
   };
   const dismiss = () => {
     if (blocked) return;
     noteSent(q.id, { dismiss: true });
-    setBusy(true);
+    setBusy(looseErrors);
+    setFailed(false);
     send({ t: 'question', id: q.id, action: 'dismiss' });
   };
   const discard = () => { clearDraft(q.id); forgetSent(q.id); clearRefusal(q.id); setText(''); };
@@ -134,12 +145,15 @@ export function QuestionCard({ q, focus, go, next }: Props) {
         {q.answer?.choice && <span className="q-answer-choice">{q.answer.choice}</span>}
         {q.answer?.text && <p className="q-answer-text">{q.answer.text}</p>}</div>
       <div title={d?.state === 'waiting' ? d.detail : undefined}>
-        {d?.state === 'queued' ? status('', 'history', <><b>Waiting until {owner} is free.</b> It will read your answer when it finishes its current turn.</>)
+        {d?.state === 'queued' ? (working
+            ? status('', 'history', <><b>Waiting until {owner} is free.</b> It will read your answer when it finishes its current turn.</>)
+            : status('', 'history', <b>Sending to {owner}…</b>))
           : d?.state === 'delivered' ? status('delivered', 'check', <><b>Delivered to {owner}</b> · {ago(now - (d.at ?? q.answer?.at ?? now))}</>)
           : d?.state === 'unconfirmed' ? status('unconfirmed', 'alert', <><b>It may not have seen this.</b> The answer was sent but not confirmed; {owner} can still look it up.</>, goOwner)
           : d?.state === 'dropped' ? status('dropped', 'x', <><b>Couldn’t be delivered.</b> The agent that asked was closed, and no agent is left to receive it.</>, <CopyButton text={answerText(q)} label="Copy answer" />)
           : d?.state === 'waiting' ? (ownerStopped
             ? status('', 'history', <><b>Not sent yet.</b> {owner} isn’t running; it will get your answer when it starts again.</>, goOwner)
+            : d.detail === NOT_TRIED ? status('', 'history', <b>Sending to {owner}…</b>)
             : status('', 'history', <><b>Not sent yet.</b> Tiller will keep trying.</>))
           : null}
       </div>
@@ -163,6 +177,7 @@ export function QuestionCard({ q, focus, go, next }: Props) {
       onKeyDown={(e) => { if (e.key === 'Enter' && e.metaKey) { e.preventDefault(); answer(); } }} />
     {text && q.choices && <p className="qcard-hint">A choice sends this note with it.</p>}
     {!connected && <p className="qcard-hint">Tiller isn’t connected right now. Your text is kept.</p>}
+    {failed && !sending && <p className="qcard-hint" role="alert">Not sent. Tiller reported an error; try again. Your text is kept.</p>}
     <div className="qcard-foot">
       <button className="q-quiet" disabled={blocked} onClick={dismiss}
         title={`Remove it from your list. The agent is not told${waiting ? ', so it keeps waiting' : ''}.`}>Dismiss</button>

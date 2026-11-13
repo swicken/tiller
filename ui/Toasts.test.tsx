@@ -37,6 +37,15 @@ it('a question toast is one button naming who asks, and in which session when th
   expect(html(drawn(Toasts(), 'ToastItem')[0].tree)).not.toContain(' · in ');
 });
 
+it('a question toast names the agent that asked, even after the question moved to the agent above it', () => {
+  update((s) => ({ questions: { ...s.questions, 'q-00000001': question('q-00000001', { nodeId: 'api', askedBy: { id: 'deep', title: 'deep' } }) } }));
+  toast('Keep the alias?', 'deep', 'warn', 'q-00000001');
+  update((s) => ({ nodes: { ...s.nodes, deep: undefined as never } })); // the asker was closed
+  const out = html(drawn(Toasts(), 'ToastItem')[0].tree);
+  expect(out).toContain('deep asks');
+  expect(out).toContain('aria-label="Answer deep’s question"');
+});
+
 it('clicking a question toast opens the Needs you panel on its question and removes the toast', () => {
   toast('Keep the alias?', 'deep', 'warn', 'q-00000001');
   click(drawn(Toasts(), 'ToastItem')[0].tree);

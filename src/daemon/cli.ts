@@ -65,8 +65,8 @@ const usage = () => `tl: control tiller. With no arguments, start the daemon if 
   tl diff <id> [--stat]                               what a worktree node changed since it branched, committed or not
   tl send [--now] <id> "text"                         --now interrupts the target's turn if it is working (a steer)
   tl withdraw <messageId>                             take back a queued message that has not been delivered yet
-  tl questions [--all]                                what agents asked the human with ask_human: open ones, with numbered choices
-                                                      (--all adds those resolved in the last 7 days)
+  tl questions [--all]                                what agents asked the human with ask_human: open ones and those resolved in the
+                                                      last 24 hours, with numbered choices (--all lists every one still kept: 7 days)
   tl answer <id> [TEXT] [--choice N|LABEL]            answer a question (human only); N is the choice's number in tl questions;
                                                       the answer reaches the asking node as a message
   tl dismiss <id>                                     drop a question without answering it; the agent is not told
@@ -288,6 +288,7 @@ switch (cmd) {
     const now = Date.now();
     const qs = ((await call('list_questions', { all: f.all }, false)).data ?? []) as Question[];
     const age = (at: number) => fmtAge(now - at).replace(/^now$/, 'just now');
+    const since = (at: number) => { const a = age(at); return a === 'just now' ? a : `${a} ago`; };
     for (const q of qs) {
       console.log(`${q.id}  ${q.state === 'open' ? `open ${age(q.askedAt)}` : `${q.state} ${age(q.resolvedAt ?? q.askedAt)} ago`}  ${q.askedBy.id} "${q.askedBy.title}"`);
       console.log(`  ${q.question}`);

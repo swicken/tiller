@@ -203,9 +203,10 @@ async function runGate(m: NodeManager, id: string, gate: NonNullable<Config['gat
 /** list_questions output: one block per question, as the caller sees it. */
 function questionsText(qs: Question[], caller: string, now: number): string {
   const age = (at: number) => { const a = fmtAge(now - at); return a === 'now' ? 'just now' : a; };
+  const since = (at: number) => { const a = age(at); return a === 'just now' ? a : `${a} ago`; };
   return qs.map((q) => {
     const open = q.state === 'open';
-    const when = open ? `open ${age(q.askedAt)}` : `${q.state} ${age(q.resolvedAt ?? q.askedAt)} ago${q.state === 'withdrawn' && q.withdrawn ? ` by ${q.withdrawn.by}` : ''}`;
+    const when = open ? `open ${age(q.askedAt)}` : `${q.state} ${since(q.resolvedAt ?? q.askedAt)}${q.state === 'withdrawn' && q.withdrawn ? ` by ${q.withdrawn.by}` : ''}`;
     const owner = q.nodeId === caller ? 'you' : `${q.askedBy.id} "${q.askedBy.title}"`;
     const answer = [q.answer?.choice, q.answer?.text].filter((x) => x !== undefined).join(' - ');
     return [
@@ -223,7 +224,7 @@ function deliveryText(q: Question, m: NodeManager): string {
   const d = q.delivery;
   switch (d?.state) {
     case 'delivered': return `delivered to ${who}`;
-    case 'queued': return `queued for ${who} (it is working)`;
+    case 'queued': return `queued for ${who}${m.view(q.nodeId)?.status.state === 'working' ? ' (it is working)' : ''}`;
     case 'unconfirmed': return `sent to ${who}, but delivery is unconfirmed; it can still read the answer with list_questions`;
     case 'dropped': return `not delivered: ${d.detail ?? 'the node was closed'}`;
     default: return `waiting to tell ${who}${d?.detail ? `: ${d.detail}` : ''}`;
@@ -694,7 +695,7 @@ isolation "worktree" (agent nodes; a repo with a commit; Claude also needs its o
 
   rename: tool(
     'Rename node',
-    'Change the title of yourself or one of your descendants.',
+    'Change the title of yourself or one of your descendants. A title may not be "human" or start with "human (" or "tiller (", which are the labels of the human\'s and the daemon\'s messages.',
     { ...nodeIdArg, title: z.string().min(1) },
     async (c, a) => {
       const id = nodeId(a);
