@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react';
-import { harnessFor, isAgentKind, needsYou } from '../src/shared/protocol';
+import { harnessFor, isAgentKind } from '../src/shared/protocol';
+import { attention, isOpen } from '../src/shared/questions';
 import { fmtAge } from '../src/shared/format';
 import { fmtUsd, INCOMPLETE_NOTE, todaySpend } from '../src/shared/spend';
 import { useNow } from './hooks';
-import { openDialog, useStore } from './store';
+import { openDialog, openNeeds, useStore } from './store';
 import { selectedUsage, usageScope, usageStale, usageToolName } from '../src/shared/usage';
 import { refreshUsage, send } from './conn';
 import { UsagePanel, UsageWindows } from './UsagePanel';
@@ -12,7 +13,9 @@ export function StatusBar() {
   const connected = useStore((s) => s.connected);
   const retry = useStore((s) => s.retry);
   const total = useStore((s) => Object.keys(s.nodes).length);
-  const needs = useStore((s) => Object.values(s.nodes).filter((n) => needsYou(n.status)).length);
+  const needs = useStore((s) => attention(Object.values(s.nodes), Object.values(s.questions)));
+  const questions = useStore((s) => Object.values(s.questions).filter(isOpen).length);
+  const approvals = needs - questions;
   const queued = useStore((s) => Object.values(s.nodes).filter((n) => n.status.state === 'queued').length);
   const [usageOpen, setUsageOpen] = useState(false);
   const usageButton = useRef<HTMLButtonElement>(null);
@@ -38,7 +41,8 @@ export function StatusBar() {
         <i className="dot" />
         {connected ? `daemon connected · ${location.host}` : `reconnecting to ${location.host}${retry > 1 ? ` (attempt ${retry})` : ''}…`}
       </span>
-      <span>{total} nodes{needs > 0 && <b className="warn"> · {needs} need you</b>}{queued > 0 && ` · ${queued} queued`}</span>
+      <span>{total} nodes{needs > 0 && <> · <button className="needs-count" aria-haspopup="dialog" onClick={() => openNeeds()}
+        title={`${[questions && `${questions} question${questions === 1 ? '' : 's'}`, approvals && `${approvals} approval${approvals === 1 ? '' : 's'}`].filter(Boolean).join(', ')}. Open the Needs you list.`}>{needs} need you</button></>}{queued > 0 && ` · ${queued} queued`}</span>
       <button ref={usageButton} className="usage-button" aria-haspopup="dialog" aria-expanded={usageOpen} onClick={() => { refreshUsage(); setUsageOpen(true); }}>Usage</button>
       <div className="selected-usage" aria-label="Selected agent usage" tabIndex={0}>
         {selected && isAgentKind(selected.kind) ? <>

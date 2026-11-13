@@ -8,6 +8,7 @@ import { sessions } from './sidebar/sessions';
 import { getState, update } from './store';
 import { send } from './conn';
 import { mk } from './fixtures';
+import type { Question } from '../src/shared/protocol';
 
 // useState keeps each call's value by its position in a render, so a test can set state and render again.
 const hooks = vi.hoisted(() => ({ effects: [] as (() => unknown)[], states: [] as unknown[], next: 0 }));
@@ -34,7 +35,7 @@ const close = (tab: Element) => elements(tab).find((el) => el.props.className ==
 
 beforeEach(() => {
   vi.clearAllMocks(); hooks.effects.length = 0; hooks.states.length = 0;
-  update(() => ({ nodes: { a, child, b, c }, order: ['c', 'a', 'child', 'b'], sessionOrder: [], selected: 'child', session: 'a', collapsed: [], opened: [], dialog: null, archived: null, renaming: null }));
+  update(() => ({ nodes: { a, child, b, c }, order: ['c', 'a', 'child', 'b'], sessionOrder: [], selected: 'child', session: 'a', collapsed: [], opened: [], dialog: null, archived: null, renaming: null, questions: {}, needs: { open: false } }));
 });
 
 it('shows one tab per session in switcher order, marking only the current session', () => {
@@ -152,4 +153,39 @@ it('a vertical mouse wheel scrolls the strip sideways; a sideways trackpad swipe
   expect(target.scrollLeft).toBe(40);
   strip.props.onWheel({ deltaY: 2, deltaX: 30, deltaMode: 0, currentTarget: target });
   expect(target.scrollLeft).toBe(40);
+});
+
+const question = (id: string, nodeId: string): Question =>
+  ({ id, rootId: nodeId, nodeId, askedBy: { id: nodeId, title: nodeId }, question: 'Which one?', state: 'open', askedAt: 1 });
+const entry = () => render().find((el) => String(el.props.className).startsWith('needs-btn'))!;
+const countOf = (el: Element) => elements(el).find((e) => e.props.className === 'count warn')?.props.children;
+
+it('a session whose nodes are all done still shows the needs dot and a count on its tab when it has an open question', () => {
+  update((s) => ({ nodes: { ...s.nodes, c: { ...c, status: { ...c.status, state: 'done' } } }, questions: { q1: question('q1', 'c'), q2: question('q2', 'c') } }));
+  const tab = tabs()[0];
+  expect(elements(main(tab)).find((el) => el.props.kind)?.props.kind).toBe('needs');
+  expect(main(tab).props['aria-label']).toBe('c, 2 need you');
+  const count = elements(main(tab)).find((el) => el.props.className === 'count warn stab-count')!;
+  expect([count.props.children, count.props.title]).toEqual([2, '2 need you in this session']);
+  // A session with nothing waiting has neither a count nor a new accessible name.
+  expect(main(tabs()[2]).props['aria-label']).toBeUndefined();
+});
+
+it('the Needs you button shows what attention counts, is quiet when nothing waits, and toggles the panel', () => {
+  // Quiet: a's child is blocked, so stand it down; no question yet.
+  update((s) => ({ nodes: { ...s.nodes, child: { ...child, status: { ...child.status, state: 'working' } } } }));
+  let button = entry();
+  expect(button.props.className).toBe('needs-btn');
+  expect([button.props['aria-label'], button.props.title, countOf(button)]).toEqual(['Needs you: nothing waiting', 'Nothing needs you right now (⌘J)', undefined]);
+  // One blocked node and two open questions: three things.
+  update((s) => ({ nodes: { ...s.nodes, child }, questions: { q1: question('q1', 'c'), q2: question('q2', 'a') } }));
+  button = entry();
+  expect(button.props.className).toBe('needs-btn has');
+  expect([button.props['aria-label'], button.props.title, countOf(button)]).toEqual(['Needs you: 3 waiting', '3 things need you (⌘J)', 3]);
+  expect([button.props['aria-haspopup'], button.props['aria-controls'], button.props['aria-expanded']]).toEqual(['dialog', 'qpanel', false]);
+  button.props.onClick();
+  expect(getState().needs.open).toBe(true);
+  expect(entry().props['aria-expanded']).toBe(true);
+  entry().props.onClick();
+  expect(getState().needs.open).toBe(false);
 });
