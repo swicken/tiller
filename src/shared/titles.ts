@@ -15,7 +15,7 @@ const LOOKALIKES: Record<string, string> = Object.fromEntries(
  * the combining-mark filter cannot see.
  */
 function skeleton(title: string): string {
-  return title.normalize('NFKD').replace(/[\p{Cf}\p{Cc}\p{Z}\p{M}\p{Default_Ignorable_Code_Point}⠀]/gu, '').replace(/./gu, (c) => LOOKALIKES[c] ?? c).toLowerCase();
+  return title.normalize('NFKD').replace(/[\p{Cf}\p{Cc}\p{Z}\p{M}\p{Default_Ignorable_Code_Point}\u2800]/gu, '').replace(/./gu, (c) => LOOKALIKES[c] ?? c).toLowerCase();
 }
 
 /**
