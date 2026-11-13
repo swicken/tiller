@@ -42,6 +42,7 @@ const notifier = createNotifier({
 });
 server.onApproval = notifier.approval;
 manager.on('notify', notifier);
+manager.on('question', notifier.question);
 manager.on('node', notifier.observe);
 manager.on('removed', (id: string) => {
   notifier.forget(id);

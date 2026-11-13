@@ -681,6 +681,24 @@ describe('event log', () => {
     ]);
   });
 
+  it('a message still queued after an hour keeps its status, so its acknowledgement settles and logs it', async () => {
+    const onSettle = vi.fn();
+    m.set('b', { state: 'working' });
+    inbox(m.mgr, 'b'); // b's mod polls, so its inbox is the queue
+    const r = await deliver(m.mgr, 'a', 'b', 'waiting', { onSettle });
+    expect(r.outcome).toBe('queued');
+    for (let i = 0; i < 61; i++) { // b works for 61 minutes, its mod polling all along
+      await vi.advanceTimersByTimeAsync(60_000);
+      inbox(m.mgr, 'b');
+    }
+    await deliver(m.mgr, 'a', 'p', 'unrelated'); // any send prunes the status table
+    expect(messageStatus(m.mgr, 'a', r.messageId!)?.outcome).toBe('queued');
+    expect(claim(m.mgr, 'b', r.messageId!)).toBe(true);
+    expect(ack(m.mgr, 'b', r.messageId!)).toBe(true);
+    expect(onSettle).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'delivered', messageId: r.messageId }));
+    expect(m.events.filter(([, type]) => type === 'settle')).toEqual([['b', 'settle', { messageId: r.messageId, from: 'a', outcome: 'delivered' }]]);
+  });
+
   it('logs the settle in the target\'s tree directory, kept at send time, once the target is closed', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'tl-tree-'));
     try {

@@ -58,7 +58,7 @@ For each task, pick one base branch in the repo's convention (see \`git branch -
 
 When a worker reports success, read its outcome (read with what "outcome") before its conversation. For a non-trivial change, spawn a node with preset "reviewer" on its branch and brief it with the worker's id, branch and original brief, then send its findings to the worker, at most two rounds before escalating to the human. Check the diff (the diff tool includes uncommitted work), then merge (whenIdle true if it is mid-turn) or ask the user to; send conflicts back to the worker to rebase. Reuse an idle worker for related follow-ups; close finished ones (project config may allow this without the human's approval). Give the user a short status.
 
-Use send for questions and follow-ups; messages queue until the worker is idle. Send with mode "now", which interrupts its turn, only to steer a worker going wrong; withdraw a queued message that has become wrong. When a worker needs the human, say which one and why; never answer its permission prompts for it.
+Use send for questions and follow-ups; messages queue until the worker is idle. Send with mode "now", which interrupts its turn, only to steer a worker going wrong; withdraw a queued message that has become wrong. When a worker needs the human, say which one and why; a worker's open question that only the human can answer goes to them through ask_human, naming the worker; never answer its permission prompts for it.
 `,
   worker: `# Worker
 
@@ -101,10 +101,16 @@ function worktreeText(o: { worktree?: Worktree; sharesWorktreeOf?: string }): st
   return o.sharesWorktreeOf ? `\n\nYou share the worktree of node ${o.sharesWorktreeOf}; coordinate before editing files it is editing.` : '';
 }
 
+/** In the preamble, not the role text, so a role override in ~/.tiller/prompts or .tiller/ cannot drop it. Tool names are bare: each harness prefixes them differently. */
+const ASK_ROOT = `A question you only write in your reply scrolls out of the human's view when other messages arrive. When you need the human to answer or decide something and they may not be reading along (workers are running, or you expect other messages first), call ask_human as well as saying so in your reply: the question stays listed for them until answered, and the answer arrives as a message. One decision per question; say what you will do meanwhile. If they answer in chat, call withdraw_question. list_questions shows your open questions and recent answers, for example after a restart.`;
+const ASK_CHILD = 'Questions about your brief go to your parent with send. Call ask_human only for what only the human can settle (their credentials, a decision that is theirs to make), and mention it in your report. If the human answers in chat, call withdraw_question.';
+
 export function systemPrompt(o: { nodeId: string; title: string; parentId: string | null; home: string; cwd: string; harness?: Harness; role?: Role; profile?: Profile; worktree?: Worktree; sharesWorktreeOf?: string; sessionDir?: string; preset?: Preset }): string {
   const preamble = `You are tiller node ${o.nodeId}, titled "${o.title}". Your parent node is ${o.parentId ?? 'none'}.
 
 The tiller MCP tools spawn and control other nodes. Spawning never moves the user's view. For a command the human should run themselves, call suggest_command.
+
+${o.parentId ? ASK_CHILD : ASK_ROOT}
 
 Other nodes and the tiller daemon send you messages, which arrive as prompts submitted by the tiller plugin, framed like this:
 --- TL MESSAGE <nonce> ---

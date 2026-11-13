@@ -406,6 +406,8 @@ export interface Question {
   nodeId: string;
   /** The asker and its title when it asked, kept for display after it closes. */
   askedBy: { id: string; title: string };
+  /** The title of the tree's root when it asked, kept like askedBy.title so a resolved question can still be grouped under its session. */
+  rootTitle?: string;
   /** One line the human can answer without opening the chat. */
   question: string;
   /** Background, as plain text with line breaks. */
@@ -445,7 +447,7 @@ export type ServerMessage =
   | { t: 'notify'; id: string; kind: 'done' | 'needsYou' | 'errored' | 'exited'; title: string; body?: string }
   | { t: 'confirm'; confirmId: string; text: string } // ask the human to approve an agent action
   | { t: 'confirmDone'; confirmId: string }  // that confirm was answered or timed out; close the modal
-  | { t: 'error'; message: string; id?: string }
+  | { t: 'error'; message: string; id?: string; questionId?: string } // questionId: a refused question answer or dismissal; id is then the question's owner node
   | { t: 'focus'; from: string; id: string }   // a node's mod asked to view node `id`; an attach client showing `from` switches
   | { t: 'digest'; since: number; items: DigestItem[] } // what happened while no client was focused; sent to the client that regained focus
   | ({ t: 'diff'; id: string } & (Diff | { error: string })) // reply to a diff request: the diff, or why there is none

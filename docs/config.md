@@ -49,7 +49,7 @@ The layer column says where a key may be set: "project, home" means either file,
 | `daemon.digestAfterMinutes` | number | `10` | home | A window regaining focus after this long with no focused window gets the away digest. |
 | `daemon.maxLiveNodes` | integer | `20` | home | An agent's spawn is refused once this many nodes are live. |
 | `daemon.maxWorking` | integer | `0` | home | Claude nodes working at once; past it a spawn is queued. 0 means no cap. |
-| `notifications.kinds.needsYou` | `banner`, `sound`, `silent` | `sound` | project, home | How a node that needs approval or an answer is notified. |
+| `notifications.kinds.needsYou` | `banner`, `sound`, `silent` | `sound` | project, home | How a node that needs approval or an answer is notified, and a new question an agent put in front of you with `ask_human` (see [messaging](messaging.md#questions-for-the-human)). |
 | `notifications.kinds.errored` | as above | `silent` | project, home | How a turn that ended in an error is notified. |
 | `notifications.kinds.done` | as above | `banner` | project, home | Level for the tree completion summary, or individual finished turns when tree summaries are disabled. |
 | `notifications.kinds.exited` | as above | `silent` | project, home | How an exited node is notified. |
