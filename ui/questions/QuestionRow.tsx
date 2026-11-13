@@ -2,7 +2,8 @@ import type { NodeView, Question } from '../../src/shared/protocol';
 import { Icon } from '../controls/icons';
 import { useNow } from '../hooks';
 import { openNeeds, useStore } from '../store';
-import { ago, ownerTitle, shortAge } from './model';
+import { fmtAge } from '../../src/shared/format';
+import { ago, ownerTitle, stamp } from './model';
 
 /** A question that is not the open card: two lines of it, who it waits on, and its age. Activating it opens the card. */
 export function QuestionRow({ q }: { q: Question }) {
@@ -22,7 +23,7 @@ export function QuestionRow({ q }: { q: Question }) {
             : <><span className="qstate waiting">Waiting on you</span> · {who}{stopped ? ' · isn’t running' : ''}</>}
         </span>
       </span>
-      <time title={`Asked at ${new Date(q.askedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ${q.id}`}>{shortAge(now - q.askedAt)}</time>
+      <time title={`Asked at ${stamp(q.askedAt)} · ${q.id}`}>{fmtAge(now - q.askedAt)}</time>
     </button>
   );
 }
@@ -34,8 +35,8 @@ export function ApprovalRow({ node, go }: { node: NodeView; go: (id: string) => 
     <button className="qrow approval" title={`Open ${node.title} to respond in its terminal`} onClick={() => go(node.id)}>
       <span className="dot needs" />
       <span className="qrow-main">
-        <span className="qrow-q"><b>{node.title}</b> {node.status.state === 'waiting' ? 'asked something in its window' : 'needs your approval'} · {ago(now - node.status.changedAt)}</span>
-        {node.status.activity && <span className="qrow-sub">{node.status.activity}</span>}
+        <span className="qrow-q"><b>{node.title}</b> {node.status.state === 'waiting' ? 'asked something in its window' : 'needs your approval'} · {ago(now - node.status.changedAt).replace(/ ago$/, '')}</span>
+        {node.status.activity && <span className="qrow-sub">{node.status.activity.replace(/^needs approval: /i, '')}</span>}
       </span>
       <span className="q-open">Open<Icon name="chevron" size={12} /></span>
     </button>

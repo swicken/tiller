@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { isOpen } from '../../src/shared/questions';
+import { isOpen, sortQuestions } from '../../src/shared/questions';
 import { Icon } from '../controls/icons';
 import { useNow } from '../hooks';
 import { closeNeeds, openNeeds, selectNode, useStore } from '../store';
@@ -30,11 +30,13 @@ function OpenPanel() {
 
   // Every question seen open since the panel opened keeps its place; a new one joins the end (design 6).
   const pinned = useRef<string[]>([]);
-  for (const q of Object.values(questions)) if (isOpen(q) && !pinned.current.includes(q.id)) pinned.current.push(q.id);
+  for (const q of sortQuestions(Object.values(questions))) if (isOpen(q) && !pinned.current.includes(q.id)) pinned.current.push(q.id);
   const list = listing(questions, nodes, order, session, pinned.current, now);
   const shown = questionsIn(list.groups);
   const firstOpen = shown.find(isOpen)?.id;
-  const cardId = focusId ?? firstOpen;
+  // Fixed when the panel opens: a question that arrives later is a closed row, and never takes focus from wherever the person is typing.
+  const [opening] = useState(firstOpen);
+  const cardId = focusId ?? opening;
 
   // The store holds which card is open, so "Next question" is the only thing that ever advances it.
   useEffect(() => {
@@ -120,7 +122,7 @@ function OpenPanel() {
     </>
   );
   return modal
-    ? <dialog ref={dialog} className="qpanel qpanel-modal" id="qpanel" aria-labelledby="qpanel-h" onCancel={(e) => { e.preventDefault(); closeNeeds(); }} onKeyDown={onKeyDown}>{content}</dialog>
+    ? <dialog ref={dialog} className="qpanel qpanel-modal" id="qpanel" aria-labelledby="qpanel-h" onCancel={(e) => { e.preventDefault(); closeNeeds(); }} onClose={(e) => { if (e.currentTarget.isConnected) closeNeeds(); }} onKeyDown={onKeyDown}>{content}</dialog>
     : <section ref={panel} className="qpanel" id="qpanel" role="dialog" aria-labelledby="qpanel-h" tabIndex={-1} onKeyDown={onKeyDown}>{content}</section>;
 }
 

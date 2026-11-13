@@ -22,11 +22,8 @@ export function ago(ms: number): string {
   return m < 2880 ? 'yesterday' : `${Math.floor(m / 1440)} d ago`;
 }
 
-/** The compact age on a row: "4m", "1h". */
-export function shortAge(ms: number): string {
-  const m = Math.floor(Math.max(0, ms) / MIN);
-  return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`;
-}
+/** The clock time in a tooltip: "02:14 PM". */
+export const stamp = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 export type Item = { kind: 'q'; q: Question } | { kind: 'approval'; node: NodeView };
 export interface Group { key: string; title: string; note?: string; items: Item[] }
@@ -76,6 +73,28 @@ export function listing(questions: Record<string, Question>, nodes: Nodes, order
 
 /** Every question in the groups, in display order. */
 export const questionsIn = (groups: Group[]): Question[] => groups.flatMap((g) => g.items.flatMap((i) => (i.kind === 'q' ? [i.q] : [])));
+
+/** What the human answered, choice then text. */
+export const answerText = (q: Question) => [q.answer?.choice, q.answer?.text].filter(Boolean).join('\n');
+
+/** [bold lead, sentence] for a question that is no longer open. `refused`: the sentence for an answer that arrived too late. */
+export function ended(q: Question, nodes: Nodes, refused: boolean): [string, string] {
+  const asker = q.askedBy.title;
+  if (q.replacedBy) return refused ? ['Not sent.', `${asker} replaced this with a newer question.`] : ['Replaced by a newer question.', `${asker} asked again.`];
+  if (q.state === 'dismissed') return refused ? ['Not sent.', 'This was already dismissed.'] : ['You dismissed this.', `${asker} wasn’t told.`];
+  if (q.state === 'withdrawn') {
+    const { who, name } = withdrawnBy(q, nodes);
+    const lead = refused ? 'Not sent.' : 'No longer needed.';
+    if (who === 'tiller') return [lead, 'The agent that asked was closed, with no agent above it.'];
+    const tail = refused ? 'this just before your answer arrived' : 'it';
+    const reason = q.withdrawn?.reason ? `: “${q.withdrawn.reason}”` : '';
+    return [lead, `${who === 'asker' ? name : `${name}, the agent above it,`} withdrew ${tail}${reason}.`];
+  }
+  return refused ? ['Not sent.', `This was already answered, in another window or from the shell: “${answerText(q).replace('\n', ' · ')}”.`] : ['', 'This was answered in another window while you were writing.'];
+}
+
+/** The notice for a refused answer or dismissal: the daemon's own words while the question is open, else why it is no longer open. */
+export const notSent = (q: Question, nodes: Nodes, message: string): [string, string] => (isOpen(q) ? ['Not sent.', message] : ended(q, nodes, true));
 
 /** Who withdrew a question: the asker, an agent above it, or the daemon. */
 export function withdrawnBy(q: Question, nodes: Nodes): { who: 'asker' | 'ancestor' | 'tiller'; name: string } {

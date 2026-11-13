@@ -5,27 +5,8 @@ import { send } from '../conn';
 import { Icon, type IconName } from '../controls/icons';
 import { useNow } from '../hooks';
 import { clearRefusal, openNeeds, useStore } from '../store';
-import type { Nodes } from '../sidebar/tree';
 import { clearDraft, forgetSent, getDraft, isOwn, moveDraft, noteSent, setDraft } from './drafts';
-import { ago, ownerTitle, withdrawnBy } from './model';
-
-const answerText = (q: Question) => [q.answer?.choice, q.answer?.text].filter(Boolean).join('\n');
-
-/** [bold lead, sentence] for a question that is no longer open. `refused`: the sentence for an answer that arrived too late. */
-function ended(q: Question, nodes: Nodes, refused: boolean): [string, string] {
-  const asker = q.askedBy.title;
-  if (q.replacedBy) return refused ? ['Not sent.', `${asker} replaced this with a newer question.`] : ['Replaced by a newer question.', `${asker} asked again.`];
-  if (q.state === 'dismissed') return refused ? ['Not sent.', 'This was already dismissed.'] : ['You dismissed this.', `${asker} wasn’t told.`];
-  if (q.state === 'withdrawn') {
-    const { who, name } = withdrawnBy(q, nodes);
-    const lead = refused ? 'Not sent.' : 'No longer needed.';
-    if (who === 'tiller') return [lead, 'The agent that asked was closed, with no agent above it.'];
-    const tail = refused ? 'this just before your answer arrived' : 'it';
-    const reason = q.withdrawn?.reason ? `: “${q.withdrawn.reason}”` : '';
-    return [lead, `${who === 'asker' ? name : `${name}, the agent above it,`} withdrew ${tail}${reason}.`];
-  }
-  return refused ? ['Not sent.', `This was already answered, in another window or from the shell: “${answerText(q).replace('\n', ' · ')}”.`] : ['', 'This was answered in another window while you were writing.'];
-}
+import { ago, answerText, ended, notSent, ownerTitle, stamp } from './model';
 
 function CopyButton({ text, label, primary }: { text: string; label: string; primary?: boolean }) {
   const [done, setDone] = useState(false);
@@ -106,7 +87,6 @@ export function QuestionCard({ q, focus, go, next }: Props) {
   const discard = () => { clearDraft(q.id); forgetSent(q.id); clearRefusal(q.id); setText(''); };
   const moveText = () => { moveDraft(q.id, replacement!); clearRefusal(q.id); openNeeds(replacement); };
 
-  const stamp = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const verb = q.replacedBy ? 'replaced' : q.state === 'open' ? '' : q.state;
   const when = form === 'resolved' ? `${verb} ${ago(now - (q.resolvedAt ?? q.askedAt))}` : ago(now - q.askedAt);
   const heading = <h3 className={`qcard-q${form === 'open' && q.question.length > 140 ? ' long' : ''}`} id={`${q.id}-h`} tabIndex={-1} ref={head}>{q.question}</h3>;
@@ -122,14 +102,14 @@ export function QuestionCard({ q, focus, go, next }: Props) {
   const frame = (cls: string, body: ReactNode) => <article className={`qcard ${cls}`} aria-labelledby={`${q.id}-h`} ref={card}>{heading}{meta}{body}</article>;
 
   if (form === 'kept') {
-    const [lead, rest] = open ? ['Not sent.', refusal ?? ''] : ended(q, nodes, !!refusal);
+    const [lead, rest] = refusal ? notSent(q, nodes, refusal) : ended(q, nodes, false);
     const second = !draft ? '' : replacement ? 'Your text is kept below; you can move it to the new question.' : refusal && q.state === 'answered' ? 'Your text is kept below so you can copy it.' : 'Your text is kept below.';
     const withdrawn = q.state === 'withdrawn' && !q.replacedBy && goId;
     return frame('resolved', <>
-      <div className="q-refused" role="alert"><Icon name="alert" size={14} /><div><p><Lead lead={lead}>{rest}</Lead></p>{second && <p>{second}</p>}</div></div>
+      <div className="q-refused"><Icon name="alert" size={14} /><div><p><Lead lead={lead}>{rest}</Lead></p>{second && <p>{second}</p>}</div></div>
       {draft && <textarea className="q-input" readOnly rows={3} aria-label="Your text, not sent" value={draft} />}
       <div className="qcard-foot">
-        <button className="q-quiet" onClick={discard}>{draft ? 'Discard text' : 'OK'}</button>
+        <button className={draft ? 'q-quiet' : 'btn primary'} onClick={discard}>{draft ? 'Discard text' : 'OK'}</button>
         <span className="spacer" />
         {draft && !replacement && <CopyButton text={draft} label="Copy text" primary={!withdrawn} />}
         {draft && replacement && <button className="btn primary" onClick={moveText}>Move text to the new question</button>}
@@ -178,7 +158,7 @@ export function QuestionCard({ q, focus, go, next }: Props) {
     {q.choices && <div className="qcard-choices" role="group" aria-label="Answer with a choice">
       {q.choices.map((c) => <button key={c} className="q-choice" disabled={blocked} onClick={() => answer(c)}>{c}</button>)}
     </div>}
-    <textarea className="q-input" ref={input} rows={text ? 3 : 2} aria-label={`Your answer to ${owner}`} value={text} onChange={(e) => edit(e.target.value)}
+    <textarea className="q-input" ref={input} maxLength={8000}rows={text ? 3 : 2} aria-label={`Your answer to ${owner}`} value={text} onChange={(e) => edit(e.target.value)}
       placeholder={q.choices ? 'Add a note, or write your own answer' : 'Write your answer'}
       onKeyDown={(e) => { if (e.key === 'Enter' && e.metaKey) { e.preventDefault(); answer(); } }} />
     {text && q.choices && <p className="qcard-hint">A choice sends this note with it.</p>}
