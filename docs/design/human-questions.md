@@ -514,6 +514,12 @@ The daemon is one thread and each mutation is synchronous from check to write, s
 
 ## 9. The UI
 
+> **As built, the arrangement differs from this section.** The UI design round changed open decision 6:
+> - The one-line reminder sits in the existing pane-tab row, so the terminal never moves. Below a 720 px main column it is a bar laid over the top of the pane.
+> - Answering happens in a "Needs you" panel anchored to the top right of the pane and sized to its content: one question open as a card, the rest as two-line rows grouped by session, with approval prompts as rows in their session's group.
+>
+> The counts, the entry button, the toast and the digest row are as described here. The "Questions" section of `docs/frontends.md` describes the UI as built. The rest of this section is kept as the original design.
+
 ### 9.1 Where the list lives
 
 **Chosen.** Three surfaces that share one card component.
