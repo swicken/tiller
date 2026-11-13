@@ -198,27 +198,75 @@ function conversationsFor(id) {
 }
 
 // Questions for the human (ask_human), kept in memory. Answers and dismissals are applied and broadcast as the daemon does;
-// nothing is delivered to a node.
+// nothing is delivered to a node. TL_MOCK_QUESTIONS=all adds a question for every state the UI draws (see below).
 const questions = new Map();
 const askQuestion = (id, nodeId, extra) => {
-  const rootId = (() => { let n = nodes.get(nodeId); while (n?.parentId) n = nodes.get(n.parentId); return n?.id ?? nodeId; })();
-  const q = { id, rootId, nodeId, askedBy: { id: nodeId, title: nodes.get(nodeId)?.title ?? nodeId }, state: 'open', askedAt: Date.now(), ...extra };
+  const root = (() => { let n = nodes.get(nodeId); while (n?.parentId) n = nodes.get(n.parentId); return n; })();
+  const q = { id, rootId: root?.id ?? nodeId, nodeId, askedBy: { id: nodeId, title: nodes.get(nodeId)?.title ?? nodeId }, ...(root && { rootTitle: root.title }), state: 'open', askedAt: Date.now(), ...extra };
   questions.set(id, q);
   return q;
 };
+const answered = (ago, answer, delivery) => ({ state: 'answered', askedAt: now - ago - 10 * MIN, resolvedAt: now - ago, answer: { ...answer, at: now - ago }, delivery: { ...delivery, at: now - ago } });
 askQuestion('q-1a2b3c4d', 'tl', { question: 'Should /v2 keep the /v1 alias?', context: 'The v1 routes are used by two internal clients.\nRemoving the alias breaks them until they are updated.', choices: ['Keep the alias', 'Drop it'], askedAt: now - 4 * MIN });
 askQuestion('q-9f8e7d6c', 'dc-mig', { question: 'Which region is the staging bucket in?', assumption: 'assuming eu-west-1', askedAt: now - 12 * MIN });
 askQuestion('q-3c4d5e6f', 'tl', { question: 'Should the release notes mention the new drawer?', choices: ['Yes', 'No'], state: 'answered', askedAt: now - 30 * MIN, resolvedAt: now - 20 * MIN,
   answer: { choice: 'Yes', text: 'Under Improvements.', at: now - 20 * MIN }, delivery: { state: 'queued', messageId: 'm-mock-1', at: now - 20 * MIN } });
 askQuestion('q-55aa01bc', 'tl-ui', { question: 'May I delete the legacy fixtures?', state: 'withdrawn', askedAt: now - 3 * 3600_000, resolvedAt: now - 2 * 3600_000, withdrawn: { by: 'tl-ui', reason: 'answered in chat' } });
 
+// How an answer to one of these is refused, to exercise the kept draft: the question changes just before the answer lands.
+const refusals = new Map();
+if (process.env.TL_MOCK_QUESTIONS === 'all') {
+  const LONG = 'The nightly import job has failed three nights running because the upstream CSV now has a "region" column the parser does not expect. '
+    + 'I can make the parser ignore unknown columns, which fixes tonight\'s run but would silently drop any future column too, or add "region" to the schema and the table, '
+    + 'which needs a migration and a short write lock on imports during the deploy. Which do you want, or should I do the first now and the second next week?';
+  const CONTEXT = ['What I found:', '- The import failed on 10, 11 and 12 November with "unexpected column: region" at line 1.', '- The upstream team added the column on 9 November; their changelog calls it optional.',
+    '- 41 of 2,300 rows have a value in it.', '', 'What each option costs:', '- Ignoring unknown columns is a two-line change and can ship today.', '- Adding the column needs a migration (about 30 seconds of write lock on a table this size),',
+    '  a parser change and a backfill of the three missed nights.', '', 'Nothing downstream reads "region" yet, as far as I can tell from the reports module.'].join('\n');
+  // Open: a long question with long context, six uneven choices, one on a node that has stopped, one that moved to its asker's parent.
+  askQuestion('q-a0000001', 'tl-ui', { question: LONG, context: CONTEXT, askedAt: now - 9 * MIN });
+  askQuestion('q-a0000002', 'tl-feat', { question: 'Which base should the diff view compare against by default?', assumption: 'comparing against the branch the worktree forked from',
+    choices: ['The fork point', 'main', 'The last pushed commit on this branch', 'HEAD~1', 'Ask every time', 'Whatever was used last'], askedAt: now - 22 * MIN });
+  askQuestion('q-a0000003', 'tl-wt', { question: 'Can I rebase the worktree branch onto main before merging?', choices: ['Yes, rebase', 'No, merge as it is'], askedAt: now - 55 * MIN }); // its node has exited
+  askQuestion('q-a0000004', 'tl-ui', { question: 'May I delete the unused --surface-3 token? Nothing in ui/ reads it any more.', askedBy: { id: 'tl-tokens', title: 'css tokens' }, askedAt: now - 70 * MIN }); // the asker closed
+  askQuestion('q-a0000005', 'sc', { question: 'Should the scratch notes be kept after this session closes?', assumption: 'keeping them', choices: ['Keep them', 'Delete them'], askedAt: now - 2 * 3600_000 });
+  // Answered, one per delivery state (the default set already has a queued one).
+  askQuestion('q-b0000001', 'tl-wt', { question: 'Should the worktree be kept after the merge?', choices: ['Yes', 'No'], ...answered(6 * MIN, { choice: 'No' }, { state: 'waiting', detail: 'the node is not running' }) });
+  askQuestion('q-b0000002', 'tl-d', { question: 'Which log level should the daemon use by default?', ...answered(25 * MIN, { text: 'info, and debug only with TL_DEBUG=1.' }, { state: 'unconfirmed', messageId: 'm-mock-2' }) });
+  askQuestion('q-b0000003', 'tl-feat', { question: 'Should the diff view wrap long lines?', choices: ['Wrap', 'Scroll'], ...answered(40 * MIN, { choice: 'Wrap' }, { state: 'delivered', messageId: 'm-mock-3' }) });
+  askQuestion('q-b0000004', 'tl-rel', { question: 'Tag the release as v0.2.0 or v0.1.14?', rootId: 'tl-old', rootTitle: 'release prep', askedBy: { id: 'tl-rel', title: 'release prep' },
+    ...answered(2 * 3600_000, { text: 'v0.2.0' }, { state: 'dropped', detail: 'the node was closed' }) });
+  // Resolved without an answer: dismissed, replaced, and withdrawn by tiller when its session closed.
+  askQuestion('q-c0000001', 'tl', { question: 'Is the old onboarding copy still wanted?', state: 'dismissed', askedAt: now - 5 * 3600_000, resolvedAt: now - 4 * 3600_000 });
+  askQuestion('q-c0000002', 'dc-mig', { question: 'Which database should the migration dry run use?', state: 'withdrawn', askedAt: now - 90 * MIN, resolvedAt: now - 80 * MIN,
+    withdrawn: { by: 'dc-mig', reason: 'replaced by q-c0000003' }, replacedBy: 'q-c0000003' });
+  askQuestion('q-c0000003', 'dc-mig', { question: 'Which database should the migration dry run use: QA or a fresh copy of staging?', choices: ['QA', 'A copy of staging'], askedAt: now - 80 * MIN });
+  askQuestion('q-c0000004', 'tl-old2', { question: 'Should the spike branch be kept?', rootId: 'tl-old2', askedBy: { id: 'tl-old2', title: 'spike: sqlite' }, state: 'withdrawn', // no rootTitle, as from an older daemon
+    askedAt: now - 7 * 3600_000, resolvedAt: now - 6 * 3600_000, withdrawn: { by: 'tiller', reason: 'the node that asked was closed' } });
+  // Answering these is refused: withdrawn by the agent first, answered from elsewhere first, replaced first.
+  askQuestion('q-d0000001', 'tl-d', { question: 'Should the daemon keep serving the old /health shape?', choices: ['Keep it', 'Drop it'], askedAt: now - 15 * MIN });
+  askQuestion('q-d0000002', 'dc', { question: 'Should I quarantine the three failing nightly tests?', askedAt: now - 38 * MIN });
+  askQuestion('q-d0000003', 'dc', { question: 'Which Maven profile should the nightly build use?', askedAt: now - 45 * MIN });
+  refusals.set('q-d0000001', (q) => Object.assign(q, { state: 'withdrawn', withdrawn: { by: q.nodeId, reason: 'the human answered in chat' } }));
+  refusals.set('q-d0000002', (q) => Object.assign(q, { state: 'answered', answer: { text: 'Leave them failing.', at: Date.now() }, delivery: { state: 'delivered', at: Date.now() } }));
+  refusals.set('q-d0000003', (q) => {
+    const next = askQuestion('q-d0000004', q.nodeId, { question: 'Which Maven profile should the nightly build use: ci or ci-full?', choices: ['ci', 'ci-full'] });
+    Object.assign(q, { state: 'withdrawn', withdrawn: { by: q.nodeId, reason: `replaced by ${next.id}` }, replacedBy: next.id });
+    broadcast({ t: 'question', question: next });
+  });
+}
+
 const clients = new Set();
 const broadcast = (m) => clients.forEach((c) => c.ws.send(JSON.stringify(m)));
+// The daemon's wording for a response to a question that is no longer open (closedReason in src/daemon/questions.ts).
+const refusal = (q) => q.state !== 'withdrawn' ? `${q.id} was already ${q.state}` : q.replacedBy ? `${q.id} was replaced by ${q.replacedBy}`
+  : `${q.id} was withdrawn by ${q.withdrawn?.by === 'tiller' ? 'tiller' : 'the agent'}${q.withdrawn?.reason ? `: ${q.withdrawn.reason}` : ''}`;
 function respondToQuestion(m, send) {
   const q = questions.get(m.id);
-  const fail = (message) => send({ t: 'error', id: q?.nodeId, message });
+  const fail = (message) => send({ t: 'error', id: q?.nodeId, questionId: m.id, message });
   if (!q) return fail(`no such question: ${m.id}`);
-  if (q.state !== 'open') return fail(`${q.id} was already ${q.state}`);
+  const race = q.state === 'open' && m.action === 'answer' && refusals.get(q.id);
+  if (race) { race(q); q.resolvedAt = Date.now(); broadcast({ t: 'question', question: q }); }
+  if (q.state !== 'open') return fail(refusal(q));
   if (m.action === 'answer') {
     if (m.choice === undefined && m.text === undefined) return fail('an answer needs a choice or text');
     if (m.choice !== undefined && !q.choices?.includes(m.choice)) return fail(`${m.choice} is not one of the choices`);
