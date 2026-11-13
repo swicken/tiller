@@ -719,7 +719,7 @@ describe('questions for the human', () => {
     send({ t: 'question', id: q.id, action: 'answer', choice: 'blue', text: 'because' });
     await until(() => other.got.find((m) => m.t === 'question' && m.question.state === 'answered'));
     other.send({ t: 'question', id: q.id, action: 'answer', choice: 'red' });
-    expect(await until(() => other.got.find((m) => m.t === 'error'))).toEqual({ t: 'error', message: `${q.id} was already answered`, id });
+    expect(await until(() => other.got.find((m) => m.t === 'error'))).toEqual({ t: 'error', message: `${q.id} was already answered`, id, questionId: q.id });
     expect(seen.filter((m) => m.t === 'error')).toEqual([]);
     expect(manager.questions.get(q.id)?.answer).toMatchObject({ choice: 'blue', text: 'because' });
     other.sock.terminate();
@@ -731,7 +731,7 @@ describe('questions for the human', () => {
     await connect();
     await until(() => seen.find((m) => m.t === 'snapshot'));
     send({ t: 'question', id: q.id, action: 'answer', choice: 'green' });
-    expect(await until(() => seen.find((m) => m.t === 'error'))).toMatchObject({ id, message: expect.stringContaining('not one of the choices') });
+    expect(await until(() => seen.find((m) => m.t === 'error'))).toMatchObject({ id, questionId: q.id, message: expect.stringContaining('not one of the choices') });
     ws!.send(JSON.stringify({ t: 'question', id: q.id, action: 'answer' })); // neither choice nor text
     ws!.send(JSON.stringify({ t: 'question', id: q.id, action: 'dismiss', text: 'nope' })); // a dismissal takes neither
     ws!.send(JSON.stringify({ t: 'question', id: 'not-an-id', action: 'dismiss' }));

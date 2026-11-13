@@ -278,11 +278,11 @@ export async function startServer(manager: NodeManager, opts: { port?: number } 
       }
       case 'select': c.selected = m.id; manager.select(m.id); return;
       case 'question':
-        // The question broadcast is the reply. A refusal names the owner node, not the question: the UI reads error ids as nodes.
+        // The question broadcast is the reply. A refusal names the owner node in `id` (the UI reads error ids as nodes) and the question in `questionId`.
         try {
           if (m.action === 'dismiss') manager.questions.dismiss(m.id);
           else manager.questions.answer(m.id, m);
-        } catch (err) { sendTo(c, { t: 'error', message: (err as Error).message, id: manager.questions.get(m.id)?.nodeId }); }
+        } catch (err) { sendTo(c, { t: 'error', message: (err as Error).message, id: manager.questions.get(m.id)?.nodeId, questionId: m.id }); }
         return;
       case 'spawn': {
         const { t: _, ...req } = m;

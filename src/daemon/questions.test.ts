@@ -120,6 +120,15 @@ describe('asking', () => {
     expect(readEvents(sessionDir(home, 'r')).find((e) => e.type === 'ask')).toMatchObject({ id: 'w', questionId: q.id, question: 'Which region?', context: 'line one\nline two' });
   });
 
+  it('keeps the title of the tree\'s root as it was when asked, for display after the session is gone', () => {
+    const q = ask('g', 'Whose session?');
+    expect(q.rootTitle).toBe('T-r');
+    m.nodes.get('r')!.title = 'renamed later';
+    m.remove('g');
+    expect(qs.get(q.id)?.rootTitle).toBe('T-r');
+    expect(ask('r', 'Root asking').rootTitle).toBe('renamed later'); // a root's own session
+  });
+
   it('returns the same open question when it is asked again, and refuses a sixth', () => {
     const first = ask('w', 'Same?');
     expect(qs.ask('w', { question: 'Same?' })).toEqual({ question: first, replayed: true });

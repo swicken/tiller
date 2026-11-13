@@ -105,8 +105,10 @@ export class Questions {
       throw new Error(`you have ${OPEN_CAP} open questions (${mine.map((q) => q.id).join(', ')}): withdraw one, or wait for an answer`);
     }
     const now = Date.now();
+    const rootTitle = this.m.registry.get(this.m.rootIdOf(caller))?.title;
     const q: StoredQuestion = {
       id: this.newId(), rootId: this.m.rootIdOf(caller), nodeId: caller, askedBy: { id: caller, title: v.title }, question: req.question,
+      ...(rootTitle ? { rootTitle } : {}),
       ...(req.context ? { context: req.context } : {}), ...(req.choices ? { choices: req.choices } : {}), ...(req.assumption ? { assumption: req.assumption } : {}),
       state: 'open', askedAt: now, path: this.m.registry.lineage(caller).map((n) => n.id),
     };
