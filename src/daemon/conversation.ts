@@ -65,13 +65,16 @@ export function parseRecords(events: SessionEvent[]): Records {
   return r;
 }
 
-const ENVELOPE = new RegExp(`^--- TL MESSAGE (\\S+) ---\nfrom: (.*)\nreply-to: (.*)\n(${STEER_LINE}\n)?([\\s\\S]*?)\n--- END TL MESSAGE \\1 ---$`);
+const ENVELOPE = new RegExp(`^--- TL MESSAGE (\\S+) ---\nfrom: ([^\n]*)\nreply-to: (.*)\n(${STEER_LINE}\n)?([\\s\\S]*?)\n--- END TL MESSAGE \\1 ---$`);
 
 /** A delivered message as the recipient's transcript holds it (see frame() in messaging.ts), or undefined. */
 export function parseEnvelope(text: string): { label: string; replyTo: string; body: string; steer?: true } | undefined {
   const m = ENVELOPE.exec(text.trim());
   return m ? { label: m[2], replyTo: m[3], body: m[5], ...(m[4] ? { steer: true } : {}) } : undefined;
 }
+
+/** Whether a from label names node `id`: `id "title"` (the daemon writes the id first), or the old `title (id)`, which older transcripts hold. */
+const fromNode = (label: string, id: string) => label.startsWith(`${id} "`) || label.endsWith(`(${id})`);
 
 /** Whether a send is part of `subject`'s conversation with `parent` (its parent's id, or human for a root). */
 function upward(s: Send, subject: string, parent: string): boolean {
@@ -142,7 +145,7 @@ export function buildConversation(subject: Subject, r: Records, turns: Transcrip
     const body = norm(env.body);
     if (isRecorded(body)) return [];
     if (env.label === HUMAN) return turn(HUMAN, body);
-    return parentId && env.label.endsWith(`(${parentId})`) ? turn(parentId, body) : [];
+    return parentId && fromNode(env.label, parentId) ? turn(parentId, body) : [];
   });
 
   // Stable merge: a record goes before the first turn that is later than it.

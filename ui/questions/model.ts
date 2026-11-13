@@ -96,7 +96,7 @@ export function ended(q: Question, nodes: Nodes, refused: boolean): [string, str
     const reason = q.withdrawn?.reason?.trim();
     return [lead, `${who === 'asker' ? name : `${name}, the agent above it,`} withdrew ${tail}${reason ? `: ${quoted(reason)}` : '.'}`];
   }
-  return refused ? ['Not sent.', `This was already answered, in another window or from the shell: ${quoted(answerText(q).replace('\n', ' · '))}`] : ['', 'This was answered in another window while you were writing.'];
+  return refused ? ['Not sent.', `This was already answered, in another window or from the shell: ${quoted(answerText(q).replace('\n', ' · '))}`] : ['', 'This was answered elsewhere.'];
 }
 
 /** The notice for a refused answer or dismissal: the daemon's own words while the question is open, else why it is no longer open. */

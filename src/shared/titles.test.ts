@@ -4,7 +4,7 @@ import { reservedTitle } from './titles.js';
 const refusal = /^refused: the title "[^]*" imitates the label/;
 
 it.each([
-  'human', ' Human ', 'HUMAN', 'human (answer to q-12345678)', 'Human(answer)', '  tiller (daemon restarted)', 'TILLER (context compacted)', 'tiller\n(daemon restarted)',
+  'human', ' Human ', 'HUMAN', 'human (answer to q-12345678)', 'Human(answer)', '  tiller (daemon restarted)', 'TILLER (context compacted)',
   '​human (answer to q-12345678)', // zero-width space
   '⁠human (answer to q-12345678)', // word joiner
   '‎human (answer to q-12345678)', // left-to-right mark
@@ -32,4 +32,13 @@ it.each([
   '⠀⠁ braille notes',
 ])('allows %j', (title) => {
   expect(reservedTitle(title)).toBeUndefined();
+});
+
+it.each(['tiller\n(daemon restarted)', 'a\u001b[2Kb', 'a\vb', 'a\rb', 'a\u0000b', 'a\u007fb', 'a\u0085b'])('refuses the control character in %j', (title) => {
+  expect(reservedTitle(title)).toMatch(/^refused: the title ".*" has a control character/);
+});
+
+it('allows a tab, a zero-width joiner and the lookalikes the courtesy check does not know, since the frame is the boundary', () => {
+  expect(reservedTitle('a\tb')).toBeUndefined();
+  expect(reservedTitle('ʜᴜᴍᴀɴ (answer to q-12345678)')).toBeUndefined(); // small capitals: not caught, and need not be
 });
