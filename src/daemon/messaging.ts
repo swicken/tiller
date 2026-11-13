@@ -608,7 +608,8 @@ export async function deliver(m: Mgr, fromId: string, toId: string, text: string
   }
   s.last.set(key, Date.now());
 
-  const label = opts.fromLabel ?? (from ? `${oneLine(from.title)} (${fromId})` : fromId);
+  // A node's label starts with its id and quotes its title as JSON, so no title can make it begin like the human's or tiller's, or add a line.
+  const label = opts.fromLabel ?? (from ? `${fromId} ${JSON.stringify(from.title)}` : fromId);
   // A steer interrupts only a working target; to an idle (or blocked, or waiting) one, "now" is the same as "queue".
   // While a restart waits for turns to end, it queues too.
   const steer = opts.mode === 'now' && busy(target) && !m.draining;

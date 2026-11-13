@@ -529,6 +529,11 @@ describe('mcp api', () => {
       expect((await api('rename', { id: a, title }, p, tok)).body.error).toMatch(/imitates the label of a message from the human or Tiller/);
       expect((await spawnT(title, p, tok)).body.error).toMatch(/imitates the label/);
     }
+    // so is a title with a control character, such as an escape sequence a terminal would run
+    for (const title of ['x\u001b[2Ky', 'x\vy']) {
+      expect((await api('rename', { id: a, title }, p, tok)).body.error).toMatch(/has a control character/);
+      expect((await spawnT(title, p, tok)).body.error).toMatch(/has a control character/);
+    }
     expect(manager.view(a)!.title).toBe('renamed');
     expect((await api('rename', { id: a, title: 'tiller' }, p, tok)).body.data).toEqual({ ok: true });
     expect((await api('rename', { id: a, title: 'renamed' }, p, tok)).body.data).toEqual({ ok: true });

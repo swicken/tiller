@@ -70,7 +70,7 @@ describe('a question resolved elsewhere under text being typed', () => {
     commit();
     setDraft('q-3', 'Something');
     update((s) => ({ questions: { ...s.questions, 'q-3': { ...s.questions['q-3'], state: 'answered', resolvedAt: NOW, answer: { text: 'other', at: NOW } } } }));
-    expect(commit().text).toBe('This was answered in another window while you were writing. Your text is kept.');
+    expect(commit().text).toBe('This was answered elsewhere. Your text is kept.');
   });
 
   it('says what happened, without the kept-text clause, when focus was in the card but nothing was typed', () => {
@@ -79,6 +79,15 @@ describe('a question resolved elsewhere under text being typed', () => {
     try {
       resolved({ withdrawn: { by: 'root', reason: 'found it in the docs' } });
       expect(commit().text).toBe('No longer needed. root withdrew it: “found it in the docs”.');
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('words an answer that came from elsewhere neutrally when nothing was typed but focus was in the card', () => {
+    const inCard = (sel: string) => sel === '[aria-labelledby="q-1-h"]';
+    vi.stubGlobal('document', { activeElement: { closest: inCard } });
+    try {
+      resolved({ state: 'answered', answer: { text: 'other', at: NOW } });
+      expect(commit().text).toBe('This was answered elsewhere.');
     } finally { vi.unstubAllGlobals(); }
   });
 

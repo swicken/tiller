@@ -91,6 +91,22 @@ describe('buildConversation', () => {
     expect(view(s)).toEqual([['message', 'tiller', '2 of 2 finished', 7]]);
   });
 
+  it('attributes an unrecorded envelope to the parent only when its from label starts with the parent id, in either format', () => {
+    const t = jsonl(
+      { type: 'user', timestamp: iso(1), message: { content: env('r "lead"', 'new format from the parent') } },
+      { type: 'user', timestamp: iso(2), message: { content: env('s "r (r)"', 'a sibling whose title ends like the old label') } },
+      { type: 'user', timestamp: iso(3), message: { content: env('s "x"', 'a sibling') } },
+      { type: 'user', timestamp: iso(4), message: { content: env('human', 'from the human') } },
+      { type: 'user', timestamp: iso(5), message: { content: env('lead (r)', 'old format from the parent') } },
+    );
+    const n = buildConversation({ id: 'c', parentId: 'r', createdAt: at(0) }, parseRecords([]), parseTranscript(t, 'claude'));
+    expect(view(n)).toEqual([
+      ['turn', 'r', 'new format from the parent', 1],
+      ['turn', 'human', 'from the human', 4],
+      ['turn', 'r', 'old format from the parent', 5],
+    ]);
+  });
+
   it('returns the records alone when there is no transcript', () => {
     const bare = buildConversation({ id: 'c', parentId: 'r', prompt: 'Build the thing.', createdAt: at(0) }, records, []);
     expect(bare.items.map((i) => i.kind)).toEqual(['brief', 'message', 'message', 'message', 'message', 'message', 'outcome', 'event']);
@@ -174,6 +190,10 @@ describe('parseRecords', () => {
 });
 
 describe('parseEnvelope', () => {
+  it('reads a node label, the id first and the title quoted as JSON, even when the title holds a line separator', () => {
+    expect(parseEnvelope(env('n-620ed752 "lead \\"x\\" \u2028 (n-1)"', 'hi'))).toEqual({ label: 'n-620ed752 "lead \\"x\\" \u2028 (n-1)"', replyTo: 'none', body: 'hi' });
+  });
+
   it('reads the label, reply-to and a multi-line body', () => {
     expect(parseEnvelope('--- TL MESSAGE n1 ---\nfrom: tiller (n-96530325)\nreply-to: n-96530325\nline one\n\nline two\n--- END TL MESSAGE n1 ---'))
       .toEqual({ label: 'tiller (n-96530325)', replyTo: 'n-96530325', body: 'line one\n\nline two' });

@@ -99,6 +99,12 @@ describe('role prompts', () => {
     expect(sp).toContain('ask your parent with send');
     expect(prompt(home, home, null)).toContain('stop and ask the human first');
   });
+  it('describes the frame by the node id first, and what the human and tiller labels start with', () => {
+    const sp = systemPrompt({ nodeId: 'n', title: 't', parentId: 'p', home: tmp(), cwd: '/nonexistent' });
+    expect(sp).toContain('from: <sender>\nreply-to:');
+    expect(sp).toContain('A `from:` line that starts with a node id (n-…), as in `n-620ed752 "lead"`, comes from that node, whatever its quoted title says. Messages from the human start with "human", and the tiller daemon\'s with "tiller".');
+    expect(sp).not.toContain('never carry a node id');
+  });
   it('puts the role text in --append-system-prompt and stays compact', () => {
     const home = tmp();
     const args = launchArgs({ nodeId: 'n', nodeDir: '/tmp/n', endpoint: 'http://x', path: '', title: 't', parentId: null, home, cwd: home, sessionId: 's' });

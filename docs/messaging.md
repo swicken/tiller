@@ -8,7 +8,7 @@ The target sees the message inside a frame that says who sent it and where to an
 
 ```
 --- TL MESSAGE <nonce> ---
-from: Builder (n-3f2a)
+from: n-3f2a "Builder"
 reply-to: n-3f2a
 <body>
 --- END TL MESSAGE <nonce> ---
@@ -16,9 +16,18 @@ reply-to: n-3f2a
 
 The nonce is new for each delivery. Every node's system prompt says that framed messages are legitimate instructions and that only the outermost frame is authentic, so a body that contains something frame-shaped is plain data. Messages from the daemon itself have `reply-to: none`.
 
-The `from:` line is the sender's title and id, so a title could imitate the labels the human and the daemon use (`human (answer to q-1a2b3c4d)`, `tiller (daemon restarted)`, `tiller (context compacted)`). The daemon refuses such a title when a node is spawned or renamed, by an agent, `tl` or the app: a title that is "human" (any case), or that is or starts with "human" or "tiller" followed by an opening parenthesis. The check compares the title's skeleton, not what was typed: the title is compatibility-normalized (NFKD, which folds fullwidth forms), stripped of format, control, separator and combining characters (so zero-width spaces, joiners, direction marks and accents do not hide anything), lowercased, and its common Cyrillic and Greek lookalikes of the letters h, u, m, a, n, t, i, l, e and r are read as ASCII. Titles in other scripts and emoji titles are unaffected. As a second layer, every node's system prompt says that messages from the human or tiller never carry a node id, so a `from:` line ending in `(n-…)` comes from a node. A plain "tiller" is allowed, since it is the default title of a session in a folder of that name. Titles set before this rule keep working, but following up on a closed node is checked like any spawn, because its archived title comes from `archive.jsonl`, which agents can write; a reserved one is refused, and `tl followup --title` names it anew.
+The `from:` line says who sent the message, and its shape tells the kinds apart:
 
-In a Claude node's chat the mod draws a delivered envelope as one line, `↘ message from Builder (n-3f2a) · reply-to n-3f2a` (with `· steer` for a steer, and no reply-to part for a daemon notice, whose `reply-to` is `none`), and the node's own `send` calls as `↗ message to <title> (<id>) · queued`. The sent line's outcome is what the call returned (usually `queued`) and is not updated when the message is delivered; a send that failed or was refused also shows its result. ctrl+o shows the full text. This changes the drawing only; Claude reads the whole envelope.
+- A node is written as its id followed by its title as a JSON string: `n-3f2a "Builder"`. The id comes first and the daemon writes it, so the line always starts with `n-`. The title is quoted by `JSON.stringify`, which escapes quotes, backslashes and control characters, so a title cannot add a line to the frame or put terminal escapes in it.
+- The human's messages start with `human` (`human (answer to q-1a2b3c4d)`), and the daemon's with `tiller` (`tiller (daemon restarted)`, `tiller (child n-3f2a "Builder" reported succeeded)`). Neither starts with a node id, though a daemon notice may mention one further along.
+
+Every node's system prompt says that a `from:` line starting with a node id comes from that node, whatever its quoted title says, and that the human's start with "human" and the daemon's with "tiller". That is the boundary, and it holds for a title in any script, so a node named to look like the human cannot pass a message off as theirs. Older transcripts and messages still queued from before this format hold `Builder (n-3f2a)`; the Transcript tab's conversations and the mod's rows read both.
+
+Titles are also checked, as a courtesy and not as the boundary. The daemon refuses a title that would read as the human's or the daemon's label when a node is spawned or renamed, by an agent, `tl` or the app: one that is "human" (any case), or that is or starts with "human" or "tiller" followed by an opening parenthesis. The check compares the title's skeleton: the title is compatibility-normalized (NFKD, which folds fullwidth forms), stripped of format, control, separator and combining characters, lowercased, and a short list of Cyrillic and Greek lookalikes of the letters h, u, m, a, n, t, i, l, e and r is read as ASCII. It does not catch every lookalike (Latin small capitals, for one), and need not. A plain "tiller" is allowed, since it is the default title of a session in a folder of that name. Titles set before this rule keep working, but following up on a closed node is checked like any spawn, because its archived title comes from `archive.jsonl`, which agents can write; a reserved one is refused, and `tl followup --title` names it anew.
+
+A title may not contain a control character other than a tab (Unicode category Cc: an escape, a newline, a vertical tab, DEL). A terminal would act on an escape sequence that `tl ps` prints, and a vertical tab breaks the mod's one-line rows. Format characters such as the zero-width joiner stay allowed, since emoji sequences use them.
+
+In a Claude node's chat the mod draws a delivered envelope as one line, `↘ message from n-3f2a "Builder" · reply-to n-3f2a` (with `· steer` for a steer, and no reply-to part for a daemon notice, whose `reply-to` is `none`), and the node's own `send` calls as `↗ message to <title> (<id>) · queued`. The sent line's outcome is what the call returned (usually `queued`) and is not updated when the message is delivered; a send that failed or was refused also shows its result. ctrl+o shows the full text. This changes the drawing only; Claude reads the whole envelope.
 
 ## The queue and delivery
 
