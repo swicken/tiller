@@ -2,7 +2,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
-import { APPROVAL_ID, dndActive, finished, isAgentKind, type Dnd, type NativeNotification, type NodeView } from '../shared/protocol.js';
+import { APPROVAL_ID, dndActive, finished, isAgentKind, type Dnd, type NativeNotification, type NodeView, type Question } from '../shared/protocol.js';
 import type { Notifications, NotifyLevel } from './config.js';
 import type { NotifyEvent } from './manager.js';
 
@@ -95,7 +95,7 @@ const summaryInputs = (v: NodeView) => [v.status.state, !!v.status.exited, v.gat
  * observe skips a node event that changed none of summaryInputs; recheck always runs; forget drops a removed node's state.
  */
 export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
-  observe(node: NodeView): void; approval(text: string): void; recheck(node: NodeView): void; forget(id: string): void;
+  observe(node: NodeView): void; approval(text: string): void; question(q: Pick<Question, 'nodeId' | 'question'>, isNew: boolean): void; recheck(node: NodeView): void; forget(id: string): void;
 } {
   const last = new Map<string, number>();
   const seen = new Map<string, unknown[]>();
@@ -178,6 +178,16 @@ export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
   /** An approval request is not about one node: it has no mute or throttle, is skipped while a focused window shows the modal, has its own banner group, and the project config is the home one. */
   let approvals = 0;
   const approval = (text: string) => post(`${APPROVAL_ID}-${++approvals}`, 'approval', 'approval', { title: 'Approval needed', body: firstLine(text) }, (d.now ?? Date.now)());
+  /**
+   * A question an agent put in front of the human (a changed one posts nothing). It uses the needsYou level, with its own
+   * throttle key so a blocked-prompt notification from the same node is unaffected; the click selects the owner.
+   */
+  const question = (q: Pick<Question, 'nodeId' | 'question'>, isNew: boolean) => {
+    const node = d.view(q.nodeId);
+    if (!isNew || !node) return;
+    const root = d.tree(q.nodeId)[0] ?? node;
+    post(q.nodeId, 'needsYou', 'question', { title: node.title, subtitle: root.title !== node.title ? root.title : undefined, body: withText('Asks', firstLine(q.question)) }, (d.now ?? Date.now)());
+  };
   const recheck = (node: NodeView) => summarize(node.id, (d.now ?? Date.now)());
   // Working, pending, restart and gate transitions do not emit notification events.
   const observe = (node: NodeView) => {
@@ -192,7 +202,7 @@ export function createNotifier(d: NotifierDeps): ((n: NotifyEvent) => void) & {
     announced.delete(id);
     active.delete(id);
   };
-  return Object.assign(notify, { observe, recheck, forget, approval });
+  return Object.assign(notify, { observe, recheck, forget, approval, question });
 }
 
 /** First executable named `name` on `path`, else undefined. */
