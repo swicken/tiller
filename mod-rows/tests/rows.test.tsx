@@ -20,6 +20,12 @@ describe('envelope parsing', () => {
     const notice = parseEnvelope(msg.replace('from: Builder (n-3f2a)', 'from: tiller (daemon restarted)').replace('reply-to: n-3f2a', 'reply-to: none'))!
     expect(receivedLine(notice)).toBe('↘ message from tiller (daemon restarted)')
   })
+  test('a node label, the id first and the title quoted, is shown as it was sent', async () => {
+    const label = 'n-3f2a "Builder \\"x\\" \\u000b"'
+    const node = parseEnvelope(msg.replace('from: Builder (n-3f2a)', `from: ${label}`))!
+    expect(node.from).toBe(label)
+    expect(receivedLine(node)).toBe(`↘ message from ${label} · reply-to n-3f2a`)
+  })
   test('a steer from the daemon with reply-to none has no reply-to part', async () => {
     const daemonSteer = parseEnvelope(steered.replace('from: Builder (n-3f2a)', 'from: tiller (daemon restarted)').replace('reply-to: n-3f2a', 'reply-to: none'))!
     expect(receivedLine(daemonSteer)).toBe('↘ message from tiller (daemon restarted) · steer')

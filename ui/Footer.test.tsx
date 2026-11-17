@@ -9,7 +9,7 @@ import { getState, update } from './store';
 import { send } from './conn';
 import { toggleDnd } from './hooks';
 import { mk } from './fixtures';
-import type { ArchivedNode } from '../src/shared/protocol';
+import type { ArchivedNode, Question } from '../src/shared/protocol';
 
 const effects = vi.hoisted(() => [] as (() => unknown)[]);
 vi.mock('./controls/Modal', () => ({ Modal: ({ children, footer }: { children: ReactNode; footer?: ReactNode }) => <>{children}{footer}</> }));
@@ -33,7 +33,7 @@ beforeEach(() => {
   vi.stubGlobal('document', { activeElement: null });
   vi.stubGlobal('location', { host: 'localhost' });
   vi.stubGlobal('requestAnimationFrame', (fn: () => void) => fn());
-  update(() => ({ nodes: {}, order: [], connected: true, dnd: undefined, update: undefined, dialog: { kind: 'palette' }, activityOpen: false }));
+  update(() => ({ nodes: {}, order: [], connected: true, dnd: undefined, update: undefined, dialog: { kind: 'palette' }, activityOpen: false, questions: {}, needs: { open: false } }));
 });
 
 it('removes persistent footer commands and shortcut text when current', () => {
@@ -160,4 +160,21 @@ it('retains unread installed notes while disconnected instead of pretending an a
   expect(renderToStaticMarkup(<Dialogs />)).toContain('Loaded notes');
   effects.splice(0).forEach((effect) => effect());
   expect(send).not.toHaveBeenCalled();
+});
+
+it('counts blocked nodes and open questions together as "N need you", a button that opens the Needs you panel', () => {
+  const question = (id: string, state: Question['state'] = 'open'): Question =>
+    ({ id, rootId: 'a', nodeId: 'a', askedBy: { id: 'a', title: 'a' }, question: 'Which one?', state, askedAt: 1 });
+  const nodes = { a: mk('a', null, 1, { state: 'done' }), b: mk('b', null, 1, { state: 'blocked' }) };
+  update(() => ({ nodes, order: ['a', 'b'] }));
+  const needs = () => elements(StatusBar()).find((el) => el.props.className === 'needs-count');
+  expect(needs()!.props.children).toEqual([1, ' need you']);
+  expect(needs()!.props.title).toBe('1 approval. Open the Needs you list.');
+  update(() => ({ questions: { 'q-00000001': question('q-00000001'), 'q-00000002': question('q-00000002'), 'q-00000003': question('q-00000003', 'dismissed') } }));
+  expect(needs()!.props.children).toEqual([3, ' need you']);
+  expect(needs()!.props.title).toBe('2 questions, 1 approval. Open the Needs you list.');
+  needs()!.props.onClick();
+  expect(getState().needs.open).toBe(true);
+  update(() => ({ nodes: { a: nodes.a }, order: ['a'], questions: {} }));
+  expect(needs()).toBeUndefined();
 });

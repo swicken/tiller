@@ -1,5 +1,6 @@
-import type { ServerMessage } from '../src/shared/protocol';
-import { recordActivity, selectNode, toast, type Tone } from './store';
+import type { Question, ServerMessage } from '../src/shared/protocol';
+import { rootOf } from './sidebar/sessions';
+import { getState, recordActivity, selectNode, toast, type Tone } from './store';
 import { IN_APP } from './url';
 
 type Notify = Extract<ServerMessage, { t: 'notify' }>;
@@ -29,11 +30,11 @@ function tone(freq: number, at: number, dur: number) {
   o.stop(c.currentTime + at + dur);
 }
 
-function chime(m: Notify) {
-  if (m.kind === 'exited') return;
+function chime(kind: Notify['kind']) {
+  if (kind === 'exited') return;
   try {
     void ctx?.resume();
-    if (m.kind === 'done') { tone(880, 0, 0.15); tone(1175, 0.15, 0.25); }
+    if (kind === 'done') { tone(880, 0, 0.15); tone(1175, 0.15, 0.25); }
     else { tone(330, 0, 0.2); tone(262, 0.25, 0.3); }
   } catch { /* audio unavailable */ }
 }
@@ -43,7 +44,20 @@ export function handleNotify(m: Notify) {
   recordActivity(text, m.id, TONE[m.kind]);
   if (m.kind === 'errored' || m.kind === 'needsYou') toast(text, m.id, TONE[m.kind]);
   // Raw events are in-app feedback only; OS delivery requires a separate daemon-approved offer.
-  if (!IN_APP && !throttled(m.id)) chime(m);
+  if (!IN_APP && !throttled(m.id)) chime(m.kind);
+}
+
+/**
+ * A question message, handled before the store takes it. Only a new open question counts as news: a snapshot never
+ * comes here, and a change to one we already hold is not asked again. The toast is skipped when its words are already
+ * on screen (the reminder shows the session's first question) because the person is looking at that session.
+ */
+export function handleQuestion(q: Question) {
+  const { questions, nodes, session } = getState();
+  if (questions[q.id] || q.state !== 'open') return;
+  recordActivity(`${nodes[q.nodeId]?.title ?? q.nodeId} asks: ${q.question}`, q.nodeId, 'warn');
+  if (!IN_APP && !throttled(q.nodeId)) chime('needsYou');
+  if (session !== rootOf(nodes, q.nodeId) || !document.hasFocus()) toast(q.question, q.nodeId, 'warn', q.id);
 }
 
 /** Browsers only allow audio to start from a user gesture. */

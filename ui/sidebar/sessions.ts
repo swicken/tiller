@@ -1,4 +1,5 @@
-import type { NodeView } from '../../src/shared/protocol';
+import type { NodeView, Question } from '../../src/shared/protocol';
+import { isOpen } from '../../src/shared/questions';
 import { statusKind, type Nodes, type StatusKind } from './tree';
 
 /** Ancestors from the session root down to `id`, inclusive. Tolerates missing parents; parentId is fixed at spawn, so there are no cycles. */
@@ -33,7 +34,8 @@ const URGENCY: StatusKind[] = ['needs', 'errored', 'working', 'done', 'queued', 
 
 export interface SessionInfo { root: NodeView; size: number; needs: number; kind: StatusKind }
 
-export function sessions(nodes: Nodes, order: string[]): SessionInfo[] {
+/** `needs` counts blocked nodes and open questions; a session with an open question takes the needs colour even when its nodes are done. */
+export function sessions(nodes: Nodes, order: string[], questions: Question[] = []): SessionInfo[] {
   const rs = roots(nodes, order);
   const by = new Map<string, SessionInfo>(rs.map((root) => [root.id, { root, size: 0, needs: 0, kind: 'exited' }]));
   for (const id of order) {
@@ -44,6 +46,10 @@ export function sessions(nodes: Nodes, order: string[]): SessionInfo[] {
     s.size++;
     if (k === 'needs') s.needs++;
     if (URGENCY.indexOf(k) < URGENCY.indexOf(s.kind)) s.kind = k;
+  }
+  for (const q of questions) {
+    const s = isOpen(q) && by.get(rootOf(nodes, q.nodeId));
+    if (s) { s.needs++; s.kind = 'needs'; }
   }
   return rs.map((r) => by.get(r.id)!);
 }

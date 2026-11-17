@@ -99,13 +99,57 @@ describe('role prompts', () => {
     expect(sp).toContain('ask your parent with send');
     expect(prompt(home, home, null)).toContain('stop and ask the human first');
   });
+  it('describes the frame by the node id first, and what the human and tiller labels start with', () => {
+    const sp = systemPrompt({ nodeId: 'n', title: 't', parentId: 'p', home: tmp(), cwd: '/nonexistent' });
+    expect(sp).toContain('from: <sender>\nreply-to:');
+    expect(sp).toContain('A `from:` line that starts with a node id (n-…), as in `n-620ed752 "lead"`, comes from that node, whatever its quoted title says. Messages from the human start with "human", and the tiller daemon\'s with "tiller".');
+    expect(sp).not.toContain('never carry a node id');
+  });
   it('puts the role text in --append-system-prompt and stays compact', () => {
     const home = tmp();
     const args = launchArgs({ nodeId: 'n', nodeDir: '/tmp/n', endpoint: 'http://x', path: '', title: 't', parentId: null, home, cwd: home, sessionId: 's' });
     const sp = args[args.indexOf('--append-system-prompt') + 1]!;
     expect(sp).toContain('You are the orchestrator for this repository');
-    // Was 600; raised to 625 for the suggest_command sentence (docs/design/node-shell.md), which took it to 609.
-    expect(sp.split(/\s+/).length).toBeLessThan(625);
+    // Was 600; raised to 625 for the suggest_command sentence (docs/design/node-shell.md), which took it to 609, and to 740
+    // for the ask_human paragraph and the orchestrator's clause about workers' questions (docs/design/human-questions.md), which took it to 726.
+    // Raised to 780 for the sentence that a `from:` line ending in a node id comes from a node, which took it to 758.
+    expect(sp.split(/\s+/).length).toBeLessThan(780);
+  });
+});
+
+describe('questions for the human in the preamble', () => {
+  const base = { nodeId: 'n', title: 't', home: '/nonexistent', cwd: '/nonexistent' };
+  const ROOT = 'call ask_human as well as saying so in your reply';
+  const CHILD = 'Questions about your brief go to your parent with send. Call ask_human only for what only the human can settle';
+
+  it.each(['claude', 'pi', 'codex'] as const)('tells a root to ask when the human may not be reading, and a child to ask its parent first (%s)', (harness) => {
+    const root = systemPrompt({ ...base, parentId: null, harness });
+    expect(root).toContain(ROOT);
+    expect(root).toContain('call withdraw_question');
+    expect(root).toContain('list_questions shows your open questions');
+    expect(root).not.toContain(CHILD);
+    const child = systemPrompt({ ...base, parentId: 'p', harness });
+    expect(child).toContain(CHILD);
+    expect(child).toContain('If the human answers in chat, call withdraw_question');
+    expect(child).not.toContain(ROOT);
+  });
+
+  it('survives a role override and a preset body, which replace only the role text', () => {
+    const home = mkdtempSync(join(tmpdir(), 'tl-ask-'));
+    try {
+      mkdirSync(join(home, 'prompts'));
+      writeFileSync(join(home, 'prompts', 'orchestrator.md'), 'custom orchestrator');
+      const root = systemPrompt({ ...base, parentId: null, home, cwd: home });
+      expect(root).toContain('# Role\ncustom orchestrator');
+      expect(root).toContain(ROOT);
+      expect(systemPrompt({ ...base, parentId: 'p', preset: { name: 'x', body: 'preset body', source: 'x.md' } })).toContain(CHILD);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+
+  it('has the default orchestrator pass a worker\'s question to the human by name, and leaves the worker prompt asking its parent', () => {
+    expect(systemPrompt({ ...base, parentId: null })).toContain('a worker\'s open question that only the human can answer goes to them through ask_human, naming the worker');
+    const worker = systemPrompt({ ...base, parentId: 'p' });
+    expect(worker).toContain('If the brief is ambiguous, ask your parent with send rather than the human.');
   });
 });
 

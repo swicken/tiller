@@ -123,7 +123,7 @@ function release(m: NodeManager, id: string): void {
   const fail = (err: Error) => {
     if (!m.registry.get(id)) return;
     m.logEvent(id, 'launch-failed', { error: err.message });
-    if (rec.parentId) deliver(m, DAEMON, rec.parentId, `${id} "${rec.title}" failed to launch and was removed: ${err.message}`, { fromLabel: `tiller (armed ${id} failed)`, replyTo: null }).catch(logError);
+    if (rec.parentId) deliver(m, DAEMON, rec.parentId, `${id} ${JSON.stringify(rec.title)} failed to launch and was removed: ${err.message}`, { fromLabel: `tiller (armed ${id} failed)`, replyTo: null }).catch(logError);
     m.discard(id);
     m.emit('removed', id);
   };

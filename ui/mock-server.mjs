@@ -2,6 +2,9 @@
 //   node ui/mock-server.mjs            ws on :7789; also serves ui/dist at http://127.0.0.1:7789/?k=mock when it has been built
 // Mutations (spawn, close, restart, rename, resume, prune, select, merge, mute, dnd) work in memory; a confirm request arrives
 // 15 s after connecting. diff on a worktree node returns a made-up diff; send logs the text and replies queued.
+// questions: two open, one answered and one withdrawn at connect, plus a new one 20 s in; a question message answers or dismisses one in memory,
+// and an answer follows the real daemon's delivery: waiting, then queued, then delivered (queued for 5 s while the owner is working, and
+// waiting for good when it has exited). Closing a node moves its questions to its parent, or withdraws them when it has none.
 // history, transcript, followup and spawn with fork answer from the fake archive below; tl-d and the archived "auth refactor" have two sessions.
 // conversations and conversation answer from the same tree (see conversationFor); tl-test and tl-ui exchange peer messages.
 // claudeAccounts answers with three accounts (one logged out); a root claude spawn takes its chosen or project-mapped account, children inherit it.
@@ -196,8 +199,117 @@ function conversationsFor(id) {
   return { items: [row(id, undefined, 'parent', n.parentId && known(n.parentId) ? n.parentId : 'human'), ...children, ...peers] };
 }
 
+// Questions for the human (ask_human), kept in memory. Answers and dismissals are applied and broadcast as the daemon does;
+// nothing is delivered to a node. TL_MOCK_QUESTIONS=all adds a question for every state the UI draws (see below).
+const questions = new Map();
+const askQuestion = (id, nodeId, extra) => {
+  const root = (() => { let n = nodes.get(nodeId); while (n?.parentId) n = nodes.get(n.parentId); return n; })();
+  const q = { id, rootId: root?.id ?? nodeId, nodeId, askedBy: { id: nodeId, title: nodes.get(nodeId)?.title ?? nodeId }, ...(root && { rootTitle: root.title }), state: 'open', askedAt: Date.now(), ...extra };
+  questions.set(id, q);
+  return q;
+};
+const answered = (ago, answer, delivery) => ({ state: 'answered', askedAt: now - ago - 10 * MIN, resolvedAt: now - ago, answer: { ...answer, at: now - ago }, delivery: { ...delivery, at: now - ago } });
+askQuestion('q-1a2b3c4d', 'tl', { question: 'Should /v2 keep the /v1 alias?', context: 'The v1 routes are used by two internal clients.\nRemoving the alias breaks them until they are updated.', choices: ['Keep the alias', 'Drop it'], askedAt: now - 4 * MIN });
+askQuestion('q-9f8e7d6c', 'dc-mig', { question: 'Which region is the staging bucket in?', assumption: 'assuming eu-west-1', askedAt: now - 12 * MIN });
+askQuestion('q-3c4d5e6f', 'tl', { question: 'Should the release notes mention the new drawer?', choices: ['Yes', 'No'], state: 'answered', askedAt: now - 30 * MIN, resolvedAt: now - 20 * MIN,
+  answer: { choice: 'Yes', text: 'Under Improvements.', at: now - 20 * MIN }, delivery: { state: 'queued', messageId: 'm-mock-1', at: now - 20 * MIN } });
+askQuestion('q-55aa01bc', 'tl-ui', { question: 'May I delete the legacy fixtures?', state: 'withdrawn', askedAt: now - 3 * 3600_000, resolvedAt: now - 2 * 3600_000, withdrawn: { by: 'tl-ui', reason: 'answered in chat' } });
+
+// How an answer to one of these is refused, to exercise the kept draft: the question changes just before the answer lands.
+const refusals = new Map();
+if (process.env.TL_MOCK_QUESTIONS === 'all') {
+  const LONG = 'The nightly import job has failed three nights running because the upstream CSV now has a "region" column the parser does not expect. '
+    + 'I can make the parser ignore unknown columns, which fixes tonight\'s run but would silently drop any future column too, or add "region" to the schema and the table, '
+    + 'which needs a migration and a short write lock on imports during the deploy. Which do you want, or should I do the first now and the second next week?';
+  const CONTEXT = ['What I found:', '- The import failed on 10, 11 and 12 November with "unexpected column: region" at line 1.', '- The upstream team added the column on 9 November; their changelog calls it optional.',
+    '- 41 of 2,300 rows have a value in it.', '', 'What each option costs:', '- Ignoring unknown columns is a two-line change and can ship today.', '- Adding the column needs a migration (about 30 seconds of write lock on a table this size),',
+    '  a parser change and a backfill of the three missed nights.', '', 'Nothing downstream reads "region" yet, as far as I can tell from the reports module.'].join('\n');
+  // Open: a long question with long context, six uneven choices, one on a node that has stopped, one that moved to its asker's parent.
+  askQuestion('q-a0000001', 'tl-ui', { question: LONG, context: CONTEXT, askedAt: now - 9 * MIN });
+  askQuestion('q-a0000002', 'tl-feat', { question: 'Which base should the diff view compare against by default?', assumption: 'comparing against the branch the worktree forked from',
+    choices: ['The fork point', 'main', 'The last pushed commit on this branch', 'HEAD~1', 'Ask every time', 'Whatever was used last'], askedAt: now - 22 * MIN });
+  askQuestion('q-a0000003', 'tl-wt', { question: 'Can I rebase the worktree branch onto main before merging?', choices: ['Yes, rebase', 'No, merge as it is'], askedAt: now - 55 * MIN }); // its node has exited
+  askQuestion('q-a0000004', 'tl-ui', { question: 'May I delete the unused --surface-3 token? Nothing in ui/ reads it any more.', askedBy: { id: 'tl-tokens', title: 'css tokens' }, askedAt: now - 70 * MIN }); // the asker closed
+  askQuestion('q-a0000005', 'sc', { question: 'Should the scratch notes be kept after this session closes?', assumption: 'keeping them', choices: ['Keep them', 'Delete them'], askedAt: now - 2 * 3600_000 });
+  // Answered, one per delivery state (the default set already has a queued one).
+  askQuestion('q-b0000001', 'tl-wt', { question: 'Should the worktree be kept after the merge?', choices: ['Yes', 'No'], ...answered(6 * MIN, { choice: 'No' }, { state: 'waiting', detail: 'the node is not running' }) });
+  askQuestion('q-b0000002', 'tl-d', { question: 'Which log level should the daemon use by default?', ...answered(25 * MIN, { text: 'info, and debug only with TL_DEBUG=1.' }, { state: 'unconfirmed', messageId: 'm-mock-2' }) });
+  askQuestion('q-b0000003', 'tl-feat', { question: 'Should the diff view wrap long lines?', choices: ['Wrap', 'Scroll'], ...answered(40 * MIN, { choice: 'Wrap' }, { state: 'delivered', messageId: 'm-mock-3' }) });
+  askQuestion('q-b0000004', 'tl-rel', { question: 'Tag the release as v0.2.0 or v0.1.14?', rootId: 'tl-old', rootTitle: 'release prep', askedBy: { id: 'tl-rel', title: 'release prep' },
+    ...answered(2 * 3600_000, { text: 'v0.2.0' }, { state: 'dropped', detail: 'the node was closed' }) });
+  // Resolved without an answer: dismissed, replaced, and withdrawn by tiller when its session closed.
+  askQuestion('q-c0000001', 'tl', { question: 'Is the old onboarding copy still wanted?', state: 'dismissed', askedAt: now - 5 * 3600_000, resolvedAt: now - 4 * 3600_000 });
+  askQuestion('q-c0000002', 'dc-mig', { question: 'Which database should the migration dry run use?', state: 'withdrawn', askedAt: now - 90 * MIN, resolvedAt: now - 80 * MIN,
+    withdrawn: { by: 'dc-mig', reason: 'replaced by q-c0000003' }, replacedBy: 'q-c0000003' });
+  askQuestion('q-c0000003', 'dc-mig', { question: 'Which database should the migration dry run use: QA or a fresh copy of staging?', choices: ['QA', 'A copy of staging'], askedAt: now - 80 * MIN });
+  askQuestion('q-c0000004', 'tl-old2', { question: 'Should the spike branch be kept?', rootId: 'tl-old2', askedBy: { id: 'tl-old2', title: 'spike: sqlite' }, state: 'withdrawn', // no rootTitle, as from an older daemon
+    askedAt: now - 7 * 3600_000, resolvedAt: now - 6 * 3600_000, withdrawn: { by: 'tiller', reason: 'the node that asked was closed' } });
+  // Answering these is refused: withdrawn by the agent first, answered from elsewhere first, replaced first.
+  askQuestion('q-d0000001', 'tl-d', { question: 'Should the daemon keep serving the old /health shape?', choices: ['Keep it', 'Drop it'], askedAt: now - 15 * MIN });
+  askQuestion('q-d0000002', 'dc', { question: 'Should I quarantine the three failing nightly tests?', askedAt: now - 38 * MIN });
+  askQuestion('q-d0000003', 'dc', { question: 'Which Maven profile should the nightly build use?', askedAt: now - 45 * MIN });
+  refusals.set('q-d0000001', (q) => Object.assign(q, { state: 'withdrawn', withdrawn: { by: q.nodeId, reason: 'the human answered in chat' } }));
+  refusals.set('q-d0000002', (q) => Object.assign(q, { state: 'answered', answer: { text: 'Leave them failing.', at: Date.now() }, delivery: { state: 'delivered', at: Date.now() } }));
+  refusals.set('q-d0000003', (q) => {
+    const next = askQuestion('q-d0000004', q.nodeId, { question: 'Which Maven profile should the nightly build use: ci or ci-full?', choices: ['ci', 'ci-full'] });
+    Object.assign(q, { state: 'withdrawn', withdrawn: { by: q.nodeId, reason: `replaced by ${next.id}` }, replacedBy: next.id });
+    broadcast({ t: 'question', question: next });
+  });
+}
+
 const clients = new Set();
 const broadcast = (m) => clients.forEach((c) => c.ws.send(JSON.stringify(m)));
+// The daemon's wording for a response to a question that is no longer open (closedReason in src/daemon/questions.ts).
+const refusal = (q) => q.state !== 'withdrawn' ? `${q.id} was already ${q.state}` : q.replacedBy ? `${q.id} was replaced by ${q.replacedBy}`
+  : `${q.id} was withdrawn by ${q.withdrawn?.by === 'tiller' ? 'tiller' : q.withdrawn?.by === q.askedBy.id || q.withdrawn?.by === q.nodeId ? 'the agent' : q.withdrawn?.by}${q.withdrawn?.reason ? `: ${q.withdrawn.reason}` : ''}`;
+// How an answer reaches its owner (src/daemon/questions.ts): not sent yet, then queued in the node's inbox (even when it is idle, since a
+// Claude node reads its inbox through the mod), then delivered. An owner that has exited keeps the answer waiting until it runs again.
+const sending = new Map(); // question id -> the send in progress, so a moved or re-answered question drops the old one's steps
+const deliver = (q, detail = 'not sent yet') => {
+  const owner = nodes.get(q.nodeId), id = `m-mock-${q.id}-${Date.now()}`, at = () => Date.now();
+  const step = (state, ms, then) => setTimeout(() => {
+    if (sending.get(q.id) !== id || q.state !== 'answered') return;
+    q.delivery = { state, messageId: id, at: at() };
+    broadcast({ t: 'question', question: q });
+    then?.();
+  }, ms);
+  sending.set(q.id, id);
+  q.delivery = { state: 'waiting', detail, at: at() };
+  if (!owner || owner.status.exited) return setTimeout(() => {
+    if (sending.get(q.id) !== id) return;
+    q.delivery = { state: 'waiting', detail: 'the node is not running', at: at() };
+    broadcast({ t: 'question', question: q });
+  }, 300);
+  step('queued', 300, () => step('delivered', owner.status.state === 'working' ? 5000 : 1000));
+};
+// A closed node's questions go to its parent, else open ones are withdrawn by tiller and answers dropped (ownerClosed in the daemon).
+function ownerClosed(id, parentId) {
+  for (const q of questions.values()) {
+    if (q.nodeId !== id || (q.state === 'dismissed' || q.state === 'withdrawn' || (q.state === 'answered' && q.delivery?.state === 'delivered'))) continue;
+    if (parentId && nodes.has(parentId)) {
+      q.nodeId = parentId;
+      if (q.state === 'answered') { q.delivery = { state: 'waiting', detail: `${id} was closed`, at: Date.now() }; broadcast({ t: 'question', question: q }); deliver(q, q.delivery.detail); continue; }
+    } else if (q.state === 'open') Object.assign(q, { state: 'withdrawn', resolvedAt: Date.now(), withdrawn: { by: 'tiller', reason: 'the node that asked was closed' } });
+    else q.delivery = { state: 'dropped', detail: 'the node that asked was closed and no ancestor is left', at: Date.now() };
+    broadcast({ t: 'question', question: q });
+  }
+}
+function respondToQuestion(m, send) {
+  const q = questions.get(m.id);
+  const fail = (message) => send({ t: 'error', id: q?.nodeId, questionId: m.id, message });
+  if (!q) return fail(`no such question: ${m.id}`);
+  const race = q.state === 'open' && m.action === 'answer' && refusals.get(q.id);
+  if (race) { race(q); q.resolvedAt = Date.now(); broadcast({ t: 'question', question: q }); }
+  if (q.state !== 'open') return fail(refusal(q));
+  if (m.action === 'answer') {
+    if (m.choice === undefined && m.text === undefined) return fail('an answer needs a choice or text');
+    if (m.choice !== undefined && !q.choices?.includes(m.choice)) return fail(`${m.choice} is not one of the choices`);
+    Object.assign(q, { state: 'answered', answer: { ...(m.choice !== undefined && { choice: m.choice }), ...(m.text !== undefined && { text: m.text }), at: Date.now() } });
+  } else Object.assign(q, { state: 'dismissed' });
+  q.resolvedAt = Date.now();
+  if (q.state === 'answered') deliver(q);
+  broadcast({ t: 'question', question: q });
+}
 const touch = (n, patch) => { Object.assign(n.status, patch, { changedAt: Date.now() }); broadcast({ t: 'node', node: n }); };
 
 // Light life: the working node's context creeps up.
@@ -229,7 +341,12 @@ wss.on('connection', (ws) => {
       if (m.t !== 'auth' || m.token !== 'mock') return ws.close();
       authed = true;
       clients.add(client);
-      send({ t: 'snapshot', nodes: [...nodes.values()], dnd, sessionOrder: tabOrder(), ...(updateStatus ? { update: updateStatus } : {}) });
+      send({ t: 'snapshot', nodes: [...nodes.values()], dnd, sessionOrder: tabOrder(), questions: [...questions.values()], ...(updateStatus ? { update: updateStatus } : {}) });
+      // A new question 20 s in, to exercise the toast.
+      setTimeout(() => {
+        if (ws.readyState !== 1 || questions.has('q-7b8c9d0e')) return;
+        broadcast({ t: 'question', question: askQuestion('q-7b8c9d0e', 'tl-test', { question: 'Is it fine to run the suite against the shared database?', choices: ['Fine', 'Use a copy'] }) });
+      }, 20_000);
       if (!updateScenario) setTimeout(() => ws.readyState === 1 && send({ t: 'confirm', confirmId: 'c1', text: 'ui polish wants to close node "shell".\nIt has been idle for 40 minutes.' }), 15_000);
       return;
     }
@@ -277,7 +394,7 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'close': if (n?.worktree && !m.worktree && n.title.includes('dirty')) send({ t: 'error', id: m.id, message: 'worktree has 2 uncommitted files and 1 unmerged commit; close with keep or discard' });
-        else if (n) { nodes.delete(m.id); broadcast({ t: 'removed', id: m.id }); } break;
+        else if (n) { nodes.delete(m.id); broadcast({ t: 'removed', id: m.id }); ownerClosed(m.id, n.parentId); } break;
       case 'prune': for (const id of pruneIds([...nodes.values()])) { nodes.delete(id); broadcast({ t: 'removed', id }); } break;
       case 'claudeAccounts': send({ t: 'claudeAccounts', accounts }); break;
       case 'spawn': {
@@ -319,6 +436,7 @@ wss.on('connection', (ws) => {
         broadcast({ t: 'node', node: n });
         break;
       }
+      case 'question': respondToQuestion(m, send); break;
       case 'mute': if (n) { n.muted = m.muted || undefined; broadcast({ t: 'node', node: n }); } break;
       case 'dnd': dnd = m.on ? { on: true, ...(m.minutes && { until: Date.now() + m.minutes * MIN }) } : { on: false }; broadcast({ t: 'dnd', ...dnd }); break;
       case 'sessionOrder': sessionOrder = m.ids; broadcast({ t: 'sessionOrder', ids: sessionOrder }); break;

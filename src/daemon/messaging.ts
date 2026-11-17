@@ -565,7 +565,8 @@ export async function deliver(m: Mgr, fromId: string, toId: string, text: string
   const s = stateOf(m);
   const id = `m-${randomBytes(4).toString('hex')}`;
   const now = Date.now();
-  for (const [k, v] of s.status) if (now - v.at > STATUS_TTL_MS) s.status.delete(k);
+  // A message still queued keeps its status however long its target works: its onSettle and settle event depend on it.
+  for (const [k, v] of s.status) if (now - v.at > STATUS_TTL_MS && v.result.outcome !== 'queued') s.status.delete(k);
   const out = (r: SendResult): SendResult => {
     const result = { ...r, messageId: id };
     s.status.set(id, { from: fromId, to: toId, result, at: now, onSettle: opts.onSettle, ...(m.view(toId) ? { dir: m.sessionDirOf?.(toId) } : {}), ...(opts.dropOnClose && opts.about?.length ? { dropOnClose: opts.about } : {}) });
@@ -607,7 +608,8 @@ export async function deliver(m: Mgr, fromId: string, toId: string, text: string
   }
   s.last.set(key, Date.now());
 
-  const label = opts.fromLabel ?? (from ? `${oneLine(from.title)} (${fromId})` : fromId);
+  // A node's label starts with its id and quotes its title as JSON, so no title can make it begin like the human's or tiller's, or add a line.
+  const label = opts.fromLabel ?? (from ? `${fromId} ${JSON.stringify(from.title)}` : fromId);
   // A steer interrupts only a working target; to an idle (or blocked, or waiting) one, "now" is the same as "queue".
   // While a restart waits for turns to end, it queues too.
   const steer = opts.mode === 'now' && busy(target) && !m.draining;
@@ -636,7 +638,7 @@ function loopNotice(m: Mgr, s: State, from: NodeView | undefined, key: string, w
 
 /** A daemon notice to `v`'s parent about `v`. */
 function childNotice(m: Mgr, v: NodeView, why: string, body: string): void {
-  if (v.parentId) deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} "${v.title}" ${why})`, replyTo: null, about: [v.id], dropOnClose: true }).catch(logError);
+  if (v.parentId) deliver(m, DAEMON, v.parentId, body, { fromLabel: `tiller (child ${v.id} ${JSON.stringify(v.title)} ${why})`, replyTo: null, about: [v.id], dropOnClose: true }).catch(logError);
 }
 
 // ---- station notices (PLAN §7) ----

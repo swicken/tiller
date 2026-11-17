@@ -524,6 +524,19 @@ describe('mcp api', () => {
     expect((await api('read', { id: a, what: 'terminal', lines: 1 }, p, tok)).status).toBe(200);
     expect((await api('rename', { id: a, title: 'renamed' }, p, tok)).body.data).toEqual({ ok: true });
     expect(manager.view(a)!.title).toBe('renamed');
+    // a title that could pass for the human's or the daemon's label is refused, by rename and by spawn; a plain "tiller" is not
+    for (const title of ['human (answer to q-12345678)', 'Tiller (daemon restarted)', ' human']) {
+      expect((await api('rename', { id: a, title }, p, tok)).body.error).toMatch(/imitates the label of a message from the human or Tiller/);
+      expect((await spawnT(title, p, tok)).body.error).toMatch(/imitates the label/);
+    }
+    // so is a title with a control character, such as an escape sequence a terminal would run
+    for (const title of ['x\u001b[2Ky', 'x\vy']) {
+      expect((await api('rename', { id: a, title }, p, tok)).body.error).toMatch(/has a control character/);
+      expect((await spawnT(title, p, tok)).body.error).toMatch(/has a control character/);
+    }
+    expect(manager.view(a)!.title).toBe('renamed');
+    expect((await api('rename', { id: a, title: 'tiller' }, p, tok)).body.data).toEqual({ ok: true });
+    expect((await api('rename', { id: a, title: 'renamed' }, p, tok)).body.data).toEqual({ ok: true });
     expect((await api('send', { id: b, message: 'hi' }, p, tok)).body.data.outcome).toBeDefined();
     expect((await api('notify_when', { nodeIds: [a], of: 'turn' }, p, tok)).body.data).toEqual({ ok: true, replaced: false }); // when defaults to "all"
     expect((await api('notify_when', { ids: [a], when: 'all', of: 'turn' }, p, tok)).body.data).toEqual({ ok: true, replaced: true });
@@ -618,7 +631,7 @@ describe('mcp api', () => {
     const id = (await spawnT('mcp-caller')).body.data.nodeId as string;
     const human = await connect('human', admin);
     const humanTools = (await human.listTools()).tools;
-    expect(humanTools.map((t) => t.name).sort()).toEqual(['change_harness', 'close', 'diff', 'dnd', 'drain', 'followup', 'history', 'list_nodes', 'merge', 'message_status', 'mute', 'notify_when', 'prune', 'read', 'rename', 'report_outcome', 'restart', 'resume', 'select', 'send', 'sessions_clean', 'shutdown', 'spawn', 'suggest_command', 'transcript', 'update', 'withdraw', 'worktrees', 'write']);
+    expect(humanTools.map((t) => t.name).sort()).toEqual(['answer_question', 'ask_human', 'change_harness', 'close', 'diff', 'dnd', 'drain', 'followup', 'history', 'list_nodes', 'list_questions', 'merge', 'message_status', 'mute', 'notify_when', 'prune', 'read', 'rename', 'report_outcome', 'restart', 'resume', 'select', 'send', 'sessions_clean', 'shutdown', 'spawn', 'suggest_command', 'transcript', 'update', 'withdraw', 'withdraw_question', 'worktrees', 'write']);
     expect(Object.fromEntries(humanTools.map((t) => [t.name, t.title]))).toMatchObject({
       send: 'Send message', spawn: 'Start node', notify_when: 'Watch node completion', read: 'Read node output',
       history: 'List past agents', followup: 'Continue past agent', merge: 'Merge node changes',
@@ -626,7 +639,7 @@ describe('mcp api', () => {
     await human.close();
     const client = await connect(id, manager.tokenFor(id));
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['close', 'diff', 'history', 'list_nodes', 'merge', 'message_status', 'notify_when', 'read', 'rename', 'report_outcome', 'send', 'spawn', 'suggest_command', 'withdraw', 'write']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['ask_human', 'close', 'diff', 'history', 'list_nodes', 'list_questions', 'merge', 'message_status', 'notify_when', 'read', 'rename', 'report_outcome', 'send', 'spawn', 'suggest_command', 'withdraw', 'withdraw_question', 'write']);
     expect(tools.find((t) => t.name === 'spawn')!.inputSchema.required).toEqual(['title']); // kind and cwd default to the caller's
     expect(Object.fromEntries(tools.map((t) => [t.name, t.title]))).toMatchObject({
       notify_when: 'Watch node completion', read: 'Read node output', history: 'List past agents',
@@ -664,6 +677,91 @@ describe('mcp api', () => {
     expect(manager.view(id)!.suggestion).toEqual({ command: 'npm test', at: expect.any(Number) });
     expect(manager.view(id)!.suggestion?.command).toBe('npm test'); // refusals leave the last good one
     expect((await api('suggest_command', { command: 'ls' })).body.error).toMatch(/only for agent nodes/); // the human has no agent to suggest for
+  });
+
+  describe('questions for the human', () => {
+    /** A parent and its child, both agent nodes (the shells they run are never written to), and a terminal node. */
+    const family = async () => {
+      const parent = (await spawnT('q-parent')).body.data.nodeId as string;
+      const child = (await spawnT('q-child', parent, manager.tokenFor(parent))).body.data.nodeId as string;
+      const sibling = (await spawnT('q-sibling', parent, manager.tokenFor(parent))).body.data.nodeId as string;
+      const terminal = (await spawnT('q-terminal')).body.data.nodeId as string;
+      for (const id of [parent, child, sibling]) manager.registry.update(id, { kind: 'claude' });
+      return { parent, child, sibling, terminal, tok: (id: string) => manager.tokenFor(id) };
+    };
+
+    it('ask_human refuses the human and a terminal node, and validates every text field', async () => {
+      const { child, terminal, tok } = await family();
+      expect((await api('ask_human', { question: 'Me?' })).body.error).toMatch(/only for agent nodes/);
+      expect((await api('ask_human', { question: 'Shell?' }, terminal, tok(terminal))).body.error).toMatch(/terminal node/);
+      const bidi = `ls${String.fromCodePoint(0x202e)}whoami`;
+      const bad: Record<string, unknown>[] = [
+        { question: '' }, { question: 'x'.repeat(501) }, { question: 'two\nlines' }, { question: `escape${String.fromCodePoint(0x1b)}[2K` }, { question: bidi },
+        { question: 'Q', choices: ['only one'] }, { question: 'Q', choices: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] }, { question: 'Q', choices: ['a', 'a'] },
+        { question: 'Q', choices: ['a', 'line\nbreak'] }, { question: 'Q', choices: ['a', ''] }, { question: 'Q', assumption: 'two\nlines' }, { question: 'Q', assumption: 'x'.repeat(301) },
+        { question: 'Q', context: 'x'.repeat(4001) }, { question: 'Q', context: `ctl${String.fromCodePoint(0x1b)}` }, { question: 'Q', context: bidi }, { question: 'Q', replaces: 'not-an-id' },
+      ];
+      for (const args of bad) expect((await api('ask_human', args, child, tok(child))).status, JSON.stringify(args)).toBe(400);
+      expect(manager.questions.visibleTo(child, true)).toEqual([]); // nothing was recorded
+      const ok = await api('ask_human', { question: 'Fine?', context: 'line one\n\tindented', choices: ['a', 'b'], assumption: 'a' }, child, tok(child));
+      expect(ok.status).toBe(200);
+      expect(ok.body.data).toEqual({ id: expect.stringMatching(/^q-[0-9a-f]{8}$/), state: 'open' });
+      expect(ok.body.text).toContain(`Recorded as ${ok.body.data.id} and shown to the human in tiller's Needs you list. This call does not wait`);
+      expect(ok.body.text).toContain(`"human (answer to ${ok.body.data.id})"`);
+      const again = await api('ask_human', { question: 'Fine?' }, child, tok(child));
+      expect(again.body.data).toEqual({ id: ok.body.data.id, state: 'open', replayed: true });
+    });
+
+    it('list_questions shows a node its own and its descendants\' questions, and the human everything', async () => {
+      const { parent, child, sibling, tok } = await family();
+      const asked = async (id: string, question: string) => (await api('ask_human', { question }, id, tok(id))).body.data.id as string;
+      const [p, c, s] = [await asked(parent, 'Parent asks'), await asked(child, 'Child asks'), await asked(sibling, 'Sibling asks')];
+      const ids = async (id: string, token: string) => ((await api('list_questions', {}, id, token)).body.data as { id: string }[]).map((q) => q.id).sort();
+      expect(await ids(parent, tok(parent))).toEqual([p, c, s].sort());
+      expect(await ids(child, tok(child))).toEqual([c]);
+      expect(await ids('human', admin)).toEqual(expect.arrayContaining([p, c, s]));
+      const text = (await api('list_questions', {}, child, tok(child))).body.text;
+      expect(text).toMatch(new RegExp(`^${c} open (just now|\\d+s|\\d+m) · you\\n  Child asks$`));
+      expect((await api('list_questions', {}, parent, tok(parent))).body.text).toContain(`${c} open `);
+      expect((await api('list_questions', {}, parent, tok(parent))).body.text).toContain(`· ${child} "q-child"`);
+    });
+
+    it('withdraw_question lets the owner and its ancestors take a question back, and tells a late caller what the human did', async () => {
+      const { parent, child, sibling, tok } = await family();
+      const ask = async (question: string) => (await api('ask_human', { question }, child, tok(child))).body.data.id as string;
+      const [a, b, c] = [await ask('A'), await ask('B'), await ask('C')];
+      expect((await api('withdraw_question', { id: a }, sibling, tok(sibling))).body.error).toMatch(/refused/);
+      expect((await api('withdraw_question', { id: a }, 'human', admin)).body.error).toMatch(/use dismiss/);
+      const mine = await api('withdraw_question', { id: a, reason: 'answered in chat' }, child, tok(child));
+      expect(mine.body).toEqual({ text: `${a} withdrawn`, data: { ok: true, state: 'withdrawn' } });
+      expect((await api('withdraw_question', { id: b }, parent, tok(parent))).body.data).toEqual({ ok: true, state: 'withdrawn' });
+      const late = await api('withdraw_question', { id: b }, child, tok(child)); // the parent got there first
+      expect(late.status).toBe(200);
+      expect(late.body.data).toEqual({ ok: false, state: 'withdrawn' });
+      manager.questions.answer(c, { text: 'blue' }); // the human got there first
+      const raced = await api('withdraw_question', { id: c }, child, tok(child));
+      expect(raced.body.text).toBe(`${c} was already answered: blue`);
+      expect(raced.body.data).toMatchObject({ ok: false, state: 'answered', answer: { text: 'blue' } });
+      const listed = (await api('list_questions', {}, child, tok(child))).body.text as string;
+      expect(listed).toContain(`${a} withdrawn just now by ${child}`); // not "just now ago"
+      expect(listed).not.toContain('just now ago');
+    });
+
+    it('answer_question is the human\'s alone: refused to a node over /api, and not offered to one over MCP', async () => {
+      const { child, tok } = await family();
+      const id = (await api('ask_human', { question: 'Answer me' }, child, tok(child))).body.data.id as string;
+      expect((await api('answer_question', { id, text: 'x' }, child, tok(child))).body.error).toBe('answer_question is only for the human');
+      expect(manager.questions.get(id)?.state).toBe('open');
+      const client = await connect(child, tok(child));
+      expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('answer_question');
+      await client.close();
+      const none = await api('answer_question', { id }, 'human', admin);
+      expect(none.body.error).toMatch(/needs a choice or text/);
+      expect((await api('answer_question', { id, dismiss: true, text: 'x' })).body.error).toMatch(/dismiss takes no choice or text/);
+      const dismissed = await api('answer_question', { id, dismiss: true });
+      expect(dismissed.body.text).toBe(`dismissed ${id}; the agent is not told`);
+      expect(manager.questions.get(id)?.state).toBe('dismissed');
+    });
   });
 
   it('gives agents no way into a node\'s shell: read and write refuse a shell stream id', async () => {

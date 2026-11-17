@@ -1,6 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { claudeAccounts, conversation, mk } from './fixtures';
-import { applyServer, conversationRequested, conversationsRequested, diffRequested, expectSpawn, getState, selectSession, toggleShowTools, update, transcriptRequested } from './store';
+import type { Question } from '../src/shared/protocol';
+import { applyServer, clearRefusal, closeNeeds, conversationRequested, conversationsRequested, diffRequested, expectSpawn, getState, openNeeds, selectSession, setActivityOpen, toggleShowTools, update, transcriptRequested } from './store';
 import { roots } from './sidebar/sessions';
 
 it('the diff panel shows the diff reply\'s own failure, not another error for the same node', () => {
@@ -175,4 +176,56 @@ it('a snapshot drops the confirms queued before it, so a request answered while 
   applyServer({ t: 'confirm', confirmId: 'live', text: 'still pending' }); // the server replays live ones after the snapshot
   applyServer({ t: 'confirm', confirmId: 'live', text: 'still pending' });
   expect(getState().confirms).toEqual([{ confirmId: 'live', text: 'still pending' }]);
+});
+
+const question = (id: string, extra: Partial<Question> = {}): Question => ({
+  id, rootId: 'r', nodeId: 'r', askedBy: { id: 'r', title: 'r' }, question: 'Which one?', state: 'open', askedAt: 1, ...extra,
+});
+
+it('a snapshot replaces the questions, and one without a questions field clears them', () => {
+  applyServer({ t: 'snapshot', nodes: [mk('r', null, 1)], questions: [question('q-00000001'), question('q-00000002')] });
+  expect(Object.keys(getState().questions)).toEqual(['q-00000001', 'q-00000002']);
+  applyServer({ t: 'snapshot', nodes: [mk('r', null, 1)], questions: [question('q-00000003')] });
+  expect(Object.keys(getState().questions)).toEqual(['q-00000003']);
+  applyServer({ t: 'snapshot', nodes: [mk('r', null, 1)] }); // an older daemon
+  expect(getState().questions).toEqual({});
+});
+
+it('a question message upserts by id and keeps a resolved question', () => {
+  applyServer({ t: 'snapshot', nodes: [mk('r', null, 1)], questions: [question('q-0000000a')] });
+  applyServer({ t: 'question', question: question('q-0000000b') });
+  applyServer({ t: 'question', question: question('q-0000000a', { state: 'answered', resolvedAt: 5, answer: { choice: 'x', at: 5 } }) });
+  const { questions } = getState();
+  expect(Object.keys(questions)).toEqual(['q-0000000a', 'q-0000000b']);
+  expect(questions['q-0000000a'].state).toBe('answered');
+  expect(questions['q-0000000b'].state).toBe('open');
+});
+
+it('openNeeds and closeNeeds toggle the drawer and its focus', () => {
+  openNeeds('q-0000000a');
+  expect(getState().needs).toEqual({ open: true, focusId: 'q-0000000a' });
+  closeNeeds();
+  expect(getState().needs).toEqual({ open: false });
+});
+
+it('a refused answer is kept against its question and raises no toast, with or without questionId', () => {
+  update(() => ({ toasts: [], refusals: {} }));
+  applyServer({ t: 'error', id: 'r', questionId: 'q-0000000a', message: 'q-0000000a was already answered' });
+  applyServer({ t: 'error', id: 'r', message: 'q-0000000b was replaced by q-0000000c' }); // an older daemon
+  expect(getState().refusals).toEqual({ 'q-0000000a': 'q-0000000a was already answered', 'q-0000000b': 'q-0000000b was replaced by q-0000000c' });
+  expect(getState().toasts).toEqual([]);
+  clearRefusal('q-0000000a');
+  expect(Object.keys(getState().refusals)).toEqual(['q-0000000b']);
+  applyServer({ t: 'error', id: 'r', message: 'no such node: r' });
+  expect(getState().toasts).toHaveLength(1);
+});
+
+it('the Needs you panel and the Activity drawer close each other', () => {
+  setActivityOpen(true);
+  openNeeds('q-0000000a');
+  expect(getState().activityOpen).toBe(false);
+  expect(getState().needs).toEqual({ open: true, focusId: 'q-0000000a' });
+  setActivityOpen(true);
+  expect(getState().needs).toEqual({ open: false });
+  setActivityOpen(false);
 });

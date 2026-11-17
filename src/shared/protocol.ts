@@ -373,25 +373,81 @@ export interface Drain {
   force?: boolean;
 }
 
+/** A question an agent raised for the human with ask_human. The daemon stores it in <home>/questions.json. */
+export type QuestionState = 'open' | 'answered' | 'dismissed' | 'withdrawn';
+
+/** The human's answer. At least one of choice and text is set. */
+export interface QuestionAnswer {
+  /** One of the question's choices, verbatim. */
+  choice?: string;
+  text?: string;
+  at: number;
+}
+
+/**
+ * Whether the owner has been told the answer.
+ * waiting: not sent yet, or the last attempt failed; the daemon tries again (detail says why).
+ * queued: in the owner's message queue. delivered: the owner accepted the prompt.
+ * unconfirmed: sent with no receipt; never sent again automatically. dropped: no node is left to tell.
+ */
+export interface AnswerDelivery {
+  state: 'waiting' | 'queued' | 'delivered' | 'unconfirmed' | 'dropped';
+  messageId?: string;
+  detail?: string;
+  at?: number;
+}
+
+export interface Question {
+  /** "q-" and 8 hex characters. */
+  id: string;
+  /** Root of the tree it was asked in. Fixed; names the session directory its log events go to. */
+  rootId: string;
+  /** The owner: the node the answer goes to. The asker until the asker is closed, then its nearest live ancestor. */
+  nodeId: string;
+  /** The asker and its title when it asked, kept for display after it closes. */
+  askedBy: { id: string; title: string };
+  /** The title of the tree's root when it asked, kept like askedBy.title so a resolved question can still be grouped under its session. */
+  rootTitle?: string;
+  /** One line the human can answer without opening the chat. */
+  question: string;
+  /** Background, as plain text with line breaks. */
+  context?: string;
+  /** 2 to 6 labels, shown as buttons. */
+  choices?: string[];
+  /** What the asker does meanwhile if nobody answers. Absent: work is waiting on the human. */
+  assumption?: string;
+  state: QuestionState;
+  askedAt: number;
+  /** When it left 'open'. */
+  resolvedAt?: number;
+  answer?: QuestionAnswer;
+  delivery?: AnswerDelivery;
+  /** Set when withdrawn: a node id, or 'tiller' for the daemon, and why. */
+  withdrawn?: { by: string; reason?: string };
+  /** The question that replaced this one (ask_human with replaces). */
+  replacedBy?: string;
+}
+
 // Daemon -> UI (WebSocket, JSON). One message per line.
 export type ServerMessage =
   | { t: 'update'; update: UpdateStatus }
   | { t: 'claudeAccounts'; accounts: ClaudeAccountView[] } // reply to the claudeAccounts request
   // nodes, like 'node' messages, omit prompt, pending.prompt and sessionHistory
-  | { t: 'snapshot'; nodes: NodeView[]; update?: UpdateStatus; usage?: Usage; usageSources?: UsageSource[]; dnd?: Dnd; drain?: Drain; sessionOrder?: string[] } // sessionOrder: root ids in tab order
+  | { t: 'snapshot'; nodes: NodeView[]; update?: UpdateStatus; usage?: Usage; usageSources?: UsageSource[]; dnd?: Dnd; drain?: Drain; sessionOrder?: string[]; questions?: Question[] } // sessionOrder: root ids in tab order; questions: every open one and those resolved in the last 24 hours
   | { t: 'sessionOrder'; ids: string[] }    // the human rearranged the session tabs
   | { t: 'drain'; drain?: Drain }            // a restart started, progressed or ended waiting for agents
   | ({ t: 'dnd' } & Dnd)                     // do not disturb changed
   | { t: 'usageSources'; sources: UsageSource[] }
   | { t: 'usage'; usage: Usage }             // a node reported new account-level rate limits
   | { t: 'node'; node: NodeView }            // created or updated (full record minus spawn prompts and sessionHistory)
+  | { t: 'question'; question: Question }   // asked or changed: replaces the client's copy by id
   | { t: 'removed'; id: string }
   | { t: 'data'; id: string; data: string }  // raw PTY output; id may be a shell stream id (shellStreamId)
   | { t: 'nativeNotify'; requestId: string; notification: NativeNotification }
   | { t: 'notify'; id: string; kind: 'done' | 'needsYou' | 'errored' | 'exited'; title: string; body?: string }
   | { t: 'confirm'; confirmId: string; text: string } // ask the human to approve an agent action
   | { t: 'confirmDone'; confirmId: string }  // that confirm was answered or timed out; close the modal
-  | { t: 'error'; message: string; id?: string }
+  | { t: 'error'; message: string; id?: string; questionId?: string } // questionId: a refused question answer or dismissal; id is then the question's owner node
   | { t: 'focus'; from: string; id: string }   // a node's mod asked to view node `id`; an attach client showing `from` switches
   | { t: 'digest'; since: number; items: DigestItem[] } // what happened while no client was focused; sent to the client that regained focus
   | ({ t: 'diff'; id: string } & (Diff | { error: string })) // reply to a diff request: the diff, or why there is none
@@ -402,8 +458,8 @@ export type ServerMessage =
   | { t: 'sent'; id: string; result: SendResult } // reply to a send request
   ;
 
-/** One node's line in the away digest: still needs you, errored or failed, or finished (with its outcome note). */
-export interface DigestItem { id: string; title: string; kind: 'needsYou' | 'errored' | 'finished'; text?: string; at: number }
+/** One node's line in the away digest: still needs you, errored or failed, or finished (with its outcome note). questionId: the row is an open question; a client that knows questions opens it instead of selecting the node. */
+export interface DigestItem { id: string; title: string; kind: 'needsYou' | 'errored' | 'finished'; text?: string; at: number; questionId?: string }
 
 // UI -> Daemon.
 export type ClientMessage =
@@ -422,6 +478,7 @@ export type ClientMessage =
   | { t: 'input'; id: string; data: string; binary?: boolean } // binary: data contains raw byte values (xterm legacy mouse reports)
   | { t: 'resize'; id: string; cols: number; rows: number }
   | { t: 'select'; id: string }                // clears unread
+  | { t: 'question'; id: string; action: 'answer' | 'dismiss'; choice?: string; text?: string } // answer needs choice or text, dismiss takes neither; success is the question broadcast, a refusal an error whose id is the owner node
   | { t: 'spawn'; kind: NodeKind; harness?: Harness; title: string; cwd: string; prompt?: string; model?: string; effort?: Effort; role?: Role; profile?: Profile; parentId?: string | null; isolation?: Isolation; base?: string; preset?: string; after?: string[]; afterSuccess?: string[]; now?: boolean; fork?: string; account?: string } // account: Claude account name, human only (children inherit); fork: a live or archived node id whose conversation the new node starts from (claude --resume <session> --fork-session); the node must run the claude harness
   | { t: 'close'; id: string; force?: boolean; worktree?: 'keep' | 'discard' }  // a root (orchestrator) is refused without force; worktree picks what happens to a dirty or unmerged worktree (default: refuse)
   | { t: 'merge'; id: string }                 // merge a worktree node's branch into its base, in the worktrees.mergeStyle style

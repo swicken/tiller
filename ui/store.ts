@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
+import type { ArchivedNode, ClaudeAccountView, Conversation, ConversationSummary, InstalledReleaseNotes, Diff, DigestItem, Dnd, Drain, Question, ServerMessage, Transcript, UpdateStatus, Usage, UsageSource } from '../src/shared/protocol';
 import type { ReviewComment } from './diff';
 import { arrange, besideSession, pickInitial, rootOf } from './sidebar/sessions';
 import { insertSorted, type Nodes } from './sidebar/tree';
@@ -7,7 +7,8 @@ import { readPref, writePref } from './prefs';
 import { wantedNode } from './url';
 
 export type Tone = 'info' | 'ok' | 'warn' | 'bad';
-export interface Toast { id: number; text: string; nodeId?: string; tone: Tone }
+/** questionId: a new-question toast (text is the question); it opens the Needs you panel on that question. */
+export interface Toast { id: number; text: string; nodeId?: string; tone: Tone; questionId?: string }
 export interface Activity { id: number; nodeId?: string; nodeName: string; at: number; text: string; tone: Tone; read: boolean }
 export const ACTIVITY_LIMIT = 200;
 /** Newest first; the oldest events expire, including their unread state. */
@@ -43,6 +44,16 @@ export interface State {
   confirms: Confirm[];
   activity: Activity[];
   activityOpen: boolean;
+  /** Questions agents raised for the human, by id, as the snapshot and question messages gave them. */
+  questions: Record<string, Question>;
+  /** The Needs you drawer is open; focusId is the question to scroll to and focus. */
+  needs: { open: boolean; focusId?: string };
+  /** Answers and dismissals the daemon refused, by question id: its message. The card shows why and keeps the typed text. */
+  refusals: Record<string, string>;
+  /** Snapshots received: a change in the questions that comes with one is a reload of what we know, not news. */
+  snapshots: number;
+  /** Errors that name no question, counted: a card that is waiting for its send's reply gives up when one arrives. */
+  looseErrors: number;
   connected: boolean;
   /** Reconnect attempts since the last successful connection. */
   retry: number;
@@ -98,7 +109,7 @@ const storedTools = readPref('tl.showTools') === '1';
 
 let state: State = {
   nodes: {}, order: [], sessionOrder: [], selected: null, session: null, opened: [], collapsed: [], toasts: [], confirms: [], activity: [], activityOpen: false,
-  connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
+  questions: {}, needs: { open: false }, refusals: {}, snapshots: 0, looseErrors: 0, connected: false, retry: 0, panel: stored, dialog: null, renaming: null, awaitSpawn: false, diffOpen: false, diff: null, comments: [],
   transcriptOpen: false, shellOpen: false, transcript: null, showTools: storedTools, conversations: null, conversation: null, historyOpen: false, history: [], archived: null, removals: 0,
 };
 const subs = new Set<() => void>();
@@ -119,8 +130,8 @@ const without = <T,>(xs: T[], x: T) => xs.filter((y) => y !== x);
 /** A reply slot's payload: its error, or the data. */
 const settled = <T extends object,>(d: T | { error: string }) => ('error' in d ? { error: d.error } : { data: d });
 
-export const toast = (text: string, nodeId?: string, tone: Tone = 'info') =>
-  update((s) => ({ toasts: [...s.toasts, { id: ++toastSeq, text, nodeId, tone }] }));
+export const toast = (text: string, nodeId?: string, tone: Tone = 'info', questionId?: string) =>
+  update((s) => ({ toasts: [...s.toasts, { id: ++toastSeq, text, nodeId, tone, questionId }] }));
 export const recordActivity = (text: string, nodeId?: string, tone: Tone = 'info', at = Date.now()) =>
   update((s) => ({ activity: appendActivity(s.activity, {
     id: ++activitySeq, nodeId, nodeName: (nodeId && s.nodes[nodeId]?.title) || nodeId || 'Tiller', at, text, tone, read: false,
@@ -128,10 +139,15 @@ export const recordActivity = (text: string, nodeId?: string, tone: Tone = 'info
 const allRead = (items: Activity[]) => items.map((item) => item.read ? item : { ...item, read: true });
 export const markActivityRead = () => update((s) => ({ activity: allRead(s.activity) }));
 export const clearActivity = () => update(() => ({ activity: [] }));
+// The Activity drawer and the Needs you panel share the right-hand side: opening one closes the other.
 export const setActivityOpen = (activityOpen: boolean) => update((s) => ({
   activityOpen,
+  ...(activityOpen ? { needs: { open: false } } : {}),
   ...(activityOpen ? { activity: allRead(s.activity) } : {}),
 }));
+export const openNeeds = (focusId?: string) => update(() => ({ needs: { open: true, focusId }, activityOpen: false }));
+export const clearRefusal = (id: string) => update((s) => { const { [id]: _, ...refusals } = s.refusals; return { refusals }; });
+export const closeNeeds = () => update(() => ({ needs: { open: false } }));
 export const dismissToast = (id: number) => update((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
 export const dropConfirm = (confirmId: string) => update((s) => ({ confirms: s.confirms.filter((c) => c.confirmId !== confirmId) }));
 export const setConnected = (connected: boolean, retry = 0) => update(() => ({ connected, retry, ...(!connected ? { usageScanning: false } : {}) }));
@@ -204,7 +220,8 @@ export function applyServer(m: ServerMessage) {
         order = arrange(nodes, order, sessionOrder);
         const base = { ...s, order, opened: s.opened.filter((id) => nodes[id]) };
         const sel = s.selected && nodes[s.selected] ? s.selected : pickInitial(nodes, order, s.selected ? undefined : wantedNode);
-        return { confirms: [], order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
+        const questions = Object.fromEntries((m.questions ?? []).map((q) => [q.id, q]));
+        return { confirms: [], questions, snapshots: s.snapshots + 1, order, sessionOrder, opened: base.opened, update: m.update, usage: m.usage ?? s.usage, usageSources: m.usageSources ?? s.usageSources, dnd: m.dnd, drain: m.drain, ...choose(base, nodes, sel) };
       });
     case 'update':
       if (m.update.failed && m.update.failed !== state.update?.failed) toast(m.update.failed, undefined, 'bad');
@@ -233,6 +250,8 @@ export function applyServer(m: ServerMessage) {
         if (isNew && s.awaitSpawn) return { order, awaitSpawn: false, archived: null, ...choose(s, nodes, m.node.id) };
         return { nodes, order };
       });
+    case 'question':
+      return update((s) => ({ questions: { ...s.questions, [m.question.id]: m.question } }));
     case 'removed':
       return update((s) => {
         const { [m.id]: gone, ...nodes } = s.nodes;
@@ -291,6 +310,15 @@ export function applyServer(m: ServerMessage) {
       if (state.usageScanning) update(() => ({ usageScanning: false }));
       // A spawn or follow-up that failed answers only with an error: stop waiting, or the next node anyone spawns gets selected.
       if (state.awaitSpawn) update(() => ({ awaitSpawn: false }));
+      {
+        // A refused answer or dismissal belongs on its question's card, not in a toast. A daemon that predates
+        // questionId still starts the message with the id.
+        const questionId = m.questionId ?? /^(q-[0-9a-f]{8}) was /.exec(m.message)?.[1];
+        if (questionId) return update((s) => ({ refusals: { ...s.refusals, [questionId]: m.message } }));
+        // A message the daemon could not read names neither a question nor a node; a card still waiting on its send hears of it here.
+        // An error that names a node answers some other action (rename, restart, close, a spawn or merge), not the send.
+        if (!m.id) update((s) => ({ looseErrors: s.looseErrors + 1 }));
+      }
       recordActivity(m.message, m.id, 'bad');
       return toast(m.message, m.id, 'bad');
     case 'digest':
