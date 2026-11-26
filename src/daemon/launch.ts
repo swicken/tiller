@@ -34,14 +34,19 @@ export function projectMcpServerNames(dirs: string[]): string[] {
 /**
  * Writes settings.json and mcp.json (0600, it carries the token) into the node's directory. A worktree node gets
  * worktree.baseRef "head" so Claude never resets the worktree it adopts to the default branch. disabledMcpServers go in as
- * disabledMcpjsonServers.
+ * disabledMcpjsonServers. The session directory is a working directory through permissions.additionalDirectories, not
+ * `--add-dir`: Claude loads commands and skills from an `--add-dir` folder (and asks to trust it first), and every agent in
+ * the tree can write the session directory.
  */
 export function writeNodeFiles(nodeDir: string, o: { nodeId: string; endpoint: string; token: string; worktree?: boolean; sessionDir?: string; disabledMcpServers?: string[] }): void {
   const hook = [{ hooks: [{ type: 'command', command: `sh '${HOOK_SCRIPT}'` }] }];
   writeFileSync(join(nodeDir, 'settings.json'), JSON.stringify({
     hooks: Object.fromEntries(HOOK_EVENTS.map((e) => [e, hook])),
     // `//` marks an absolute path in a permission rule; Edit rules cover Write too.
-    permissions: { allow: ['mcp__tiller', ...(o.sessionDir ? [`Edit(/${o.sessionDir}/**)`] : [])] },
+    permissions: {
+      allow: ['mcp__tiller', ...(o.sessionDir ? [`Edit(/${o.sessionDir}/**)`] : [])],
+      ...(o.sessionDir ? { additionalDirectories: [o.sessionDir] } : {}),
+    },
     ...(o.worktree ? { worktree: { baseRef: 'head' } } : {}),
     ...(o.disabledMcpServers?.length ? { disabledMcpjsonServers: o.disabledMcpServers } : {}),
   }, null, 2));
@@ -189,7 +194,6 @@ export function launchArgs(i: LaunchInput): string[] {
   if (i.permissionMode) args.push('--permission-mode', i.permissionMode);
   if (i.worktree && !i.resume) args.push('--worktree', i.nodeId); // adopts <repo>/.claude/worktrees/<id>; --resume re-enters it by itself
   for (const dir of modDirs()) if (existsSync(dir)) args.push('--plugin-dir', dir);
-  if (i.sessionDir) args.push('--add-dir', i.sessionDir);
   if (i.preset) args.push(...presetAgentArgs(i.preset));
   args.push('--settings', join(i.nodeDir, 'settings.json'), '--mcp-config', join(i.nodeDir, 'mcp.json'));
   if (i.inheritMcpServers === false) args.push('--strict-mcp-config');
