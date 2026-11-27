@@ -157,6 +157,14 @@ describe('project MCP servers in a node\'s settings', () => {
     expect(projectMcpServerNames([join(repo, 'sub')])).toEqual(['echo', 'other']);
     expect(settings(tmp(), ['echo', 'other']).disabledMcpjsonServers).toEqual(['echo', 'other']);
   });
+  it('makes the session directory a working directory through settings, never --add-dir', () => {
+    const dir = tmp(), sessionDir = join(dir, 'sessions', 'r');
+    writeNodeFiles(dir, { nodeId: 'n', endpoint: 'http://x', token: 't', sessionDir });
+    const { permissions } = JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'));
+    expect(permissions).toEqual({ allow: ['mcp__tiller', `Edit(/${sessionDir}/**)`], additionalDirectories: [sessionDir] });
+    const args = launchArgs({ nodeId: 'n', nodeDir: dir, endpoint: 'http://x', path: '', title: 't', parentId: null, home: dir, cwd: dir, sessionId: 's', sessionDir });
+    expect(args).not.toContain('--add-dir');
+  });
   it('writes nothing when there are no servers', () => {
     expect(settings(tmp(), undefined)).not.toHaveProperty('disabledMcpjsonServers');
     expect(settings(tmp(), [])).not.toHaveProperty('disabledMcpjsonServers');
